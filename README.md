@@ -6,6 +6,10 @@
 </p>
 
 <p align="center">
+  <a href="https://github.com/MidTermDev/lean-Solana-client/actions/workflows/ci.yml"><img src="https://github.com/MidTermDev/lean-Solana-client/actions/workflows/ci.yml/badge.svg" alt="ci"></a>
+</p>
+
+<p align="center">
   <a href="#quick-start">Quick start</a> ·
   <a href="#how-it-works">How it works</a> ·
   <a href="#the-lean-you-can-write">The Lean subset</a> ·
@@ -14,16 +18,13 @@
   <a href="#limits-and-roadmap">Limits</a>
 </p>
 
-> *"A lean solana client would be easy to build if you build your own no dependencies lean => machine compiler and just use a raw low level futex for ipc"*
-> — toly
+Inspired by toly's remark that a Lean Solana client would be easy once you have your own dependency-free Lean compiler and a raw futex for IPC. This repository takes that literally:
 
-So this repository does exactly that, taking the sentence literally:
-
-| the sentence | what is in this repo |
+| the idea | what is in this repo |
 |---|---|
-| *a lean solana client* | `client/` — a node that joins Solana's gossip network and verifies what it hears, written in **Lean 4** |
-| *your own no dependencies lean => machine compiler* | `leanc/` — **Lean 4 in, static x86-64 ELF out**. No LLVM, no C backend, no assembler, no linker, no libc |
-| *a raw low level futex for ipc* | `lib/Ipc.lean` — lock-free rings in shared memory; the only kernel object is **one futex word** |
+| a Solana client in Lean | `client/` — a node that joins Solana's gossip network and verifies what it hears, written in **Lean 4** |
+| its own dependency-free Lean → machine compiler | `leanc/` — **Lean 4 in, static x86-64 ELF out**. No LLVM, no C backend, no assembler, no linker, no libc |
+| a raw futex for IPC | `lib/Ipc.lean` — lock-free rings in shared memory; the only kernel object is **one futex word** |
 
 <p align="center">
   <img src="docs/dashboard.svg" alt="The client's dashboard after 45 seconds on mainnet: 4,005 nodes discovered, 40,119 signatures verified, 0 bad" width="860">
@@ -57,7 +58,7 @@ make              # builds the compiler, then compiles the client with it (about
 ./build/leansol   # joins mainnet-beta gossip
 ```
 
-Within a few seconds you should see nodes pouring in. `ctrl-c` quits.
+Within a few seconds you should see nodes pouring in. `ctrl-c` quits. `--cluster testnet` and `--cluster devnet` work the same way.
 
 ```
 usage: leansol [options]
@@ -99,18 +100,18 @@ make lean-check   # optional: type-check everything with the official Lean toolc
 def greet (name : String) : String := s!"hello, {name}"
 
 def main : IO Unit := do
-  IO.println (greet "toly")
+  IO.println (greet "world")
 ```
 
 ```console
 $ ./build/leanc -I rt -o hello hello.lean && ./hello
-hello, toly
+hello, world
 $ file hello
 hello: ELF 64-bit LSB executable, x86-64, version 1 (SYSV), statically linked, no section header
 $ strace ./hello
 execve("./hello", ["./hello"], ...)     = 0
 mmap(NULL, 4194304, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_ANONYMOUS, -1, 0) = 0x7ef55fc00000
-write(1, "hello, toly\n", 12)           = 12
+write(1, "hello, world\n", 13)          = 13
 exit_group(0)                           = ?
 ```
 
@@ -135,7 +136,7 @@ The official Lean compiler turns Lean into C and hands it to a C toolchain, whic
 
 **"No dependencies" is meant literally:**
 
-- The compiler binary itself is **freestanding**: built with `-nostdlib -ffreestanding -static`, it has zero undefined symbols and reaches the kernel through five raw syscalls (`read`, `write`, `open`, `close`, `mmap`).
+- The compiler binary itself is **freestanding**: built with `-nostdlib -ffreestanding -static`, it has zero undefined symbols and reaches the kernel through seven raw syscalls (`read`, `write`, `open`, `close`, `unlink`, `mmap`, `exit_group`).
 - Its output is **freestanding** too. There is no C runtime underneath compiled programs.
 - The runtime is **written in Lean** ([`rt/Rt.lean`](rt/Rt.lean)) and compiled along with your program: the allocator, growable arrays, strings, printing, panics.
 - A C compiler is needed once, to bootstrap `leanc`. Any will do: the client binary is byte-for-byte identical whether `leanc` was built with gcc or clang, as C99, C11 or C23.
@@ -252,6 +253,7 @@ Not supported: type classes, polymorphic or higher-order functions, lambdas, dep
 **Where `leanc` deliberately differs from Lean:**
 
 - **`Nat` is a 64-bit machine word.** Lean's `Nat` is unbounded. `leanc` never silently wraps it: addition, multiplication and shifts that would overflow *trap*, and subtraction truncates at zero as in Lean. So if a program runs without a "Nat overflow" panic, its `Nat` results are the ones Lean would compute.
+- **No tail calls.** Recursion uses the machine stack and is not turned into a loop, so long-running loops should be `while`/`for`/`repeat`.
 - **Panics abort.** `a[i]!` out of bounds stops the process with a message and line number. (Official Lean logs and continues with a default value.)
 - **`leanc` does not check proofs.** It is a compiler, not a kernel. Whether a file is valid Lean is for the official toolchain to say; this repo keeps that check one command away.
 
@@ -264,7 +266,7 @@ make lean-check    # = lake build && tests/run.sh --oracle     (needs the offici
 ```
 
 - **`lake build`** makes the official Lean 4 toolchain type-check every Lean file here: runtime, libraries, client. The whole client is accepted by both compilers from the same source.
-- **Differential tests.** Each program in `tests/` is compiled by `leanc` and run; its output must equal `tests/expected/`, which was generated by running the same file under official Lean. They cover value semantics under aliasing, pattern matching, control flow, integer edge cases, SHA-2 at every message length from 0 to 300, and Ed25519 signing and verification. Continuous integration runs both this and the plain build on every push.
+- **Differential tests.** Each program in `tests/` is compiled by `leanc` and run; its output must equal `tests/expected/`, which was generated by running the same file under official Lean. They cover value semantics under aliasing, pattern matching, control flow, integer edge cases, SHA-2 at every message length from 0 to 300, Ed25519 signing and verification, and a fuzz run that throws 16,000 random and corrupted records at the wire parsers (which must neither crash nor disagree). Continuous integration runs both this and the plain build on every push.
 - **External references.** The crypto is additionally checked against Python's `hashlib` and `cryptography`, RFC 8032 vectors, and, continuously, mainnet itself.
 
 ```console
@@ -272,6 +274,7 @@ $ make lean-check
 Build completed successfully (46 jobs).
 ok    basics (official Lean agrees)
 ok    ed25519 (official Lean agrees)
+ok    fuzz_wire (official Lean agrees)
 ok    inplace (native only)
 ok    ipc (native only)
 ok    panic (aborted with a bounds panic, as it must)
@@ -279,7 +282,7 @@ ok    semantics (official Lean agrees)
 ok    sha (official Lean agrees)
 ok    sha_lengths (official Lean agrees)
 ok    tables (official Lean agrees)
-9 passed, 0 failed
+10 passed, 0 failed
 ```
 
 The tests not marked "official Lean agrees" either use raw syscalls (`fork`, futexes), which exist only as machine code, or check behaviour specific to `leanc` (aborting on a bounds error, in-place updates).
@@ -331,6 +334,7 @@ Being straightforward about what this is:
 
 - **A gossip client, not a validator.** No blocks, no replay, no voting, no ledger verification. Getting from here to following the chain trustlessly means speaking the repair and turbine protocols, reassembling shreds (Reed–Solomon, Merkle proofs), and checking proof-of-history. That is the natural next step and none of it exists yet.
 - **Listen-only.** It answers pings but does not serve pull requests or push records to others, and its identity is fresh on every start.
+- **A simple store.** Records are remembered by hash, up to 400,000; when that fills (every several minutes on mainnet) the hash set is flushed and refilled rather than aged out record by record. The node table survives the flush.
 - **x86-64 Linux only.** The code generator and the syscall numbers are specific to it.
 - **A subset of Lean.** No type classes or higher-order functions is a real restriction; the libraries here are written around it.
 - **`Nat` is 64 bits** (overflow traps rather than wraps; see above).
@@ -340,7 +344,7 @@ Being straightforward about what this is:
 ## FAQ
 
 **Is this the Lean theorem prover's language, or just "lean" as in small?**
-Both, which is the joke in the original post. The client is written in Lean 4, the language of the theorem prover, and the result is also small: a 147 KB static binary.
+Both. The client is written in Lean 4, the language of the theorem prover, and the result is also small: a 147 KB static binary.
 
 **Why is the compiler written in C if the point is "no dependencies"?**
 Something has to bootstrap it. The dependency is one C compiler at build time, and nothing at run time: no libc, no LLVM, no linker. Making `leanc` compile itself would remove even that; its subset is not there yet.
@@ -356,7 +360,7 @@ It opens one UDP socket, makes outbound connections to public Solana nodes, and 
 
 ## Acknowledgements
 
-- toly (Anatoly Yakovenko), for the sentence.
+- toly, for the idea.
 - [Firedancer](https://github.com/firedancer-io/firedancer), for the tile architecture this borrows its vocabulary from.
 - [Agave](https://github.com/anza-xyz/agave), whose gossip implementation is the reference for the wire formats.
 - [Lean 4](https://lean-lang.org), for a language worth writing a second compiler for.

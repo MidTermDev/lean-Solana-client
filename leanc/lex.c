@@ -22,6 +22,17 @@ static bool is_id_start(u8 c) {
 static bool is_digit(u8 c) { return c >= '0' && c <= '9'; }
 static bool is_id_char(u8 c) { return is_id_start(c) || is_digit(c) || c == '\''; }
 
+// Non-ASCII characters are identifier letters (α, β, x₁) unless they begin
+// one of the operator symbols above.
+static bool is_unicode_letter(const char *s, u64 pos, u64 len) {
+  if ((u8)s[pos] < 0x80) return false;
+  for (int i = 0; symbols[i]; i++) {
+    u64 n = strlen(symbols[i]);
+    if (pos + n <= len && memcmp(s + pos, symbols[i], n) == 0) return false;
+  }
+  return true;
+}
+
 typedef struct {
   const char *file, *src;
   u64 len, pos;
@@ -184,17 +195,18 @@ TokenStream lex(const char *file, const char *src, u64 len, int line0, int col0)
       continue;
     }
 
-    if (is_id_start(c)) {
+    if (is_id_start(c) || is_unicode_letter(src, lx->pos, len)) {
       u64 start = lx->pos;
       for (;;) {
-        while (lx->pos < len && is_id_char((u8)src[lx->pos])) advance(lx, 1);
+        while (lx->pos < len && (is_id_char((u8)src[lx->pos]) || is_unicode_letter(src, lx->pos, len))) advance(lx, 1);
         // trailing ! or ? belongs to the identifier (get!, back?), but "!=" does not
         if (lx->pos < len && (src[lx->pos] == '!' || src[lx->pos] == '?') &&
             !(lx->pos + 1 < len && src[lx->pos + 1] == '=')) {
           advance(lx, 1);
         }
         // a.b continues the identifier
-        if (lx->pos + 1 < len && src[lx->pos] == '.' && is_id_start((u8)src[lx->pos + 1])) {
+        if (lx->pos + 1 < len && src[lx->pos] == '.' &&
+            (is_id_start((u8)src[lx->pos + 1]) || is_unicode_letter(src, lx->pos + 1, len))) {
           advance(lx, 1);
           continue;
         }

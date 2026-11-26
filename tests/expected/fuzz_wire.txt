@@ -1,0 +1,2 @@
+pristine: stop 81 of 81, shred 50093, client 19534, port 8001
+accepted 7771, rejected 8229, digest 18419170668789695055

@@ -1,5 +1,5 @@
 // Platform layer and small utilities. Everything the compiler needs from the
-// outside world goes through the five raw Linux syscalls in this file.
+// outside world goes through the handful of raw Linux syscalls in this file.
 #include "leanc.h"
 
 static long sys(long n, long a, long b, long c, long d, long e, long f) {
@@ -14,7 +14,7 @@ static long sys(long n, long a, long b, long c, long d, long e, long f) {
   return ret;
 }
 
-enum { SYS_read = 0, SYS_write = 1, SYS_open = 2, SYS_close = 3, SYS_mmap = 9, SYS_exit_group = 231 };
+enum { SYS_read = 0, SYS_write = 1, SYS_open = 2, SYS_close = 3, SYS_mmap = 9, SYS_unlink = 87, SYS_exit_group = 231 };
 
 void *memcpy(void *d, const void *s, unsigned long n) {
   u8 *dp = d;
@@ -91,6 +91,9 @@ char *plat_read_file(const char *path, u64 *len) {
 }
 
 bool plat_write_file(const char *path, const void *buf, u64 len, int mode) {
+  // Replace rather than overwrite: a running copy of the old executable
+  // keeps its inode, and the kernel would refuse to open it for writing.
+  sys(SYS_unlink, (long)path, 0, 0, 0, 0, 0);
   long fd = sys(SYS_open, (long)path, 01 | 0100 | 01000 /*WRONLY|CREAT|TRUNC*/, mode, 0, 0, 0);
   if (fd < 0) return false;
   plat_write((int)fd, buf, len);
