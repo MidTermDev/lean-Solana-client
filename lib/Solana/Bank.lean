@@ -29,7 +29,7 @@ namespace Bank
 
 def instructionsSysvar : ByteArray := Base58.decode "Sysvar1nstructions1111111111111111111111111"
 def feesSysvar : ByteArray := Base58.decode "SysvarFees111111111111111111111111111111111"
-def recentBlockhashesSysvar : ByteArray := Base58.decode "SysvarRecentB1ockHashes11111111111111111111"
+def recentBlockhashesSysvar : ByteArray := Sbpf.recentBlockhashesSysvar
 def slotHistorySysvar : ByteArray := Base58.decode "SysvarS1otHistory11111111111111111111111111"
 def ed25519Program : ByteArray := Base58.decode "Ed25519SigVerify111111111111111111111111111"
 def secp256k1Program : ByteArray := Base58.decode "KeccakSecp256k11111111111111111111111111111"
@@ -79,7 +79,7 @@ def create (clock : Sbpf.Clock) : Bank :=
 def Bank.withBlockhash (bank : Bank) (blockhash : ByteArray) : Bank :=
   let m := bank.machine
   let sysvars := { m.sysvars with slotHashes := slotHashes m.clock.slot blockhash }
-  { bank with blockhash := blockhash, machine := { m with sysvars := sysvars } }
+  { bank with blockhash := blockhash, machine := { m with sysvars := sysvars, blockhash := blockhash } }
 
 def Bank.withClock (bank : Bank) (clock : Sbpf.Clock) : Bank :=
   let m := bank.machine
@@ -129,9 +129,7 @@ def slotHistory : ByteArray := Id.run do
 def sysvar (bank : Bank) (key : ByteArray) : Sbpf.Account :=
   let m := bank.machine
   let cached := Sbpf.sysvarBytes m key
-  if key == Sbpf.slotHashesSysvar then sysvarAccount key cached 20488
-  else if key == Sbpf.stakeHistorySysvar then sysvarAccount key cached 16392
-  else if cached.size != 0 then sysvarAccount key cached cached.size
+  if cached.size != 0 then sysvarAccount key cached cached.size
   else if key == feesSysvar then sysvarAccount key (u64 0) 8
   else if key == recentBlockhashesSysvar then
     sysvarAccount key (if bank.blockhash.size == 32 then u64 1 ++ bank.blockhash ++ u64 0 else u64 0) 6008
@@ -189,11 +187,7 @@ def instructionsData (keys : Array ByteArray) (signers : Nat) (writable : Array 
 
 /-- The smallest balance at which an account with `size` bytes of data is
 exempt from rent. Every account must hold at least this, or nothing. -/
-def minimumBalance (bank : Bank) (size : Nat) : UInt64 :=
-  let rent := bank.machine.sysvars.rent
-  -- lamports per byte, times the threshold (a double: 1.0 today, 2.0 in the older form)
-  let factor : UInt64 := if Wire.u64 rent 8 == 0x4000000000000000 then 2 else 1
-  (128 + size).toUInt64 * Wire.u64 rent 0 * factor
+def minimumBalance (bank : Bank) (size : Nat) : UInt64 := bank.machine.rentMinimum size
 
 /-- May an account go from (`lamportsBefore`, `sizeBefore`) to
 (`lamports`, `size`)? It may end empty or rent-exempt. It may stay below
@@ -315,10 +309,23 @@ def Bank.process (bank : Bank) (tx : Tx.Transaction) (verify : Bool) : Receipt :
         return refuse bank "AddressLookupTableNotFound"
       if table.owner != lookupTableProgram || table.data.size < 56 then
         return refuse bank "InvalidAddressLookupTableOwner"
+      -- A table that was deactivated stays usable only while its deactivation slot is still among the recent
+      -- slots. Addresses added in the current slot are not usable until the next one.
+      let deactivated := Wire.u64 table.data 4
+      if deactivated != 0xFFFFFFFFFFFFFFFF && deactivated != bank.machine.clock.slot then
+        let recent := bank.machine.sysvars.slotHashes
+        let mut found := false
+        for k in [0:(Wire.u64 recent 0).toNat] do
+          if Wire.u64 recent (8 + 40 * k) == deactivated then
+            found := true
+        if !found then
+          return refuse bank "AddressLookupTableNotFound"
+      let entries := if bank.machine.clock.slot > Wire.u64 table.data 12 then (table.data.size - 56) / 32
+        else (Wire.u8 table.data 20).toNat
       let wanted := if pass == 0 then l.writable else l.readonly
       for index in wanted do
         let at_ := 56 + 32 * index.toNat
-        if at_ + 32 > table.data.size then
+        if index.toNat >= entries || at_ + 32 > table.data.size then
           return refuse bank "InvalidAddressLookupTableIndex"
         keys := keys.push (table.data.extract at_ (at_ + 32))
         writable := writable.push (pass == 0)
@@ -345,8 +352,26 @@ def Bank.process (bank : Bank) (tx : Tx.Transaction) (verify : Bool) : Receipt :
   if !loaderPresent then
     for ix in msg.instructions do
       writable := writable.set! ix.program false
+  -- The blockhash must be the latest one, or the value held by a nonce account that the first instruction
+  -- advances (so that the transaction, signed whenever, works once and only once).
+  let mut nonceAt := Sbpf.notFound
   if bank.blockhash.size == 32 && msg.blockhash != bank.blockhash then
-    return refuse bank "BlockhashNotFound"
+    if msg.instructions.size != 0 then
+      let first := msg.instructions[0]!
+      if keys[first.program]! == Sbpf.systemProgram && first.data.size >= 4 && Wire.u32 first.data 0 == 4
+          && first.accounts.size != 0 then
+        let at_ := first.accounts[0]!.toNat
+        let account := bank.get keys[at_]!
+        let mut authorized := false
+        for index in first.accounts do
+          if index.toNat < msg.signers && keys[index.toNat]! == account.data.extract 8 40 then
+            authorized := true
+        if writable[at_]! && account.owner == Sbpf.systemProgram && Sbpf.nonceKind account.data == 2
+            && account.data.extract 40 72 == msg.blockhash && authorized
+            && msg.blockhash != Sbpf.durableNonce bank.blockhash then
+          nonceAt := at_
+    if nonceAt == Sbpf.notFound then
+      return refuse bank "BlockhashNotFound"
 
   -- 2. the compute budget the transaction asks for
   let mut limit : UInt64 := 0
@@ -405,11 +430,13 @@ def Bank.process (bank : Bank) (tx : Tx.Transaction) (verify : Bool) : Receipt :
   let payer := bank.get keys[0]!
   if payer.lamports == 0 then
     return ⟨"AccountNotFound", false, fee, 0, limit, Array.emptyWithCapacity 0, ByteArray.empty, bank⟩
-  if payer.owner != Sbpf.systemProgram || payer.data.size != 0 then
+  -- the payer is a wallet, or a nonce account, which must keep enough to stay alive
+  let payerIsNonce := payer.data.size == 80 && Sbpf.nonceKind payer.data == 2
+  if payer.owner != Sbpf.systemProgram || (payer.data.size != 0 && !payerIsNonce) then
     return ⟨"InvalidAccountForFee", false, fee, 0, limit, Array.emptyWithCapacity 0, ByteArray.empty, bank⟩
-  if payer.lamports < fee then
+  if payer.lamports < fee || (payerIsNonce && payer.lamports - fee < minimumBalance bank 80) then
     return ⟨"InsufficientFundsForFee", false, fee, 0, limit, Array.emptyWithCapacity 0, ByteArray.empty, bank⟩
-  if !(rentAllowed bank payer.lamports 0 (payer.lamports - fee) 0) then
+  if !(rentAllowed bank payer.lamports payer.data.size (payer.lamports - fee) payer.data.size) then
     return ⟨"InsufficientFundsForRent { account_index: 0 }", false, fee, 0, limit, Array.emptyWithCapacity 0, ByteArray.empty, bank⟩
   -- every program named must exist
   for ix in msg.instructions do
@@ -468,8 +495,12 @@ def Bank.process (bank : Bank) (tx : Tx.Transaction) (verify : Bool) : Receipt :
         if !(rentAllowed bank was.lamports was.data.size now.lamports now.data.size) then
           error := s!"InsufficientFundsForRent \{ account_index: {i} }"
 
-  -- 6. keep everything, or only the fee
+  -- 6. keep everything, or only the fee (and the advance of the nonce, if one was used)
   let mut after := charged
+  if error != "" && nonceAt != Sbpf.notFound then
+    let account := charged.get keys[nonceAt]!
+    let state := Sbpf.nonceState (account.data.extract 8 40) (Sbpf.durableNonce bank.blockhash) bank.lamportsPerSignature
+    after := after.set { account with data := state.copySlice 0 account.data 0 80 }
   if error == "" then
     for i in [0:keys.size] do
       if writable[i]! && (st.accounts[i]!.lamports != before[i]!.lamports || st.accounts[i]!.data != before[i]!.data

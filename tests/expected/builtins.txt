@@ -1,0 +1,131 @@
+blockhash CmpNeggWJ4JaWJeJ8YKN1Zypmk7uvQq3PECGUCAEMbky
+create an account at a seed-derived address: success, fee 5000, 150 units
+  signature 2ScmXdSyU9CRWDmGRoLXa7Mmo7UbwzHz8qBVCnC2yVFziSFSWizspRZ3iWKQVM9ntv2hJH8H7zpRxLBkoyAs52j5
+  payer 8999995000, alice 2000000000
+  vault: 1000000000 lamports, 0 bytes, owner 11111111111111111111111111111111, data GKot5hBsd81kMupNCXHaqbhv3huEbxAFMLnpcX2hniwn
+transfer out of it, signed by the base: success, fee 5000, 150 units
+  signature 2QGdEGPbDJoznVWJ3oZ3UL9h3q7RAqihYKjxt9WLyuSgp5ysSciNruZhmuzac3tKpu7TrM6FmEsJq14baERLFAMZ
+  payer 8999990000, alice 2250000000
+  vault: 750000000 lamports, 0 bytes, owner 11111111111111111111111111111111, data GKot5hBsd81kMupNCXHaqbhv3huEbxAFMLnpcX2hniwn
+transfer with the wrong seed: InstructionError(0, Custom(5)), fee 5000, 150 units
+  signature 8EJMeF8o4G3YNz9eTkwTWg2817tvGWkuJWiZgMZNDqwLZbezMAiJU2s8Hz3KE7G8nL1MHjEwwA2sDJD9Z4ydYta
+  payer 8999985000, alice 2250000000
+fund, allocate and assign a seed-derived address: success, fee 5000, 450 units
+  signature 23DzTxVrC6pCSSqdBDV7VoqV6BTf7nTeXPUjWzpQs5vk1Bws7hfyw4XRBNXW4EA1fhxC4N6o3iQUCbJtqpF8z9zX
+  payer 8998532320, alice 2250000000
+  ledger: 1447680 lamports, 80 bytes, owner Config1111111111111111111111111111111111111, data 79vu1SWJ3tbpDroCk6dHqqaUAuA57U1Rce7EapJJRXDy
+a seed longer than 32 bytes: InstructionError(0, Custom(0)), fee 5000, 150 units
+  signature Nbuq8ux7dH4CihPnsh6XHqj4fkk9xSij3auydugDUxzbGWBzgRXsDse6mivsrDzEnYWiNWr2L3WrEMsifRh8RvH
+  payer 8998527320, alice 2250000000
+create a nonce account: success, fee 10000, 300 units
+  signature 22DgDTMs35SRYVLqibuBg9vzKCqh1rfXXyRphdyTpFyvz4tbBq5jhmDUXu7Pa4n1fbD5mzoXTP83qwS9NJXfi5Yq
+  payer 8996517320, alice 2250000000
+  nonce: 2000000 lamports, 80 bytes, owner 11111111111111111111111111111111, data 4K1hSYot1Tez66WiVy8oNRZdrvA22Ks4jKHPTMwphLJ6
+initialize it again: InstructionError(0, InvalidAccountData), fee 5000, 150 units
+  signature 2iRhMUVCpc9iaRBWgKoBXrVvDyVZJ92n3DWjN7FwhLJytR73qBb5jDSEq9xUTXALD3JjcRUkWNKEnMy2qiDX7kLU
+  payer 8996512320, alice 2250000000
+advance it before the blockhash changed: InstructionError(0, Custom(7)), fee 5000, 150 units
+  signature 4Fu1R9xBeX89HCufC8CYFzLiSK6wYueMMpdpNCutQMfmthMrMPJipsXAqGLWf5TdzD1pBuMHNqvEKaHqth4cA8vL
+  payer 8996507320, alice 2250000000
+give it to alice: success, fee 5000, 150 units
+  signature Mm8miTVpA9aa9dZBtfyBF8Hn7id1SSB8Ga9qoXg1XN5zmanx3VRt26XrrvjTqcpEHG7VFWkUbb888PrB3VEcpPg
+  payer 8996502320, alice 2250000000
+  nonce: 2000000 lamports, 80 bytes, owner 11111111111111111111111111111111, data GF1WEeFUHG4zZMnf9539wTwH9sZAAKvsbNaJSqQf1Pim
+the old authority tries to advance it: InstructionError(1, MissingRequiredSignature), fee 5000, 300 units
+  signature 59Xjthq1jKk9HuY1iWMkq86NuRvH1YDvoPsGw6S7FizTj8HX3CxjmtwHu7HiYezoqSHGyZ2cLySsgz68sbUnLw6e
+  payer 8996497320, alice 2250000000
+alice withdraws a little: success, fee 10000, 150 units
+  signature 2tPwbaFaXUgw1Di4ZBPJ5XkTzq73imNw59dgRmusg5k7HqTnigFvxdqZf45HN77AR18a6gvVanjo1M86REtLzua2
+  payer 8996487320, alice 2250100000
+alice withdraws too much: InstructionError(0, InsufficientFunds), fee 10000, 150 units
+  signature 2Wxwo66iPvQUxrMiziZBn5mtcHbRWVXqWaXjdyPU8hLrjDWxXGefCZaRrXzk3rJAYki6gauQBmNdC3TAaxJBmVjx
+  payer 8996477320, alice 2250100000
+blockhash 4QjEBrJnATvydaCoPb7j4cneA5vSJNFsAYHQwRAjAjmQ
+advance it after the blockhash changed: success, fee 10000, 150 units
+  signature 2jE5JypiR9heEfjRUwroyGU6Rsfqkseh31UmhJ9MUEZA1wyZH1m6rvGyUTKwC8xWwwiDVk8pggED5FE1C7UEqWN8
+  payer 8996467320, alice 2250100000
+  nonce: 1900000 lamports, 80 bytes, owner 11111111111111111111111111111111, data H66e666UPEQr6RjQtoCRunkDHnc1XETi1Hs41XYES5FX
+advance it twice: InstructionError(1, Custom(7)), fee 10000, 300 units
+  signature 4Wc8EPHqgFfZjidVf3LC7K5e2z34718VyXmmbejiKFehCiADjknWgemrkXrJJyRXzE4a5kNuSCfCUx7wNuLe4wUj
+  payer 8996457320, alice 2250100000
+close it while its nonce is current: InstructionError(0, Custom(7)), fee 10000, 150 units
+  signature RdtNNvHDeSzR7Raokap1jk2iDDJMfVLYsS64WHDXy1gLUQNJN5qPTfnpxN8cVPMvwPp1NHe6V1mVnXEVHG2f3wj
+  payer 8996447320, alice 2250100000
+  nonce: 1900000 lamports, 80 bytes, owner 11111111111111111111111111111111, data H66e666UPEQr6RjQtoCRunkDHnc1XETi1Hs41XYES5FX
+create a config record: success, fee 15000, 1646 units
+  signature 5iPkekP76rNm1TT5PcsTunHhVaVJ8q7YtGLuA1M72RcoTF3Yt5ghvsekqZGUS6W2UeagyLjQmqVA5AZ6zjTEhoUc
+  payer 8994761920, alice 2250100000
+  record: 1670400 lamports, 112 bytes, owner Config1111111111111111111111111111111111111, data AxSTTwY57CsTD4LQnMqbgpewhPitEJFgaC9jnmBxVS9A
+change it without the key it names: InstructionError(0, MissingRequiredSignature), fee 10000, 13222 units
+  signature bZBBPfs24vVCQ1ZS9pCYaP8Y1HW2Ng6jRhgeTW4h4rLgyueaujFuEwNx7r1muqRCnTk92G7JS4sNELVJnnqDZDK
+  log: account FPP21sbqhr2LPjSnJkw5NBetPubeFG4PsQFBxHj8noTq is not in account list
+  log: Error: MissingRequiredSignature
+  payer 8994751920, alice 2250100000
+change it with that key: success, fee 10000, 1805 units
+  signature 3B1w3bPTBp3rRx33qh4KH6jnmiwzktfGjtSARC69pJxEXMMsttT3sLsUm4saoyjtxn5GZvfCi4nrdFG9bUv2KMoJ
+  payer 8994741920, alice 2250100000
+  record: 1670400 lamports, 112 bytes, owner Config1111111111111111111111111111111111111, data Cfw7ttgZQj7gNkLZhqLja1PXnLDxJEVRFfSsEszKj4AL
+create a lookup table: success, fee 5000, 10355 units
+  signature 4VvUuvfEL37KLoWCPy6uo3zeRds5gVTMUChEWvE8gLRqhr9PAWr6sJSu1qkniEQuN46rKjwQ7FVND94ouFdNJntk
+  log: Instruction: CreateLookupTable
+  payer 8993456280, alice 2250100000
+  table: 1280640 lamports, 56 bytes, owner AddressLookupTab1e1111111111111111111111111, data GiLPSgowfekDvN8jdZHDVmDKiT5okvtETUjHkLUQQBV3
+add two addresses to it: success, fee 5000, 6425 units
+  signature 2UW1qwMqLu5PFAfKkXWj6eXFCY9ZjvSAG8nqBBxo5Ahudam3UPGPRUfWP1EcP9wfKH4QrB2pcZU3mLqAswcauDMy
+  log: Instruction: ExtendLookupTable
+  payer 8993005840, alice 2250100000
+  table: 1726080 lamports, 120 bytes, owner AddressLookupTab1e1111111111111111111111111, data AsEnAvDFDjcFbJHEekbT3kVtWWMf5y3tF5UT7ahumZhG
+pay an address through the table in the slot it was added: InvalidAddressLookupTableIndex, fee 0, 0 units
+  signature 3QAFZ1U1avUcq7nz47BJVof8W4Gjh86bvRav3hfgosRQTCbpV4ouoyVARAAuJHnFUCLrE8GDfv7vYFfK65fWDGqW
+  payer 8993005840, alice 2250100000
+pay it through the table one slot later: success, fee 5000, 150 units
+  signature Cwd59dyWGtcV71sxGGj2cvkDpETMMPtfRvUudh4uquVq32m5uFiFnzoZmD2Nq34z5qfpjUSyPGfcTZG5wTmwqQi
+  payer 7993000839, alice 2250100000
+  dave: 1000000001 lamports, 0 bytes, owner 11111111111111111111111111111111, data GKot5hBsd81kMupNCXHaqbhv3huEbxAFMLnpcX2hniwn
+freeze the table: success, fee 5000, 1517 units
+  signature 2GYdeN9vUs48kvK4guYxpdgA9fuSYV3QNVC69cUuRnejBK5k8jHBg4JhRgBW4J2wwrf11KoKazdceZEJ2aSPpjP7
+  log: Instruction: FreezeLookupTable
+  payer 7992995839, alice 2250100000
+add to the frozen table: InstructionError(0, Immutable), fee 5000, 1806 units
+  signature SZboeqUYV8Lrnmco6JLqNbx3YSpyruonwKjE6ruaMAkRSYbv78sdhNu81HiVm7NRbCsY5AdpKsb3syqVNxTSkft
+  log: Instruction: ExtendLookupTable
+  log: Lookup table is frozen
+  log: Error: Immutable
+  payer 7992990839, alice 2250100000
+  table: 1726080 lamports, 120 bytes, owner AddressLookupTab1e1111111111111111111111111, data 4edjfAXuJYZtxc4ErWNcGczTbDtEszmwsG5G5YC7R3Gq
+create a stake account: success, fee 10000, 8833 units
+  signature 541RBJsnk4APGqYPpqDRWFRUpQpyi26rVAuV5XgkC4VTetHj4MPHCja8HVhyqZ3YYK1y97teAszwzPm2S3uRyfq9
+  log: Instruction: Initialize
+  payer 4992980839, alice 2250100000
+  stake: 3000000000 lamports, 200 bytes, owner Stake11111111111111111111111111111111111111, data 9x2H63GdpYw3uFeLP6adsCGK3eXZfYS8X2G9jtrCBmto
+initialize it again: InstructionError(0, InvalidAccountData), fee 5000, 7744 units
+  signature 2oQtZ9o5pdHP4Z7kk6TEPuQRFsWkUuY1Us1wdPMHw6oNhMx9z9nPCAzvSTf76SqBDEN3KM4vwyv3GTk4M5a5iM9a
+  log: Instruction: Initialize
+  log: ERROR: An account's data contents was invalid
+  payer 4992975839, alice 2250100000
+make alice the withdrawer: success, fee 5000, 11354 units
+  signature 4uSNyuZCzfiTxtvtehCPug9WRx7pSLEmgiKpg4AswsvRgJAzg9W9TgkKq3VvKkmaBA5PZYmesSw81fkaSqbrS9Px
+  log: Instruction: Authorize
+  payer 4992970839, alice 2250100000
+  stake: 3000000000 lamports, 200 bytes, owner Stake11111111111111111111111111111111111111, data D4WKXruTWnCpHJzo7dDKCcrzkc4nbN6HdKoitNgY6S5D
+split off a third: success, fee 10000, 12085 units
+  signature 5B6hhKhjtcWAHVwmA3wsCfwp3XPp381z9RvvCuQCMuNpKbttY1KGqfmpettRaeCFJE63YuPic8JJsuBPZfnk9nmj
+  log: Instruction: Split
+  payer 4990677959, alice 2250100000
+  stake: 2000000000 lamports, 200 bytes, owner Stake11111111111111111111111111111111111111, data D4WKXruTWnCpHJzo7dDKCcrzkc4nbN6HdKoitNgY6S5D
+  the split: 1002282880 lamports, 200 bytes, owner Stake11111111111111111111111111111111111111, data D4WKXruTWnCpHJzo7dDKCcrzkc4nbN6HdKoitNgY6S5D
+the old withdrawer tries to withdraw: InstructionError(0, MissingRequiredSignature), fee 5000, 7233 units
+  signature 5f5a6arcyu8GRh9aqhuVbChhAtGSh8PnzkNaY1f7pSgsz7igZGK56zrtomFc1LGS6ZkjfvBKyEFDnt88Pahesma6
+  log: Instruction: Withdraw
+  log: ERROR: A signature was required but not found
+  payer 4990672959, alice 2250100000
+alice withdraws: success, fee 10000, 6634 units
+  signature 3UbTwb3sbQV756QgF3iAunurz9zHDeM3oz9JHABin8vE6sH2z11kjyRpwBLD8FCRXxKLtDdV8Cvav4z3NjKS6N5
+  log: Instruction: Withdraw
+  payer 4990662959, alice 2750100000
+  stake: 1500000000 lamports, 200 bytes, owner Stake11111111111111111111111111111111111111, data D4WKXruTWnCpHJzo7dDKCcrzkc4nbN6HdKoitNgY6S5D
+alice withdraws below the reserve: InstructionError(0, InsufficientFunds), fee 10000, 7255 units
+  signature 2V4q362G9ntkzSiXyG9yQdan1cjtpCTxXGXnQVGxh4khy2gyVwsKTRYTVV4KeYZPUEJy2WrJWQGF3fMAak622EH3
+  log: Instruction: Withdraw
+  log: ERROR: An account's balance was too small to complete the instruction
+  payer 4990652959, alice 2750100000

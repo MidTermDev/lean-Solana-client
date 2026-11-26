@@ -13,4 +13,10 @@ version 0: 221 bytes; parses: true; versioned: true; lookups: 1; same bytes agai
   missing table: AddressLookupTableNotFound, fee 0, charged false
   entry beyond the table: InvalidAddressLookupTableIndex, fee 0, charged false
   the same account twice: AccountLoadedTwice, fee 0, charged false
+durable nonce: success, fee 5000, charged true
+  the nonce moved on: true; alice received 1000000
+  sent a second time: BlockhashNotFound, fee 0, charged false
+  without advancing: BlockhashNotFound, fee 0, charged false
+  followed by a failing instruction: InstructionError(1, Custom(1)), fee 5000, charged true
+  the nonce moved on: true
 fuzz: 600 inputs, 151 parsed, 3 with valid signatures, 3 applied

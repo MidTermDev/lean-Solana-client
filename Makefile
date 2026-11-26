@@ -96,6 +96,7 @@ oracle:
 	cargo build --release --quiet --manifest-path tests/oracle/Cargo.toml --target-dir build/oracle
 	cargo build --release --quiet --manifest-path tests/oracle-next/Cargo.toml --target-dir build/oracle-next
 	build/oracle/release/oracle transaction $(P)/sysvar_probe.so $(P)/counter.so | diff - tests/expected/transaction.txt
+	build/oracle/release/oracle builtins | diff - tests/expected/builtins.txt
 	build/oracle-next/release/oracle-next anchor $(P)/anchor_vault.so $(P)/anchor_vault_v3.so | diff - tests/expected/anchor.txt
 	build/oracle-next/release/oracle-next versions $(P)/sysvar_probe.so $(P)/sysvar_probe_v1.so $(P)/sysvar_probe_v2.so $(P)/sysvar_probe_v3.so | diff - tests/expected/versions.txt
 	@echo "Agave's runtime and the Lean virtual machine agree on every scenario"

@@ -25,7 +25,9 @@ def usage : String :=
   "                        ADDRESS:OWNER:LAMPORTS:DATAHEX\n" ++
   "                      ADDRESS and OWNER are Base58 addresses; OWNER may be `system`.\n" ++
   "                      Accounts not given are empty. Sysvars and built-in programs are provided.\n" ++
-  "  --program ADDR=FILE a program (sBPF v0 .so) deployed at ADDR; repeatable\n" ++
+  "  --program ADDR=FILE a program (an sBPF .so file) deployed at ADDR; repeatable\n" ++
+  "  --programs DIR      a directory of programs named ADDRESS.so; those the transaction names are loaded\n" ++
+  "                      (the repository's programs/ holds the stake, config and address table programs)\n" ++
   "  --slot N            the slot the Clock sysvar reports (default 0)\n" ++
   "  --no-verify         do not check the signatures\n" ++
   "  --full              print account data in full\n" ++
@@ -48,6 +50,7 @@ def main : IO Unit := do
     return
   let mut specs : Array String := Array.emptyWithCapacity 4
   let mut programs : Array String := Array.emptyWithCapacity 2
+  let mut directory := ""
   let mut slot : UInt64 := 0
   let mut verify := true
   let mut full := false
@@ -68,6 +71,8 @@ def main : IO Unit := do
         specs := specs.push v
       else if a == "--program" then
         programs := programs.push v
+      else if a == "--programs" then
+        directory := v
       else if a == "--slot" then
         match RunProgram.number v with
         | none => RunProgram.fail "--slot expects a number"
@@ -92,6 +97,16 @@ def main : IO Unit := do
     if program.error != "" then
       RunProgram.fail s!"{f[1]!}: {program.error}"
     bank := bank.addProgram (Base58.decode f[0]!) program
+  if directory != "" then
+    -- every program a transaction can reach is among its accounts
+    for key in msg.keys do
+      if !(Bank.hasProgram bank key) then
+        let bytes ← Sys.readFile s!"{directory}/{Base58.encode key}.so" 0x1000000
+        if bytes.size != 0 then
+          let program := Sbpf.load bytes
+          if program.error != "" then
+            RunProgram.fail s!"{directory}/{Base58.encode key}.so: {program.error}"
+          bank := bank.addProgram key program
   for spec in specs do
     let f := RunProgram.split spec 58
     if f.size != 4 then

@@ -17,7 +17,7 @@ def main : IO Unit := do
   let alice := Ed25519.publicKey (key "alice")
   let carol := Ed25519.publicKey (key "carol")
   let blockhash := key "blockhash"
-  let mut bank := ((Bank.create ⟨0, 0, 0, 0, 0⟩).withBlockhash blockhash).set ⟨payer, Sbpf.systemProgram, 5000000000, ByteArray.empty, false⟩
+  let mut bank := ((Bank.create ⟨5, 0, 0, 0, 0⟩).withBlockhash blockhash).set ⟨payer, Sbpf.systemProgram, 5000000000, ByteArray.empty, false⟩
 
   -- a legacy message: keys are ordered by role, then by address, and survive a round trip
   let msg := Tx.compile payer #[transfer payer alice 1000000000, transfer payer carol 2000000000] blockhash
@@ -36,7 +36,8 @@ def main : IO Unit := do
 
   -- a version 0 message: two of its accounts come from a table stored on chain
   let table := key "table"
-  let tableData := Sbpf.zeros ByteArray.empty 56 ++ carol ++ alice
+  -- (a table's header: its type, then "never deactivated", then when it was last extended)
+  let tableData := Sbpf.zeros (Wire.putU64 (Wire.putU32 ByteArray.empty 1) 0xFFFFFFFFFFFFFFFF) 44 ++ carol ++ alice
   bank := bank.set ⟨table, Bank.lookupTableProgram, 1000000, tableData, false⟩
   let data := Wire.putU64 (Wire.putU32 ByteArray.empty 2) 1500000000
   -- keys: payer, system program; from the table: entry 1 (alice) writable, entry 0 (carol) read-only
@@ -63,6 +64,28 @@ def main : IO Unit := do
   -- the same account twice
   let twice : Tx.Lookup := ⟨table, (ByteArray.empty.push 1).push 1, ByteArray.empty⟩
   report "  the same account twice" (bank.process (Tx.sign { v0 with lookups := #[twice] } #[key "payer"]) true)
+
+  -- a durable nonce: a transaction signed against a value kept in a nonce account, not a recent blockhash.
+  -- It is valid whenever it is sent, once: its first instruction advances the nonce.
+  let nonce := Ed25519.publicKey (key "nonce")
+  let stored := Sbpf.durableNonce (key "an older blockhash")
+  bank := bank.set ⟨nonce, Sbpf.systemProgram, 2000000, Sbpf.nonceState payer stored 5000, false⟩
+  let recent := Sbpf.recentBlockhashesSysvar
+  let advance : Tx.Instruction := ⟨Sbpf.systemProgram, #[⟨nonce, false, true⟩, ⟨recent, false, false⟩, ⟨payer, true, false⟩],
+    Wire.putU32 ByteArray.empty 4⟩
+  let later := Tx.sign (Tx.compile payer #[advance, transfer payer alice 1000000] stored) #[key "payer"]
+  let r := bank.process later true
+  report "durable nonce" r
+  IO.println s!"  the nonce moved on: {(r.bank.get nonce).data.extract 40 72 == Sbpf.durableNonce blockhash}; alice received {(r.bank.get alice).lamports - (bank.get alice).lamports}"
+  -- the same transaction again: the nonce it names is gone
+  report "  sent a second time" (r.bank.process later true)
+  -- without the advance as its first instruction, an old value is just an unknown blockhash
+  report "  without advancing" (bank.process (Tx.sign (Tx.compile payer #[transfer payer alice 1000000] stored) #[key "payer"]) true)
+  -- if the rest of the transaction fails, the fee is taken and the nonce still moves on
+  let failing := Tx.sign (Tx.compile payer #[advance, transfer payer alice 99000000000] stored) #[key "payer"]
+  let r := bank.process failing true
+  report "  followed by a failing instruction" r
+  IO.println s!"  the nonce moved on: {(r.bank.get nonce).data.extract 40 72 == Sbpf.durableNonce blockhash}"
 
   -- hostile input: truncations, single-byte corruptions and noise must be refused or fail cleanly, never crash
   let mut parsed := 0

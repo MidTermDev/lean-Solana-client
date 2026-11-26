@@ -24,9 +24,9 @@ use {
     solana_address::{address, Address},
     solana_instruction::{account_meta::AccountMeta, error::InstructionError, Instruction},
     solana_keypair::Keypair,
-    solana_message::Message,
+    solana_message::{v0, AddressLookupTableAccount, Message, VersionedMessage},
     solana_signer::Signer,
-    solana_transaction::{Transaction, TransactionError},
+    solana_transaction::{versioned::VersionedTransaction, Transaction, TransactionError},
 };
 
 const TOKEN: Address = address!("TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA");
@@ -219,7 +219,8 @@ struct Chain {
 
 impl Chain {
     /// Sends a transaction and prints what happened, the way tests/transaction.lean does.
-    fn send(&mut self, label: &str, tx: Transaction) {
+    fn send(&mut self, label: &str, tx: impl Into<VersionedTransaction>) {
+        let tx: VersionedTransaction = tx.into();
         let signature = tx.signatures[0];
         let (outcome, fee, units, logs) = match self.svm.send_transaction(tx) {
             Ok(meta) => ("success".to_string(), meta.fee, meta.compute_units_consumed, meta.logs),
@@ -387,10 +388,177 @@ fn versions(files: &[String]) {
     }
 }
 
+// ------------------------------------------------------- built-in programs
+
+const CONFIG: Address = address!("Config1111111111111111111111111111111111111");
+const LOOKUP_TABLE: Address = address!("AddressLookupTab1e1111111111111111111111111");
+const STAKE: Address = address!("Stake11111111111111111111111111111111111111");
+const RECENT_BLOCKHASHES: Address = address!("SysvarRecentB1ockHashes11111111111111111111");
+const RENT: Address = address!("SysvarRent111111111111111111111111111111111");
+const CLOCK: Address = address!("SysvarC1ock11111111111111111111111111111111");
+const STAKE_HISTORY: Address = address!("SysvarStakeHistory1111111111111111111111111");
+
+/// A system program instruction: a 32-bit tag, then the fields given.
+fn system(tag: u32, fields: &[&[u8]], accounts: Vec<AccountMeta>) -> Instruction {
+    Instruction { program_id: SYSTEM, accounts, data: [&tag.to_le_bytes()[..], &fields.concat()].concat() }
+}
+fn tagged(program_id: Address, tag: u32, fields: &[&[u8]], accounts: Vec<AccountMeta>) -> Instruction {
+    Instruction { program_id, accounts, data: [&tag.to_le_bytes()[..], &fields.concat()].concat() }
+}
+fn text(s: &str) -> Vec<u8> {
+    [&(s.len() as u64).to_le_bytes()[..], s.as_bytes()].concat()
+}
+fn with_seed(base: &Address, seed: &str, owner: &Address) -> Address {
+    Address::new_from_array(Sha256::digest([base.as_ref(), seed.as_bytes(), owner.as_ref()].concat()).into())
+}
+fn w(key: Address) -> AccountMeta { AccountMeta::new(key, false) }
+fn ws(key: Address) -> AccountMeta { AccountMeta::new(key, true) }
+fn r(key: Address) -> AccountMeta { AccountMeta::new_readonly(key, false) }
+fn rs(key: Address) -> AccountMeta { AccountMeta::new_readonly(key, true) }
+
+impl Chain {
+    /// One line describing an account: balance, size, owner and a hash of its data.
+    fn show(&self, name: &str, key: &Address) {
+        match self.svm.get_account(key) {
+            Some(a) => println!("  {name}: {} lamports, {} bytes, owner {}, data {}", a.lamports, a.data.len(), a.owner,
+                Address::new_from_array(Sha256::digest(&a.data).into())),
+            None => println!("  {name}: no such account"),
+        }
+    }
+    fn signed(&mut self, label: &str, extra: &[&Keypair], instructions: &[Instruction]) {
+        let mut signers = vec![&self.payer];
+        signers.extend_from_slice(extra);
+        let tx = Transaction::new(&signers, Message::new(instructions, Some(&self.payer.pubkey())), self.svm.latest_blockhash());
+        self.send(label, tx);
+    }
+}
+
+fn builtins() {
+    let mut svm = LiteSVM::new();
+    let wallet = |lamports| Account { lamports, owner: SYSTEM, ..Default::default() };
+    let payer_keys = Keypair::new_from_array(hash("payer"));
+    let alice_keys = Keypair::new_from_array(hash("alice"));
+    svm.set_account(payer_keys.pubkey(), wallet(10_000_000_000)).unwrap();
+    svm.set_account(alice_keys.pubkey(), wallet(2_000_000_000)).unwrap();
+    println!("blockhash {}", svm.latest_blockhash());
+    let mut chain = Chain { svm, payer: payer_keys, alice: alice_keys };
+    let payer = chain.payer.pubkey();
+    let alice = chain.alice.pubkey();
+    let alice_keys = Keypair::new_from_array(hash("alice"));
+
+    // --- the system program: addresses derived from a base key and a seed
+    let vault = with_seed(&payer, "vault", &SYSTEM);
+    chain.signed("create an account at a seed-derived address", &[], &[system(3, &[payer.as_ref(), &text("vault"),
+        &1_000_000_000u64.to_le_bytes(), &0u64.to_le_bytes(), SYSTEM.as_ref()], vec![ws(payer), w(vault)])]);
+    chain.show("vault", &vault);
+    chain.signed("transfer out of it, signed by the base", &[], &[system(11, &[&250_000_000u64.to_le_bytes(), &text("vault"),
+        SYSTEM.as_ref()], vec![w(vault), rs(payer), w(alice)])]);
+    chain.show("vault", &vault);
+    chain.signed("transfer with the wrong seed", &[], &[system(11, &[&1u64.to_le_bytes(), &text("vaults"),
+        SYSTEM.as_ref()], vec![w(vault), rs(payer), w(alice)])]);
+    let ledger = with_seed(&payer, "ledger", &CONFIG);
+    chain.signed("fund, allocate and assign a seed-derived address", &[], &[transfer(&payer, &ledger, 1_447_680),
+        system(9, &[payer.as_ref(), &text("ledger"), &80u64.to_le_bytes(), CONFIG.as_ref()], vec![w(ledger), rs(payer)]),
+        system(10, &[payer.as_ref(), &text("ledger"), CONFIG.as_ref()], vec![w(ledger), rs(payer)])]);
+    chain.show("ledger", &ledger);
+    chain.signed("a seed longer than 32 bytes", &[], &[system(9, &[payer.as_ref(), &text("a seed that is much longer than is allowed"),
+        &80u64.to_le_bytes(), CONFIG.as_ref()], vec![w(ledger), rs(payer)])]);
+
+    // --- the system program: nonce accounts
+    let nonce_keys = Keypair::new_from_array(hash("nonce"));
+    let nonce = nonce_keys.pubkey();
+    chain.signed("create a nonce account", &[&nonce_keys], &[create_account(&payer, &nonce, 2_000_000, 80, &SYSTEM),
+        system(6, &[payer.as_ref()], vec![w(nonce), r(RECENT_BLOCKHASHES), r(RENT)])]);
+    chain.show("nonce", &nonce);
+    chain.signed("initialize it again", &[], &[system(6, &[alice.as_ref()], vec![w(nonce), r(RECENT_BLOCKHASHES), r(RENT)])]);
+    chain.signed("advance it before the blockhash changed", &[], &[system(4, &[], vec![w(nonce), r(RECENT_BLOCKHASHES), rs(payer)])]);
+    chain.signed("give it to alice", &[], &[system(7, &[alice.as_ref()], vec![w(nonce), rs(payer)])]);
+    chain.show("nonce", &nonce);
+    chain.signed("the old authority tries to advance it", &[], &[transfer(&payer, &alice, 1),
+        system(4, &[], vec![w(nonce), r(RECENT_BLOCKHASHES), rs(payer)])]);
+    chain.signed("alice withdraws a little", &[&alice_keys], &[system(5, &[&100_000u64.to_le_bytes()],
+        vec![w(nonce), w(alice), r(RECENT_BLOCKHASHES), r(RENT), rs(alice)])]);
+    chain.signed("alice withdraws too much", &[&alice_keys], &[system(5, &[&500_000u64.to_le_bytes()],
+        vec![w(nonce), w(alice), r(RECENT_BLOCKHASHES), r(RENT), rs(alice)])]);
+    chain.svm.expire_blockhash();
+    println!("blockhash {}", chain.svm.latest_blockhash());
+    chain.signed("advance it after the blockhash changed", &[&alice_keys], &[system(4, &[], vec![w(nonce), r(RECENT_BLOCKHASHES), rs(alice)])]);
+    chain.show("nonce", &nonce);
+    chain.signed("advance it twice", &[&alice_keys], &[transfer(&payer, &alice, 2), system(4, &[], vec![w(nonce), r(RECENT_BLOCKHASHES), rs(alice)])]);
+    chain.signed("close it while its nonce is current", &[&alice_keys], &[system(5, &[&1_900_000u64.to_le_bytes()],
+        vec![w(nonce), w(alice), r(RECENT_BLOCKHASHES), r(RENT), rs(alice)])]);
+    chain.show("nonce", &nonce);
+
+    // --- the config program (bytecode): a record with a list of keys that must sign changes to it
+    let record_keys = Keypair::new_from_array(hash("record"));
+    let record = record_keys.pubkey();
+    let mut store = vec![1u8];
+    store.extend_from_slice(alice.as_ref());
+    store.push(1);
+    store.extend_from_slice(b"what the record says");
+    chain.signed("create a config record", &[&record_keys, &alice_keys], &[create_account(&payer, &record, 1_670_400, 112, &CONFIG),
+        Instruction { program_id: CONFIG, accounts: vec![ws(record), rs(alice)], data: store.clone() }]);
+    chain.show("record", &record);
+    store[40] = b'W';
+    chain.signed("change it without the key it names", &[&record_keys], &[Instruction { program_id: CONFIG, accounts: vec![ws(record)], data: store.clone() }]);
+    chain.signed("change it with that key", &[&alice_keys], &[Instruction { program_id: CONFIG, accounts: vec![w(record), rs(alice)], data: store }]);
+    chain.show("record", &record);
+
+    // --- address lookup tables (bytecode): create one, add addresses, then use it in a version 0 transaction
+    let (table, bump) = Address::find_program_address(&[payer.as_ref(), &0u64.to_le_bytes()], &LOOKUP_TABLE);
+    let carol = Address::new_from_array(hash("carol"));
+    let dave = Address::new_from_array(hash("dave"));
+    chain.signed("create a lookup table", &[], &[tagged(LOOKUP_TABLE, 0, &[&0u64.to_le_bytes(), &[bump]],
+        vec![w(table), r(payer), ws(payer), r(SYSTEM)])]);
+    chain.show("table", &table);
+    chain.signed("add two addresses to it", &[], &[tagged(LOOKUP_TABLE, 2, &[&2u64.to_le_bytes(), carol.as_ref(), dave.as_ref()],
+        vec![w(table), rs(payer), ws(payer), r(SYSTEM)])]);
+    chain.show("table", &table);
+    let lookup = AddressLookupTableAccount { key: table, addresses: vec![carol, dave] };
+    let via_table = |chain: &Chain, to: &Address, lamports: u64| {
+        let message = v0::Message::try_compile(&payer, &[transfer(&payer, to, lamports)], &[lookup.clone()], chain.svm.latest_blockhash()).unwrap();
+        VersionedTransaction::try_new(VersionedMessage::V0(message), &[&chain.payer]).unwrap()
+    };
+    let tx = via_table(&chain, &dave, 1_000_000_000);
+    chain.send("pay an address through the table in the slot it was added", tx);
+    chain.svm.warp_to_slot(1);
+    let tx = via_table(&chain, &dave, 1_000_000_001);
+    chain.send("pay it through the table one slot later", tx);
+    chain.show("dave", &dave);
+    chain.signed("freeze the table", &[], &[tagged(LOOKUP_TABLE, 1, &[], vec![w(table), rs(payer)])]);
+    chain.signed("add to the frozen table", &[], &[tagged(LOOKUP_TABLE, 2, &[&1u64.to_le_bytes(), alice.as_ref()],
+        vec![w(table), rs(payer), ws(payer), r(SYSTEM)])]);
+    chain.show("table", &table);
+
+    // --- the stake program (bytecode): a stake account is created, handed over, split and drawn down
+    let stake_keys = Keypair::new_from_array(hash("stake"));
+    let stake = stake_keys.pubkey();
+    let half_keys = Keypair::new_from_array(hash("half"));
+    let half = half_keys.pubkey();
+    chain.signed("create a stake account", &[&stake_keys], &[create_account(&payer, &stake, 3_000_000_000, 200, &STAKE),
+        tagged(STAKE, 0, &[payer.as_ref(), payer.as_ref(), &[0u8; 48]], vec![w(stake), r(RENT)])]);
+    chain.show("stake", &stake);
+    chain.signed("initialize it again", &[], &[tagged(STAKE, 0, &[alice.as_ref(), alice.as_ref(), &[0u8; 48]], vec![w(stake), r(RENT)])]);
+    chain.signed("make alice the withdrawer", &[], &[tagged(STAKE, 1, &[alice.as_ref(), &1u32.to_le_bytes()], vec![w(stake), r(CLOCK), rs(payer)])]);
+    chain.show("stake", &stake);
+    chain.signed("split off a third", &[&half_keys], &[create_account(&payer, &half, 2_282_880, 200, &STAKE),
+        tagged(STAKE, 3, &[&1_000_000_000u64.to_le_bytes()], vec![w(stake), w(half), rs(payer)])]);
+    chain.show("stake", &stake);
+    chain.show("the split", &half);
+    chain.signed("the old withdrawer tries to withdraw", &[], &[tagged(STAKE, 4, &[&500_000_000u64.to_le_bytes()],
+        vec![w(stake), w(alice), r(CLOCK), r(STAKE_HISTORY), rs(payer)])]);
+    chain.signed("alice withdraws", &[&alice_keys], &[tagged(STAKE, 4, &[&500_000_000u64.to_le_bytes()],
+        vec![w(stake), w(alice), r(CLOCK), r(STAKE_HISTORY), rs(alice)])]);
+    chain.show("stake", &stake);
+    chain.signed("alice withdraws below the reserve", &[&alice_keys], &[tagged(STAKE, 4, &[&1_499_000_000u64.to_le_bytes()],
+        vec![w(stake), w(alice), r(CLOCK), r(STAKE_HISTORY), rs(alice)])]);
+}
+
 fn main() {
     let args: Vec<String> = std::env::args().collect();
     match args.get(1).map(String::as_str) {
         Some("versions") if args.len() >= 3 => versions(&args[2..]),
+        Some("builtins") if args.len() == 2 => builtins(),
         Some("anchor") if args.len() >= 3 => args[2..].iter().for_each(|file| anchor(file)),
         Some("transaction") if args.len() == 4 => transaction(&args[2], &args[3]),
         _ => {
