@@ -17,6 +17,9 @@ namespace Unsafe
 /-- Address of the heap object behind `b`. Valid while `b` is alive. -/
 @[extern "leanc_ptr"] opaque addr (b : @& ByteArray) : UInt64
 
+/-- Address of the heap object behind an array of words; its elements start 24 bytes in. -/
+@[extern "leanc_ptr"] opaque arrayAddr (a : @& Array UInt64) : UInt64
+
 /-- Reinterprets a runtime string object (as returned by `Rt.argv`) as a `String`. -/
 @[extern "leanc_ofptr"] opaque stringOfAddr (p : UInt64) : String
 
@@ -67,6 +70,31 @@ def readFile (path : String) (max : Nat) : IO ByteArray := do
   let data ← read fd max
   close fd
   return data
+
+/-- Replaces the file at `path` with `data`, atomically: the bytes go to a
+temporary file next to it, which is then renamed over the target. Readers
+see either the old contents or the new, never a partial write. -/
+def writeFileAtomic (path : String) (data : ByteArray) : IO Bool := do
+  let tmp := (path ++ ".tmp").toUTF8.push 0
+  let tp := Unsafe.addr tmp
+  -- O_WRONLY | O_CREAT | O_TRUNC, mode 0644
+  let fd ← syscall 2 (tp + 24) 0x241 0x1a4 0 0 0
+  if isErr fd then
+    return false
+  let p := Unsafe.addr data
+  let total := data.size.toUInt64
+  let mut off : UInt64 := 0
+  while off < total do
+    let r ← syscall 1 fd (p + 24 + off) (total - off) 0 0 0
+    if isErr r || r == 0 then
+      close fd
+      return false
+    off := off + r
+  close fd
+  let dst := path.toUTF8.push 0
+  let dp := Unsafe.addr dst
+  let r ← syscall 82 (tp + 24) (dp + 24) 0 0 0 0
+  return !(isErr r)
 
 /-- True when `fd` is a terminal (TCGETS succeeds). -/
 def isTty (fd : UInt64) : IO Bool := do
@@ -199,12 +227,48 @@ def setTimeout (fd opt ms : UInt64) : IO Unit := do
   let _ ← syscall 54 fd 1 opt (p + 24) 16 0
   pure ()
 
-/-- Asks for a larger kernel receive buffer (`SO_RCVBUF`). -/
-def setRecvBuffer (fd : UInt64) (bytes : UInt32) : IO Unit := do
-  let v := int32 bytes
+/-- Sets an integer `SOL_SOCKET` option. -/
+def setSockOpt (fd opt : UInt64) (value : UInt32) : IO Unit := do
+  let v := int32 value
   let p := Unsafe.addr v
-  let _ ← syscall 54 fd 1 8 (p + 24) 4 0
+  let _ ← syscall 54 fd 1 opt (p + 24) 4 0
   pure ()
+
+/-- Asks for a larger kernel receive buffer (`SO_RCVBUF`). -/
+def setRecvBuffer (fd : UInt64) (bytes : UInt32) : IO Unit := setSockOpt fd 8 bytes
+
+/-- A listening TCP socket on `ip:port` (`SO_REUSEADDR` set). Returns the
+descriptor, or an error value (`isErr`). -/
+def listenTcp (ip : UInt32) (port : UInt16) : IO UInt64 := do
+  let fd ← tcpSocket
+  if isErr fd then
+    return fd
+  setSockOpt fd 2 1
+  let r ← bind fd ip port
+  if isErr r then
+    close fd
+    return r
+  let r ← syscall 50 fd 64 0 0 0 0
+  if isErr r then
+    close fd
+    return r
+  return fd
+
+/-- Waits for the next connection on a listening socket. -/
+def accept (fd : UInt64) : IO UInt64 := syscall 43 fd 0 0 0 0 0
+
+/-- Sends all of `data` on a connected socket. Uses `MSG_NOSIGNAL`, so a
+peer that hangs up early yields an error instead of a fatal SIGPIPE. -/
+def sendAll (fd : UInt64) (data : ByteArray) : IO Bool := do
+  let p := Unsafe.addr data
+  let total := data.size.toUInt64
+  let mut off : UInt64 := 0
+  while off < total do
+    let r ← syscall 44 fd (p + 24 + off) (total - off) 0x4000 0 0
+    if isErr r || r == 0 then
+      return false
+    off := off + r
+  return true
 
 /-- The local port a socket is bound to. -/
 def localPort (fd : UInt64) : IO UInt16 := do

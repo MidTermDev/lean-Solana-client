@@ -15,6 +15,9 @@ created by the supervisor before it forks:
                                                                   | net-tx |
                                                                   +--------+
 
+An optional `http` tile serves the same state to the outside (Prometheus
+metrics and JSON) from the shared pages, without involving the other tiles.
+
 Every arrow between tiles is an `Ipc.Ring`; every tile that waits, waits on
 a futex. The metrics page is the only other shared state: plain counters the
 supervisor reads to draw the dashboard.
@@ -44,6 +47,8 @@ def tipSlot : Nat := 17
 def stored : Nat := 18
 def maskBits : Nat := 19
 def tipReporters : Nat := 20
+/-- Monotonic clock (ms) when the supervisor started. -/
+def startMs : Nat := 21
 /-- 14 counters, one per CRDS record type. -/
 def kinds : Nat := 32
 /-- 16 buckets: client ids 0..13, then "other". -/
@@ -68,6 +73,9 @@ structure Config where
   entrypoints : Array UInt64
   outsetUs : UInt64
   fanout : Nat
+  cluster : String
+  /-- Where the HTTP endpoint listens (packed address), or 0 when it is off. -/
+  httpAddr : UInt64
 
 /-- The shared mappings and the socket, inherited by every tile across `fork`. -/
 structure Shared where
@@ -77,6 +85,12 @@ structure Shared where
   toGossip : Array Ipc.Ring
   toNet : Ipc.Ring
   gossipWaiter : Ipc.Waiter
+  /-- Base of the shared node directory (see `Directory`). -/
+  directory : UInt64
+  /-- Listening socket of the HTTP endpoint, or `noFd`. -/
+  httpFd : UInt64
+
+def noFd : UInt64 := 0xFFFFFFFFFFFFFFFF
 
 /-- Message tags: the sender's address in the low 48 bits, a kind above. -/
 def tagAddr (tag : UInt64) : UInt64 := tag &&& 0xFFFFFFFFFFFF
@@ -91,3 +105,7 @@ def packAddr (ip : UInt32) (port : UInt16) : UInt64 := (ip.toUInt64 <<< 16) ||| 
 def addrIp (addr : UInt64) : UInt32 := (addr >>> 16).toUInt32
 
 def addrPort (addr : UInt64) : UInt16 := addr.toUInt16
+
+/-- A packed `major <<< 32 ||| minor <<< 16 ||| patch` as `major.minor.patch`. -/
+def versionString (key : UInt64) : String :=
+  s!"{key >>> 32}.{(key >>> 16) &&& 0xffff}.{key &&& 0xffff}"

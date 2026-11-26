@@ -2,6 +2,7 @@ import Layout
 import Net.Ip
 import Solana.Gossip
 import Solana.Table
+import Directory
 
 /-!
 # gossip
@@ -144,9 +145,12 @@ def pullRound (sh : Shared) (cfg : Config) (st : State) (rng : UInt64) : IO UInt
     sh.metrics.add M.pullsTx 1
   return r
 
-/-- Writes the cluster summary into the shared metrics page. -/
-def publish (st : State) (m : Ipc.Metrics) : IO Unit := do
+/-- Writes the cluster summary into the shared metrics page and the node
+table into the shared directory. -/
+def publish (st : State) (sh : Shared) : IO Unit := do
+  let m := sh.metrics
   let nodes := st.nodes
+  Directory.write sh.directory nodes
   let mut clients : Array UInt64 := Array.replicate 16 0
   let mut vkeys : Array UInt64 := Array.emptyWithCapacity 64
   let mut vcounts : Array UInt64 := Array.emptyWithCapacity 64
@@ -238,7 +242,7 @@ def gossipTile (sh : Shared) (cfg : Config) : IO Unit := do
       rng ← pullRound sh cfg st rng
     if now - lastStats >= 500 then
       lastStats := now
-      publish st sh.metrics
+      publish st sh
     if !busy then
       -- nothing queued: sleep on the futex until a verify tile publishes
       let seq ← sh.gossipWaiter.prepare

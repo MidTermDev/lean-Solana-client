@@ -16,9 +16,9 @@ roots = ["Rt"]
 [[lean_lib]]
 name = "Lib"
 srcDir = "lib"
-globs = ["Crypto.+", "Encoding.+", "Net.+", "Solana.+", "Sys", "Ipc", "Fmt"]
+globs = ["Crypto.+", "Encoding.+", "Net.+", "Solana.+", "Sys", "Ipc", "Fmt", "Tally"]
 
 [[lean_lib]]
 name = "Client"
 srcDir = "client"
-globs = ["Layout", "NetTiles", "VerifyTile", "GossipTile", "Dashboard", "Main"]
+globs = ["Layout", "Directory", "NetTiles", "VerifyTile", "GossipTile", "Export", "HttpTile", "Dashboard", "Main"]

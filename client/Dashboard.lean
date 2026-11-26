@@ -26,9 +26,6 @@ def magenta : String := "\x1b[35m"
 /-- Ends a line: clear whatever was there before, then newline. -/
 def eol : String := "\x1b[K\n"
 
-def versionString (key : UInt64) : String :=
-  s!"{key >>> 32}.{(key >>> 16) &&& 0xffff}.{key &&& 0xffff}"
-
 /-- One snapshot of the counters the dashboard turns into rates. -/
 structure Sample where
   ms : Nat
@@ -55,16 +52,20 @@ def row (label value : String) : String :=
   "   " ++ Fmt.padRight label 20 ++ Fmt.padLeft value 13
 
 /-- The full-screen view. -/
-def frame (sh : Shared) (cfg : Config) (cluster : String) (startMs : Nat) (prev cur : Sample) : IO String := do
+def frame (sh : Shared) (cfg : Config) (startMs : Nat) (prev cur : Sample) : IO String := do
   let m := sh.metrics
   let dt := cur.ms - prev.ms
   let up := ((cur.ms - startMs) / 1000).toUInt64
   let id := Base58.encode cfg.pubkey
   let mut s := "\x1b[H"
   s := s ++ s!" {bold}{magenta}◆ lean-solana-client{reset}  {dim}compiled by leanc · no libc · futex IPC{reset}{eol}"
-  s := s ++ s!"   {cluster} · shred version {cfg.shredVersion} · up {Fmt.clock up}{eol}"
+  s := s ++ s!"   {cfg.cluster} · shred version {cfg.shredVersion} · up {Fmt.clock up}{eol}"
   s := s ++ s!"   identity {cyan}{id}{reset}{eol}"
-  s := s ++ s!"   gossip   {Ip.toString cfg.publicIp}:{cfg.port}{eol}{eol}"
+  s := s ++ s!"   gossip   {Ip.toString cfg.publicIp}:{cfg.port}{eol}"
+  if cfg.httpAddr != 0 then
+    let url := s!"http://{Ip.toString (addrIp cfg.httpAddr)}:{addrPort cfg.httpAddr}"
+    s := s ++ s!"   http     {url}/metrics · {url}/nodes.json{eol}"
+  s := s ++ eol
 
   let nodes ← m.get M.nodes
   let tip ← m.get M.tipSlot
@@ -130,7 +131,8 @@ def frame (sh : Shared) (cfg : Config) (cluster : String) (startMs : Nat) (prev 
 
   -- the processes
   let nverify := sh.toVerify.size
-  s := s ++ s!" {bold}TILES{reset}  {dim}{nverify + 3} processes · shared-memory rings · one futex each{reset}{eol}"
+  let ntiles := nverify + 3 + (if cfg.httpAddr != 0 then 1 else 0)
+  s := s ++ s!" {bold}TILES{reset}  {dim}{ntiles} processes · shared-memory rings · one futex each{reset}{eol}"
   s := s ++ s!"   {yellow}net-rx {reset}  {Fmt.padLeft (Fmt.thousands (perSec (cur.rxPackets - prev.rxPackets) dt)) 7} pkt/s" ++
     s!"  {Fmt.padLeft (Fmt.rate (perSec (cur.rxBytes - prev.rxBytes) dt)) 11}" ++
     s!"   total {Fmt.thousands cur.rxPackets}{eol}"

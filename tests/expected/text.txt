@@ -1,0 +1,8 @@
+"plain"
+"quote \" backslash \\ tab \u0009 newline \u000a unicode λ"
+""
+true 8
+0 0 1 0
+88 HTTP/1.1 200 OK
+5x3 7x2 9x1 11x1 
+braces: { and } survive, 2

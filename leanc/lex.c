@@ -107,6 +107,7 @@ static u32 read_escape(Lexer *lx) {
   case '\\': return '\\';
   case '"': return '"';
   case '\'': return '\'';
+  case '{': return '{';
   case 'x': {
     int a = hexval((u8)lx->src[lx->pos]), b = hexval((u8)lx->src[lx->pos + 1]);
     if (a < 0 || b < 0) fatal_at(lx->file, lx->line, lx->col, "bad \\x escape");

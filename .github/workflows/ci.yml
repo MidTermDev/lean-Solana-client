@@ -7,17 +7,23 @@ on:
 
 jobs:
   build:
-    name: build and test (C compiler only)
+    name: build and test
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
-      - run: make
+      - name: build without a C compiler
+        run: make CC=/bin/false
       - run: make test
       - name: the outputs are static and freestanding
         run: |
           file build/leanc build/leansol
-          ! nm build/leanc | grep ' U '
           ./build/leansol --help
+      - name: the checked-in compiler matches its source
+        run: |
+          make verify-seed
+          ! nm build/leanc-c | grep ' U '
+          CC=clang make -B build/leanc-c
+          make verify-seed
 
   lean-check:
     name: official Lean agrees

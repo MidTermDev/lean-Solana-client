@@ -1,0 +1,40 @@
+name: release
+
+# Pushing a tag like v0.1.0 builds the client and publishes it as a release.
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - run: make
+      - run: make test
+      - name: package
+        run: |
+          mkdir dist
+          cp build/leansol dist/leansol-x86_64-linux
+          (cd dist && sha256sum leansol-x86_64-linux > SHA256SUMS)
+          cat dist/SHA256SUMS
+      - name: publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          cat > notes.md <<NOTES
+          A single static binary for Linux on x86-64. No dependencies, nothing to install:
+
+              curl -LO https://github.com/${GITHUB_REPOSITORY}/releases/download/${GITHUB_REF_NAME}/leansol-x86_64-linux
+              chmod +x leansol-x86_64-linux
+              ./leansol-x86_64-linux
+
+          The build is reproducible: \`make && sha256sum build/leansol\` on this tag prints the hash below.
+
+              $(cat dist/SHA256SUMS)
+          NOTES
+          gh release create "$GITHUB_REF_NAME" dist/leansol-x86_64-linux dist/SHA256SUMS \
+            --title "$GITHUB_REF_NAME" --notes-file notes.md
