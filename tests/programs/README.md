@@ -60,6 +60,16 @@ accounts), reads the transaction it is part of, and logs what it finds.
 Two runtimes that produce the same logs agree on the sysvars. Built like
 the Anchor program, with `solana-program` 2.3.
 
+## The same programs for other versions of sBPF
+
+`sysvar_probe_v1.so`, `sysvar_probe_v2.so`, `sysvar_probe_v3.so`, `anchor_vault_v3.so`
+
+The sysvar probe and the Anchor vault again, from the same sources, built
+with `cargo build-sbf --arch v1` (and `v2`, `v3`). Versions 1 and 2 use
+platform-tools v1.52; version 3 needs a newer compiler and uses
+`--tools-version v1.57`. `tests/versions.lean` and `tests/anchor.lean` run
+them, and `tests/oracle-next` runs them on Agave 4.3.
+
 ## What the tests do with them
 
 `tests/sbpf.lean` runs the four self-contained programs. `tests/cpi.lean`

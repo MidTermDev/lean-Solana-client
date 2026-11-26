@@ -57,7 +57,7 @@ It can also **run on-chain programs** locally with `leansol run`, and apply whol
 
 ## Quick start
 
-**Just run it.** Every release ships the client as a single 352 KB static binary (Linux, x86-64):
+**Just run it.** Every release ships the client as a single 414 KB static binary (Linux, x86-64):
 
 ```sh
 curl -LO https://github.com/MidTermDev/lean-Solana-client/releases/latest/download/leansol-x86_64-linux
@@ -191,7 +191,7 @@ Like everything else here, the server is Lean: `socket`, `listen`, `accept` by s
 
 ## Run on-chain programs
 
-Solana programs are sBPF bytecode. `leansol run` loads one and executes it in a virtual machine written in Lean: the loader, the interpreter, the memory map, the system calls, the compute-unit meter, and the runtime's rules for accounts and for programs calling other programs.
+Solana programs are sBPF bytecode (versions 0 to 3). `leansol run` loads one and executes it in a virtual machine written in Lean: the loader, the interpreter, the memory map, the system calls, the compute-unit meter, and the runtime's rules for accounts and for programs calling other programs.
 
 The programs it is tested on are themselves written in Lean. toly's [lean-svm](https://github.com/aeyakovenko/lean-svm) compiles Lean 4 to sBPF; seven of its example programs are checked in under [`tests/programs/`](tests/programs/), unmodified:
 
@@ -381,7 +381,79 @@ The sysvars are compared the only way that counts, by what a program sees. [`tes
 
 [`tests/txformat.lean`](tests/txformat.lean) covers what the reference run does not: version 0 messages that take accounts from a lookup table, and a parser fed truncated, corrupted and random input.
 
-**Limits.** sBPF v0 only. The built-in programs are the system program (create, assign, transfer, allocate), the compute budget program and Ed25519 verification; stake, vote, the loaders, secp256k1 and nonce accounts are not there, and neither are the hashing and curve system calls beyond SHA-256. Sysvars describe a chain at rest unless you set them: one slot hash, no stake history. A program may not yet call back into a program that is already running (Agave forbids most of that; here it is not checked). The reference for whole transactions is LiteSVM, a test harness built from Agave's own crates that reimplements a thin layer of the validator around them; programs, system calls and compute units below that layer are Agave's code itself. Execution is local: nothing is deployed or sent.
+### Every version of sBPF
+
+Programs on mainnet are sBPF v0, and the instruction set has moved on since. The virtual machine runs all of it:
+
+| version | what it changes |
+|---|---|
+| v0 | the original: fixed 4 KiB stack frames, system calls found by symbol when the program is loaded |
+| v1 | functions move the stack pointer themselves |
+| v2 | memory instructions re-encoded; explicit signed and unsigned division, remainder and high multiplication; 32-bit results zero-extended; no two-slot constant load |
+| v3 | v0's instruction set again, plus 32-bit conditional jumps; system calls named by a hash in the instruction; a stricter file with nothing to relocate, constants at address 0 and code at 2³² |
+
+[`tests/versions.lean`](tests/versions.lean) compiles one Rust program four ways and runs all four: 64-bit, 32-bit, signed, unsigned and 128-bit arithmetic on numbers taken from the instruction, so nothing is folded away by the compiler. The four must print the same results, each at its own cost:
+
+```console
+sBPF v0, arithmetic: success, fee 5000, 12784 units
+sBPF v1, arithmetic: success, fee 5000, 12771 units
+sBPF v2, arithmetic: success, fee 5000, 11597 units
+sBPF v3, arithmetic: success, fee 5000, 13712 units
+  log: u64: 2465395958572223728 18364703450382 713574 81621149086635842
+  log: i64: 2465395958572223728 -81985283260 -637116 -364380129851053
+  …
+```
+
+The Anchor vault is also compiled for v3 and put through its whole scenario, calling v0 token programs from v3 code. Both are compared with Agave 4.3, the first Agave to run v3: [`tests/oracle-next`](tests/oracle-next/Cargo.toml) is the reference runner built against it, from the same source as `tests/oracle`.
+
+One thing worth knowing if you read older material: v3 changed while it was being specified. The sBPF crate inside Agave 3.1 describes a v3 that kept v2's arithmetic and put code at address 0; today's compilers and Agave 4 implement the one above. This follows what compilers emit.
+
+### The programs every chain starts with
+
+A few programs are not deployed by anyone: they are part of the runtime. Some are native code in the validator, and are written here in Lean ([`lib/Solana/Native.lean`](lib/Solana/Native.lean)). Others used to be and are bytecode today; those run here from the files in [`programs/`](programs/), the same files a validator runs.
+
+| program | here it is | what it does |
+|---|---|---|
+| System | Lean | creates accounts, moves lamports, assigns owners; addresses derived from a base key and a seed; nonce accounts |
+| Loader (upgradeable) | Lean | uploads code into buffers; deploys, upgrades, extends and closes programs; hands them to another authority or makes them immutable |
+| Compute budget | Lean | unit limit, unit price, heap size |
+| Ed25519 | Lean | checks signatures listed in its instruction |
+| Stake | bytecode, `programs/` | stake accounts: create, authorize, split, withdraw, delegate |
+| Address lookup table | bytecode, `programs/` | the tables version 0 transactions take accounts from |
+| Config | bytecode, `programs/` | small records guarded by a list of signers |
+
+Two of these change what the rest can do:
+
+- **Nonce accounts** let a transaction outlive its blockhash. A transaction normally names a recent blockhash and is dead a minute later. One that names the value stored in a nonce account, and advances that nonce as its first instruction, is valid whenever it is sent, once. If the rest of it fails, the fee is taken and the nonce still moves on, so it cannot be replayed.
+- **The loader** means programs come from transactions, as they do on chain: [`tests/builtins.lean`](tests/builtins.lean) uploads a program 900 bytes at a time, deploys it, calls it, upgrades it to different code, hands it to another key and extends it. A program becomes callable in the slot after it is deployed, and the bank runs it from its account.
+
+```console
+$ ./build/tests/builtins
+…
+create a buffer: success, fee 10000, 2520 units
+write piece 0 into a buffer: success, fee 5000, 2370 units
+write piece 1 into a buffer: success, fee 5000, 2370 units
+deploy the program: success, fee 10000, 2670 units
+call the deployed program: success, fee 10000, 345 units
+upgrade the program: success, fee 5000, 2370 units
+call the upgraded program: success, fee 5000, 152 units
+hand the program to alice: success, fee 5000, 2370 units
+the old authority extends it: InstructionError(0, IncorrectAuthority), fee 5000, 2370 units
+alice extends it: success, fee 10000, 2520 units
+…
+```
+
+That test is 49 transactions across the system program, config, lookup tables (including a version 0 transaction that pays an address through a table, refused in the slot the address was added and accepted in the next), stake and the loader, and `make oracle` requires every line of it to match Agave. `leansol tx --programs programs/` makes the bytecode ones available from the command line.
+
+**Limits.**
+
+- **The vote program is not here.** It is the largest of the native programs and the one a local replay needs least; stake accounts can be created, split and withdrawn, but delegating needs a vote account, so it is not exercised.
+- **Not here either:** the secp256k1 and secp256r1 signature programs, the zero-knowledge proof programs and loader v4 (the last three are switched off on mainnet).
+- **System calls:** SHA-256 is the only hash; Keccak, BLAKE3, the curve operations and Poseidon are missing, and a program that imports one is refused when loaded.
+- **Sysvars describe a chain at rest** unless you set them: one slot hash, no stake history.
+- **No re-entrancy check:** a program calling back into one that is already running is not refused, as Agave mostly would.
+- **The reference** for whole transactions is LiteSVM, a test harness built from Agave's own crates that reimplements a thin layer of the validator around them; programs, system calls and compute units below that layer are Agave's code itself. Where LiteSVM and a validator differ (it lets a program be called in the slot it was deployed), this follows the validator.
+- Execution is local: nothing is deployed or sent.
 
 ### Compile your own Lean
 
@@ -558,11 +630,11 @@ A home-made compiler for a subset is only interesting if it agrees with the real
 
 ```sh
 make lean-check    # = lake build && tests/run.sh --oracle     (needs the official toolchain)
-make oracle        # Agave's runtime must print what tests/anchor.lean and tests/transaction.lean print  (needs Rust)
+make oracle        # Agave's runtime must print what five of the tests print  (needs Rust)
 ```
 
 - **`lake build`** makes the official Lean 4 toolchain type-check every Lean file here: runtime, libraries, client. The whole client is accepted by both compilers from the same source.
-- **Differential tests.** Each program in `tests/` is compiled by `leanc` and run; its output must equal `tests/expected/`, which was generated by running the same file under official Lean. They cover value semantics under aliasing, pattern matching, control flow, integer edge cases, SHA-2 at every message length from 0 to 300, Ed25519 signing and verification, lean-svm's programs in the sBPF virtual machine with Agave's compute-unit counts, three of them calling the SPL token programs, an Anchor program and twenty whole transactions whose output must also equal what Agave's runtime prints, the transaction wire format under fuzzing, and a fuzz run that throws 16,000 random and corrupted records at the wire parsers (which must neither crash nor disagree). Continuous integration runs both this and the plain build on every push.
+- **Differential tests.** Each program in `tests/` is compiled by `leanc` and run; its output must equal `tests/expected/`, which was generated by running the same file under official Lean. They cover value semantics under aliasing, pattern matching, control flow, integer edge cases, SHA-2 at every message length from 0 to 300, Ed25519 signing and verification, lean-svm's programs in the sBPF virtual machine with Agave's compute-unit counts, three of them calling the SPL token programs, an Anchor program (as sBPF v0 and v3), one program compiled for every sBPF version, twenty whole transactions and 49 more through the built-in programs, all of whose output must also equal what Agave's runtime prints, the transaction wire format under fuzzing, and a fuzz run that throws 16,000 random and corrupted records at the wire parsers (which must neither crash nor disagree). Continuous integration runs both this and the plain build on every push.
 - **External references.** The crypto is additionally checked against Python's `hashlib` and `cryptography`, RFC 8032 vectors, and, continuously, mainnet itself.
 
 ```console
@@ -570,6 +642,7 @@ $ make lean-check
 Build completed successfully (62 jobs).
 ok    anchor (official Lean agrees)
 ok    basics (official Lean agrees)
+ok    builtins (official Lean agrees)
 ok    cpi (official Lean agrees)
 ok    ed25519 (official Lean agrees)
 ok    fuzz_wire (official Lean agrees)
@@ -584,7 +657,8 @@ ok    tables (official Lean agrees)
 ok    text (official Lean agrees)
 ok    transaction (official Lean agrees)
 ok    txformat (official Lean agrees)
-16 passed, 0 failed
+ok    versions (official Lean agrees)
+18 passed, 0 failed
 ```
 
 The tests not marked "official Lean agrees" either use raw syscalls (`fork`, futexes), which exist only as machine code, or check behaviour specific to `leanc` (aborting on a bounds error, in-place updates).
@@ -597,9 +671,9 @@ Measured on one machine (Xeon Gold 5515+), single core unless noted. They are he
 |---|---|
 | `leanc` source | about 5,800 lines of C |
 | `leanc` binary | 143 KB, static, zero undefined symbols |
-| Lean in this repo | 6,830 lines: runtime 597, libraries 4,611, client 1,625 |
+| Lean in this repo | 7,680 lines: runtime 597, libraries 5,440, client 1,640 |
 | Compiling the whole client | **under 30 ms** |
-| `leansol` binary | **352 KB**, static |
+| `leansol` binary | **414 KB**, static |
 | Full build from a fresh clone | about 40 ms |
 | Ed25519 verification (Lean, compiled by `leanc`) | about 2,950 signatures/s per core |
 | SHA-256 (Lean, compiled by `leanc`) | about 72 MB/s |
@@ -624,7 +698,8 @@ lib/
   Ipc.lean          futex-backed rings and counters in shared memory
   Crypto/           SHA-256, SHA-512, Ed25519 (field, curve, scalars, sign, verify)
   Solana/           wire formats, all CRDS record layouts, gossip messages, hash tables,
-                    the sBPF virtual machine, transactions, and the bank that applies them
+                    the sBPF virtual machine (SbpfBase: loading, memory, accounts; Native: the
+                    built-in programs; Sbpf: the interpreter), transactions, and the bank
   Net/              IPv4 helpers and a DNS stub resolver
   Encoding/         hex, Base58, Base64
 client/           the tiles, the dashboard, the JSON/Prometheus export, main
@@ -633,7 +708,9 @@ deploy/           a systemd unit for a long-running node
 tests/            programs + outputs produced by official Lean
   programs/         on-chain programs as VM test inputs: lean-svm's, the SPL token programs,
                     and an Anchor program and a sysvar probe with their sources
-  oracle/           runs the Anchor and transaction scenarios on Agave's runtime, for comparison
+  oracle/           runs the test scenarios on Agave's runtime (3.1), for comparison
+  oracle-next/      the same source built against Agave 4.3, which runs sBPF v3
+programs/         the built-in programs that are bytecode today: stake, config, address lookup table
 examples/         shell scripts that drive `leansol run` and `leansol tx`
 lakefile.toml     lets the official toolchain check all of the above
 ```
@@ -643,14 +720,14 @@ lakefile.toml     lets the official toolchain check all of the above
 Being straightforward about what this is:
 
 - **A gossip client, not a validator.** No blocks, no replay, no voting, no ledger verification. Getting from here to following the chain trustlessly means speaking the repair and turbine protocols, reassembling shreds (Reed–Solomon, Merkle proofs), and checking proof-of-history. None of that exists yet.
-- **Transactions run; blocks do not.** Signed transactions are applied with fees, budgets, rent checks and every sysvar, and lean-svm, Pinocchio and Anchor programs all run. Replaying mainnet needs more: the remaining built-in programs (stake, vote, loaders), the remaining system calls, sBPF v3, and a way to get the accounts, which means the ledger.
+- **Transactions run; blocks do not.** Signed transactions are applied with fees, budgets, rent checks, every sysvar and every version of sBPF, and programs can be deployed and upgraded through the loader. Replaying mainnet needs more: the vote program, the remaining signature programs and system calls, and a way to get the accounts, which means the ledger.
 - **Listen-only.** It answers pings but does not serve pull requests or push records to others.
 - **A simple store.** Records are remembered by hash, up to 400,000; when that fills (every several minutes on mainnet) the hash set is flushed and refilled rather than aged out record by record. The node table survives the flush.
 - **x86-64 Linux only.** The code generator and the syscall numbers are specific to it.
 - **The compiler is not self-hosted.** Its source is C. Nothing in the build uses a C toolchain, because a prebuilt compiler is checked in, but changing the compiler does.
 - **A subset of Lean.** No type classes or higher-order functions is a real restriction; the libraries here are written around it.
 - **`Nat` is 64 bits** (overflow traps rather than wraps; see above).
-- **Young code.** The compiler has been exercised by about 6,830 lines of Lean and the test suite, not by years of users. The Ed25519 implementation is variable-time, which is fine for verifying public data and not what you want around long-lived secret keys.
+- **Young code.** The compiler has been exercised by about 7,680 lines of Lean and the test suite, not by years of users. The Ed25519 implementation is variable-time, which is fine for verifying public data and not what you want around long-lived secret keys.
 - **The network moves.** Wire formats follow agave's current gossip code; when the protocol changes, this needs to follow.
 
 ## How this relates to lean-svm
@@ -667,7 +744,7 @@ They meet at the `.so` file: lean-svm writes it, the virtual machine here runs i
 Write them with [lean-svm](https://github.com/aeyakovenko/lean-svm), and run them locally with `leansol run`, including ones that use tokens. It can build, sign and apply transactions locally, but it does not send them: deploying needs the standard Solana tools.
 
 **Is this the Lean theorem prover's language, or just "lean" as in small?**
-Both. The client is written in Lean 4, the language of the theorem prover, and the result is also small: a 352 KB static binary.
+Both. The client is written in Lean 4, the language of the theorem prover, and the result is also small: a 414 KB static binary.
 
 **Is there really no C toolchain involved?**
 Not in building or running anything here: `make` uses the checked-in `leanc` binary, which compiles Lean straight to an ELF. The compiler's *source* is C, so changing the compiler itself needs a C compiler (`make from-c`). The remaining step is for `leanc` to be written in Lean and compile itself; its subset is not there yet.
