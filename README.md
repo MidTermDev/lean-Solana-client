@@ -293,7 +293,7 @@ Measured on one machine (Xeon Gold 5515+), single core unless noted. They are he
 
 | | |
 |---|---|
-| `leanc` source | 5,777 lines of C |
+| `leanc` source | about 5,800 lines of C |
 | `leanc` binary | 143 KB, static, zero undefined symbols |
 | Lean in this repo | 3,500 lines: runtime 565, libraries 2,114, client 817 |
 | Compiling the whole client | **24 ms** |
