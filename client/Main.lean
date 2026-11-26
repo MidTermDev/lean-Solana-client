@@ -25,6 +25,8 @@ def usage : String :=
   "  --fanout N          peers pulled from every 200 ms, besides entrypoints (default 12)\n" ++
   "  --duration SECONDS  exit after this long (default: run until interrupted)\n" ++
   "  --plain             one status line per second instead of the dashboard\n" ++
+  "  --identity FILE     keep the node's key in FILE so its identity survives restarts\n" ++
+  "                      (created on first use; default: a fresh identity every run)\n" ++
   "  --json              print everything learned as one JSON document on exit\n" ++
   "                      (status lines go to stderr; runs 30 s unless --duration is given)\n" ++
   "  --json-file PATH    rewrite PATH with that JSON document every 5 seconds\n" ++
@@ -121,6 +123,7 @@ def main : IO Unit := do
   let mut plain := !(← Sys.isTty 1)
   let mut jsonOut := false
   let mut jsonFile := ""
+  let mut identityFile := ""
   let mut listen : UInt64 := 0
   let mut i := 1
   while i < argc do
@@ -155,6 +158,8 @@ def main : IO Unit := do
         duration := ← numberArg a v
       else if a == "--json-file" then
         jsonFile := v
+      else if a == "--identity" then
+        identityFile := v
       else if a == "--metrics" then
         listen := parseListen v
         if listen == 0 then
@@ -202,7 +207,16 @@ def main : IO Unit := do
     die "no entrypoint answered the IP echo request (is outbound TCP to the gossip port blocked?)"
 
   -- ------------------------------------------------------- identity & socket
-  let seed ← IO.getRandomBytes 32
+  let mut seed ← IO.getRandomBytes 32
+  if identityFile != "" then
+    let saved ← Sys.readFile identityFile 64
+    if saved.size == 32 then
+      seed := saved
+    else if saved.size != 0 then
+      die s!"{identityFile} is not an identity file (expected 32 bytes, found {saved.size})"
+    else if !(← Sys.writeFileMode identityFile seed 0x180) then
+      -- 0600: the file is the node's secret key
+      die s!"cannot create identity file {identityFile}"
   let pubkey := Ed25519.publicKey seed
   let sock ← Sys.udpSocket
   if Sys.isErr sock then
@@ -295,7 +309,7 @@ def main : IO Unit := do
       IO.print (← Dash.frame sh cfg startMs prev cur)
     if jsonFile != "" && cur.ms - lastFile >= 5000 then
       lastFile := cur.ms
-      let ok ← Sys.writeFileAtomic jsonFile (← Export.json sh cfg).toUTF8
+      let ok ← Sys.writeFileAtomic jsonFile (← Export.json sh cfg true).toUTF8
       if !ok && !fileWarned then
         fileWarned := true
         IO.eprintln s!"leansol: cannot write {jsonFile}"
@@ -303,7 +317,7 @@ def main : IO Unit := do
     if duration != 0 && cur.ms - startMs >= duration * 1000 then
       break
   -- render while the tiles are still alive, so the shared pages are consistent
-  let document ← Export.json sh cfg
+  let document ← Export.json sh cfg true
   killAll pids
   if jsonFile != "" then
     let _ ← Sys.writeFileAtomic jsonFile document.toUTF8

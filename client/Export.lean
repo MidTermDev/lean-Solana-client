@@ -46,8 +46,9 @@ def uptimeSeconds (sh : Shared) : IO UInt64 := do
   let now ← IO.monoMsNow
   return (now.toUInt64 - start) / 1000
 
-/-- The whole view as one JSON document. -/
-def json (sh : Shared) (cfg : Config) : IO String := do
+/-- The view as one JSON document: the summary, and with `withNodes` one
+entry per node as well. -/
+def json (sh : Shared) (cfg : Config) (withNodes : Bool) : IO String := do
   let m := sh.metrics
   let snap ← Directory.read sh.directory
   let (clients, versions) := census snap
@@ -64,6 +65,17 @@ def json (sh : Shared) (cfg : Config) : IO String := do
   s := s ++ s!"  \"signaturesBad\": {← m.get M.sigBad},\n"
   s := s ++ s!"  \"recordsMalformed\": {← m.get M.malformed},\n"
   s := s ++ s!"  \"recordsStored\": {← m.get M.stored},\n"
+  s := s ++ s!"  \"rxPackets\": {← m.get M.rxPackets},\n"
+  s := s ++ s!"  \"rxBytes\": {← m.get M.rxBytes},\n"
+  s := s ++ s!"  \"txPackets\": {← m.get M.txPackets},\n"
+  s := s ++ s!"  \"txBytes\": {← m.get M.txBytes},\n"
+  s := s ++ s!"  \"pullRequestsSent\": {← m.get M.pullsTx},\n"
+  s := s ++ s!"  \"pingsAnswered\": {← m.get M.pongsTx},\n"
+  -- per verify tile: microseconds spent inside Ed25519 since start
+  s := s ++ "  \"verifyBusyMicros\": ["
+  for i in [0:sh.toVerify.size] do
+    s := s ++ (if i == 0 then "" else ", ") ++ s!"{← m.get (M.tileBusyUs + i)}"
+  s := s ++ "],\n"
   -- breakdowns, most common first
   s := s ++ "  \"clients\": {"
   let mut first := true
@@ -84,6 +96,8 @@ def json (sh : Shared) (cfg : Config) : IO String := do
     if count != 0 then
       s := s ++ (if first then "" else ", ") ++ s!"\"{Crds.kindName k}\": {count}"
       first := false
+  if !withNodes then
+    return s ++ "}\n}\n"
   s := s ++ "},\n  \"nodes\": [\n"
   first := true
   for row in [0:snap.count] do

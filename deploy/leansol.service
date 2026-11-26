@@ -1,0 +1,30 @@
+# A systemd unit for a long-running leansol node.
+#
+#   sudo cp deploy/leansol.service /etc/systemd/system/
+#   sudo systemctl enable --now leansol
+#
+# Adjust User and the paths. The node needs no privileges; the only thing it
+# writes is its identity file.
+[Unit]
+Description=lean-solana-client: Solana gossip node written in Lean
+Documentation=https://github.com/MidTermDev/lean-Solana-client
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=leansol
+WorkingDirectory=/var/lib/leansol
+ExecStart=/usr/local/bin/leansol --plain --identity /var/lib/leansol/identity.key --port 8001 --tiles 2 --fanout 3 --metrics 127.0.0.1:9184
+# The per-second status lines are dropped (the same numbers are served over
+# HTTP); start-up messages and errors go to the journal.
+StandardOutput=null
+StandardError=journal
+Restart=always
+RestartSec=5
+NoNewPrivileges=true
+ProtectSystem=strict
+ReadWritePaths=/var/lib/leansol
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

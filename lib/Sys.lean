@@ -74,11 +74,11 @@ def readFile (path : String) (max : Nat) : IO ByteArray := do
 /-- Replaces the file at `path` with `data`, atomically: the bytes go to a
 temporary file next to it, which is then renamed over the target. Readers
 see either the old contents or the new, never a partial write. -/
-def writeFileAtomic (path : String) (data : ByteArray) : IO Bool := do
+def writeFileMode (path : String) (data : ByteArray) (mode : UInt64) : IO Bool := do
   let tmp := (path ++ ".tmp").toUTF8.push 0
   let tp := Unsafe.addr tmp
-  -- O_WRONLY | O_CREAT | O_TRUNC, mode 0644
-  let fd ← syscall 2 (tp + 24) 0x241 0x1a4 0 0 0
+  -- O_WRONLY | O_CREAT | O_TRUNC
+  let fd ← syscall 2 (tp + 24) 0x241 mode 0 0 0
   if isErr fd then
     return false
   let p := Unsafe.addr data
@@ -95,6 +95,9 @@ def writeFileAtomic (path : String) (data : ByteArray) : IO Bool := do
   let dp := Unsafe.addr dst
   let r ← syscall 82 (tp + 24) (dp + 24) 0 0 0 0
   return !(isErr r)
+
+/-- `writeFileMode` with the usual permissions for a public file (0644). -/
+def writeFileAtomic (path : String) (data : ByteArray) : IO Bool := writeFileMode path data 0x1a4
 
 /-- True when `fd` is a terminal (TCGETS succeeds). -/
 def isTty (fd : UInt64) : IO Bool := do

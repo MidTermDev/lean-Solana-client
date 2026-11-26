@@ -30,7 +30,7 @@ open Wire
 def clientId : UInt64 := 0x4c4e
 
 def versionMajor : UInt64 := 0
-def versionMinor : UInt64 := 1
+def versionMinor : UInt64 := 2
 def versionPatch : UInt64 := 0
 
 /-- Our `CrdsData::ContactInfo`: identity, software version, and one socket (gossip). -/

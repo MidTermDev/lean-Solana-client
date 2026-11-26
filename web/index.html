@@ -1,0 +1,541 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>leansol · a Solana client in Lean</title>
+<meta name="description" content="A Solana gossip client written in Lean 4, compiled by its own dependency-free compiler, with processes that talk over shared memory and a futex. Live from mainnet.">
+<meta property="og:title" content="leansol · a Solana client in Lean">
+<meta property="og:description" content="Written in Lean 4, compiled by its own dependency-free compiler, running live on Solana mainnet.">
+<meta property="og:type" content="website">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' fill='%230f0e0c'/%3E%3Cpath d='M9 7v18h14' fill='none' stroke='%23ffb020' stroke-width='4'/%3E%3C/svg%3E">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
+<style>
+  /* Layout: a technical datasheet. One wide column; every section is a narrow
+     label rail on the left and content on the right. Square corners, amber
+     phosphor on warm black, numerals in mono. A single committed dark look. */
+  :root {
+    color-scheme: dark;
+    --ground: #0f0e0c;        /* warm black */
+    --raised: #171512;        /* instrument panels */
+    --line: #2b2722;          /* rules and borders */
+    --line-soft: #1f1c18;
+    --ink: #efe9dd;           /* bone */
+    --ink-dim: #a29a8c;
+    --ink-faint: #6f685d;
+    --amber: #ffb020;         /* phosphor: the one accent */
+    --amber-deep: #b8770a;
+    --amber-wash: rgba(255, 176, 32, 0.09);
+    --alarm: #ff6a5c;         /* only ever for a non-zero bad-signature count */
+    --sans: "IBM Plex Sans", "Helvetica Neue", Arial, sans-serif;
+    --mono: "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    --rail: 200px;
+  }
+  * { box-sizing: border-box; }
+  html { scroll-behavior: smooth; }
+  body { margin: 0; background: var(--ground); color: var(--ink); font: 400 16px/1.6 var(--sans); -webkit-font-smoothing: antialiased; }
+  a { color: inherit; text-decoration-color: var(--amber-deep); text-underline-offset: 3px; }
+  a:hover { color: var(--amber); }
+  :focus-visible { outline: 2px solid var(--amber); outline-offset: 2px; }
+  .wrap { max-width: 1180px; margin: 0 auto; padding-left: max(20px, env(safe-area-inset-left, 0px)); padding-right: max(20px, env(safe-area-inset-right, 0px)); }
+  .mono { font-family: var(--mono); }
+  .num { font-family: var(--mono); font-variant-numeric: tabular-nums; }
+
+  /* ---- top bar */
+  .bar { border-bottom: 1px solid var(--line-soft); }
+  .bar .wrap { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding-block: 14px; }
+  .brand { display: flex; align-items: center; gap: 10px; font: 600 15px var(--mono); letter-spacing: -0.01em; text-decoration: none; }
+  .brand svg { display: block; }
+  .bar nav { display: flex; gap: 22px; font: 400 13px var(--mono); }
+  .bar nav a { color: var(--ink-dim); text-decoration: none; }
+  .bar nav a:hover { color: var(--amber); }
+  @media (max-width: 720px) { .bar nav a.opt { display: none; } }
+
+  /* ---- hero */
+  .hero { padding-block: 72px 56px; display: grid; grid-template-columns: minmax(0, 1.15fr) minmax(0, 0.85fr); gap: 56px; align-items: end; }
+  h1 { margin: 0; font: 600 clamp(38px, 5.4vw, 66px)/1.03 var(--sans); letter-spacing: -0.035em; text-wrap: balance; }
+  h1 em { font-style: normal; color: var(--amber); }
+  .lede { margin: 24px 0 0; max-width: 56ch; color: var(--ink-dim); font-size: 17px; }
+  .lede b { color: var(--ink); font-weight: 500; }
+  .cta { display: flex; flex-wrap: wrap; gap: 12px; margin-top: 30px; }
+  .btn { display: inline-flex; align-items: center; gap: 8px; padding: 11px 18px; border: 1px solid var(--line); font: 500 13px var(--mono);
+    text-decoration: none; color: var(--ink); background: transparent; }
+  .btn:hover { border-color: var(--amber); color: var(--amber); }
+  .btn.primary { background: var(--amber); border-color: var(--amber); color: #171003; }
+  .btn.primary:hover { background: #ffc24d; border-color: #ffc24d; color: #171003; }
+
+  /* the live readout: styled like the program's own terminal dashboard */
+  .readout { background: var(--raised); border: 1px solid var(--line); font-family: var(--mono); }
+  .readout-head { display: flex; justify-content: space-between; align-items: center; gap: 12px; padding: 10px 16px; border-bottom: 1px solid var(--line);
+    font-size: 12px; color: var(--ink-dim); }
+  .state { display: inline-flex; align-items: center; gap: 8px; font-weight: 500; letter-spacing: 0.1em; color: var(--ink-faint); }
+  .state i { width: 7px; height: 7px; background: currentColor; display: block; }
+  .state.live { color: var(--amber); }
+  .state.live i { animation: blink 1.6s steps(2, jump-none) infinite; }
+  .state.down { color: var(--alarm); }
+  @keyframes blink { 50% { opacity: 0.25; } }
+  @media (prefers-reduced-motion: reduce) { .state.live i { animation: none; } html { scroll-behavior: auto; } }
+  .readout dl { margin: 0; padding: 6px 16px 10px; }
+  .readout .row { display: flex; justify-content: space-between; align-items: baseline; gap: 16px; padding: 9px 0; border-bottom: 1px dashed var(--line-soft); }
+  .readout .row:last-child { border-bottom: 0; }
+  .readout dt { color: var(--ink-dim); font-size: 13px; }
+  .readout dd { margin: 0; font-size: 22px; font-weight: 500; font-variant-numeric: tabular-nums; letter-spacing: -0.02em; text-align: right; }
+  .readout dd small { display: block; font-size: 11.5px; font-weight: 400; color: var(--ink-faint); letter-spacing: 0; }
+  .readout dd.hot { color: var(--amber); }
+  .readout dd.alarm { color: var(--alarm); }
+  .hex { padding: 10px 16px; border-top: 1px solid var(--line); font-size: 11.5px; color: var(--ink-faint); overflow-wrap: anywhere; }
+  .hex b { color: var(--amber-deep); font-weight: 400; }
+
+  /* ---- fact strip */
+  .facts { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); border-block: 1px solid var(--line); }
+  .fact { padding: 22px 20px 20px 0; }
+  .fact + .fact { padding-left: 20px; border-left: 1px solid var(--line); }
+  .fact strong { display: block; font: 500 30px/1.1 var(--mono); letter-spacing: -0.03em; font-variant-numeric: tabular-nums; }
+  .fact span { display: block; margin-top: 6px; color: var(--ink-dim); font-size: 13.5px; }
+
+  /* ---- sections: label rail + content */
+  section.block { display: grid; grid-template-columns: var(--rail) minmax(0, 1fr); gap: 32px; padding-block: 64px; border-bottom: 1px solid var(--line-soft); }
+  .rail { font: 500 11.5px var(--mono); letter-spacing: 0.14em; text-transform: uppercase; color: var(--amber); padding-top: 8px; }
+  .rail small { display: block; margin-top: 8px; color: var(--ink-faint); letter-spacing: 0.04em; text-transform: none; font-weight: 400; font-size: 12px; line-height: 1.5; }
+  h2 { margin: 0; font: 600 clamp(24px, 3vw, 34px)/1.12 var(--sans); letter-spacing: -0.025em; text-wrap: balance; }
+  .intro { margin: 14px 0 0; max-width: 62ch; color: var(--ink-dim); }
+  .stack { display: grid; gap: 28px; margin-top: 32px; }
+
+  /* ---- live panels */
+  .panels { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 1px; background: var(--line); border: 1px solid var(--line); }
+  .panel { background: var(--raised); padding: 20px; min-width: 0; }
+  .panel.wide { grid-column: 1 / -1; }
+  h3 { margin: 0; font: 500 12px var(--mono); letter-spacing: 0.12em; text-transform: uppercase; color: var(--ink-dim); }
+  .panel p.cap { margin: 4px 0 16px; color: var(--ink-faint); font-size: 13px; }
+  .bars { display: grid; gap: 7px; }
+  .bar-row { display: grid; grid-template-columns: minmax(84px, 140px) minmax(0, 1fr) 96px; gap: 12px; align-items: center; font: 13px var(--mono); }
+  .bar-row .name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .track { height: 8px; background: var(--ground); }
+  .fill { height: 100%; background: var(--amber); transition: width 0.5s ease; }
+  .bar-row:nth-child(n+2) .fill { background: var(--amber-deep); }
+  .bar-row .qty { text-align: right; font-variant-numeric: tabular-nums; color: var(--ink-dim); }
+  .bar-row .qty b { color: var(--ink); font-weight: 500; }
+  .kv { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 7px 20px; margin: 0; font: 13px var(--mono); }
+  .kv dt { color: var(--ink-faint); }
+  .kv dd { margin: 0; overflow-wrap: anywhere; font-variant-numeric: tabular-nums; }
+  .chips { display: flex; flex-wrap: wrap; gap: 8px; }
+  .chip { padding: 5px 10px; border: 1px solid var(--line); font: 12.5px var(--mono); color: var(--ink-dim); }
+  .chip b { color: var(--ink); font-weight: 500; font-variant-numeric: tabular-nums; }
+  .tools { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; margin-bottom: 14px; }
+  .tools input { flex: 1; min-width: 180px; padding: 9px 12px; background: var(--ground); border: 1px solid var(--line); color: var(--ink); font: 13px var(--mono); }
+  .tools input::placeholder { color: var(--ink-faint); }
+  .tools button { cursor: pointer; }
+  .tools .tally { font: 12px var(--mono); color: var(--ink-faint); }
+  .scroll { overflow-x: auto; }
+  table { width: 100%; border-collapse: collapse; font: 12.5px var(--mono); }
+  th { text-align: left; font-weight: 400; color: var(--ink-faint); padding: 7px 14px 7px 0; border-bottom: 1px solid var(--line); white-space: nowrap; }
+  td { padding: 7px 14px 7px 0; border-bottom: 1px solid var(--line-soft); white-space: nowrap; font-variant-numeric: tabular-nums; }
+  th.r, td.r { text-align: right; padding-right: 0; }
+
+  /* ---- how it works */
+  .parts { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 28px; }
+  .part h3 { color: var(--ink); font: 600 17px var(--sans); letter-spacing: -0.01em; text-transform: none; }
+  .part p { margin: 10px 0 14px; color: var(--ink-dim); font-size: 15px; }
+  pre { margin: 0; padding: 14px 16px; background: var(--raised); border: 1px solid var(--line); font: 12.5px/1.65 var(--mono); color: var(--ink-dim); overflow-x: auto; }
+  pre b { color: var(--amber); font-weight: 400; }
+  pre i { color: var(--ink-faint); font-style: normal; }
+
+  /* ---- capabilities and limits */
+  .defs { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0 40px; }
+  .def { padding: 18px 0; border-top: 1px solid var(--line-soft); }
+  .def h3 { color: var(--ink); font: 500 16px var(--sans); letter-spacing: -0.01em; text-transform: none; }
+  .def p { margin: 6px 0 0; color: var(--ink-dim); font-size: 14.5px; }
+
+  /* ---- roadmap */
+  .road { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 1px; background: var(--line); border: 1px solid var(--line); }
+  .stage { background: var(--ground); padding: 22px 20px; min-width: 0; }
+  .stage.done { background: var(--raised); }
+  .stage h3 { display: flex; align-items: center; gap: 10px; }
+  .stage h3 i { width: 9px; height: 9px; border: 1px solid var(--ink-faint); display: block; }
+  .stage.done h3 { color: var(--amber); }
+  .stage.done h3 i { background: var(--amber); border-color: var(--amber); }
+  .stage.next h3 i { border-color: var(--amber); }
+  .stage ul { list-style: none; margin: 16px 0 0; padding: 0; display: grid; gap: 14px; }
+  .stage li { font-size: 14.5px; color: var(--ink-dim); }
+  .stage li b { display: block; color: var(--ink); font-weight: 500; }
+
+  /* ---- get it */
+  .get { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 28px; }
+  .get h3 { margin-bottom: 10px; }
+
+  footer { padding-block: 36px 56px; color: var(--ink-faint); font: 12.5px var(--mono); display: flex; flex-wrap: wrap; gap: 8px 28px; justify-content: space-between; }
+  footer a { color: var(--ink-dim); }
+
+  @media (max-width: 900px) {
+    .hero { grid-template-columns: minmax(0, 1fr); gap: 36px; padding-block: 48px 40px; }
+    section.block { grid-template-columns: minmax(0, 1fr); gap: 14px; padding-block: 48px; }
+    .parts, .road, .get { grid-template-columns: minmax(0, 1fr); }
+    .panels, .defs { grid-template-columns: minmax(0, 1fr); }
+    .facts { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    .fact:nth-child(3) { padding-left: 0; border-left: 0; }
+    .fact:nth-child(n+3) { border-top: 1px solid var(--line); }
+  }
+</style>
+</head>
+<body>
+
+<div class="bar">
+  <div class="wrap">
+    <a class="brand" href="#top" aria-label="leansol home">
+      <svg width="18" height="18" viewBox="0 0 18 18" aria-hidden="true"><path d="M4 2v12h11" fill="none" stroke="#ffb020" stroke-width="2.6"/></svg>
+      leansol
+    </a>
+    <nav aria-label="Sections">
+      <a href="#live">Live</a>
+      <a class="opt" href="#built">How it works</a>
+      <a class="opt" href="#does">Capabilities</a>
+      <a href="#roadmap">Roadmap</a>
+      <a href="https://github.com/MidTermDev/lean-Solana-client">GitHub</a>
+    </nav>
+  </div>
+</div>
+
+<main id="top">
+  <div class="wrap">
+    <div class="hero">
+      <div>
+        <h1>A Solana client written in Lean, compiled by <em>its own compiler</em>.</h1>
+        <p class="lede"><b>leansol</b> joins Solana's gossip network and checks the signature on every record it hears.
+          It is written in Lean&nbsp;4 and turned into machine code by <b>leanc</b>, a compiler in the same repository
+          that needs no libc, no LLVM and no linker. Its processes talk through shared memory and a single futex.</p>
+        <div class="cta">
+          <a class="btn primary" href="https://github.com/MidTermDev/lean-Solana-client">Read the source</a>
+          <a class="btn" href="https://github.com/MidTermDev/lean-Solana-client/releases/latest">Download the binary</a>
+        </div>
+      </div>
+
+      <div class="readout" aria-label="Live readout from the node">
+        <div class="readout-head">
+          <span>leansol · <span id="h-cluster">mainnet</span></span>
+          <span class="state" id="state" role="status" aria-live="polite"><i></i><span id="state-text">CONNECTING</span></span>
+        </div>
+        <dl>
+          <div class="row"><dt>nodes in gossip</dt><dd id="h-nodes">—</dd></div>
+          <div class="row"><dt>chain tip</dt><dd id="h-tip">—</dd></div>
+          <div class="row"><dt>signatures verified</dt><dd class="hot" id="h-sigs">—<small id="h-rate">&nbsp;</small></dd></div>
+          <div class="row"><dt>bad signatures</dt><dd id="h-bad">—</dd></div>
+        </dl>
+        <div class="hex" title="The first 16 bytes of the leansol executable">
+          <b>7f 45 4c 46</b> 02 01 01 00 00 00 00 00 00 00 00 00 &nbsp;· the ELF header leanc writes, byte by byte
+        </div>
+      </div>
+    </div>
+
+    <div class="facts">
+      <div class="fact"><strong>188 KB</strong><span>the whole client, one static binary</span></div>
+      <div class="fact"><strong>40 ms</strong><span>to build it from source</span></div>
+      <div class="fact"><strong>0</strong><span>dependencies to build or run</span></div>
+      <div class="fact"><strong id="f-uptime">—</strong><span>this node's uptime</span></div>
+    </div>
+
+    <!-- ------------------------------------------------------------ live -->
+    <section class="block" id="live">
+      <div class="rail">Live<small>refreshed every 2 seconds from a node running around the clock</small></div>
+      <div>
+        <h2>Mainnet, as this node sees it</h2>
+        <p class="intro">Every figure here comes from gossip records whose Ed25519 signature the node verified itself,
+          with code written in Lean. Nothing is read from an RPC provider.</p>
+        <div class="stack">
+          <div class="panels">
+            <div class="panel">
+              <h3>Validator clients</h3><p class="cap">The software each node says it runs.</p>
+              <div class="bars" id="clients"></div>
+            </div>
+            <div class="panel">
+              <h3>Versions</h3><p class="cap">The ten most common releases.</p>
+              <div class="bars" id="versions"></div>
+            </div>
+            <div class="panel">
+              <h3>Records accepted</h3><p class="cap">Signed gossip records, by type.</p>
+              <div class="chips" id="records"></div>
+            </div>
+            <div class="panel">
+              <h3>The node</h3><p class="cap">Separate processes, shared memory, one futex each.</p>
+              <dl class="kv">
+                <dt>identity</dt><dd id="n-id">—</dd>
+                <dt>cluster</dt><dd id="n-cluster">—</dd>
+                <dt>verifying</dt><dd id="n-verify">—</dd>
+                <dt>receiving</dt><dd id="n-rx">—</dd>
+                <dt>sending</dt><dd id="n-tx">—</dd>
+                <dt>records held</dt><dd id="n-stored">—</dd>
+                <dt>pings answered</dt><dd id="n-pongs">—</dd>
+              </dl>
+            </div>
+            <div class="panel wide">
+              <h3>Node explorer</h3><p class="cap">Every node this one holds a verified contact record for.</p>
+              <div class="tools">
+                <button class="btn" id="load" type="button">Load the node list</button>
+                <input id="filter" type="search" placeholder="Filter by identity, client, version or address" aria-label="Filter nodes" disabled>
+                <span class="tally" id="tally"></span>
+              </div>
+              <div class="scroll"><table aria-label="Nodes in gossip">
+                <thead><tr><th>Identity</th><th>Client</th><th>Version</th><th>Gossip address</th><th class="r">Latest snapshot slot</th></tr></thead>
+                <tbody id="rows"></tbody>
+              </table></div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ----------------------------------------------------- how it works -->
+    <section class="block" id="built">
+      <div class="rail">How it works<small>three pieces, all in one repository</small></div>
+      <div>
+        <h2>A compiler, an IPC layer, and a client built on both</h2>
+        <div class="stack">
+          <div class="parts">
+            <div class="part">
+              <h3>leanc: Lean in, ELF out</h3>
+              <p>Reads Lean 4 source and writes the bytes of a static x86-64 executable itself: instruction encodings,
+                jump fix-ups, ELF headers. No C is generated and no toolchain runs. Reference counting gives immutable
+                Lean values in-place updates.</p>
+<pre><i>-- Lean</i>
+(x >>> n) ||| (x <<< (32 - n))
+<i>-- what leanc emits for rotr e 6</i>
+<b>mov rax, [rbp-80]
+ror eax, 6</b></pre>
+            </div>
+            <div class="part">
+              <h3>IPC on a raw futex</h3>
+              <p>Processes pass messages through lock-free rings in shared memory. Sending is a memory copy and one
+                atomic add. The kernel is involved only when the receiver is asleep, and then through a single
+                futex wake.</p>
+<pre><i>producer</i>
+lock xadd  head += 1
+if sleeping: <b>futex_wake</b>
+<i>consumer</i>
+xchg  sleeping := 1
+if empty:   <b>futex_wait</b></pre>
+            </div>
+            <div class="part">
+              <h3>Tiles: one job per process</h3>
+              <p>Receiving, verifying, protocol logic and sending each run as their own process. Only records that
+                passed verification ever reach the process holding the node's key.</p>
+<pre aria-label="Data flow between processes">socket ─▶ net-rx ─▶ <b>verify × N</b>
+                        │
+socket ◀─ net-tx ◀─── gossip
+<i>every arrow between processes is a ring</i></pre>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ----------------------------------------------------- capabilities -->
+    <section class="block" id="does">
+      <div class="rail">Capabilities<small>what works today</small></div>
+      <div>
+        <h2>What it does</h2>
+        <div class="stack">
+          <div class="defs">
+            <div class="def"><h3>Joins gossip on mainnet, testnet and devnet</h3><p>Resolves an entrypoint with its own DNS resolver, learns the cluster's shred version, and starts pulling records.</p></div>
+            <div class="def"><h3>Verifies every signature</h3><p>Strict Ed25519, the rules validators apply, written in Lean. About 2,900 checks per second per core.</p></div>
+            <div class="def"><h3>Reads every record type</h3><p>Knows the wire layout of all 14 gossip record types, so it can find where each record ends and who signed it.</p></div>
+            <div class="def"><h3>Proves it owns its address</h3><p>Answers the ping challenges peers send with signed pongs, as the protocol requires before anyone replies.</p></div>
+            <div class="def"><h3>Exports what it learns</h3><p>A JSON snapshot of every node, a JSON file that stays fresh, and Prometheus metrics over HTTP.</p></div>
+            <div class="def"><h3>Keeps a stable identity</h3><p>An optional key file makes a long-running node the same node after a restart.</p></div>
+            <div class="def"><h3>Compiles other programs</h3><p>leanc is a general compiler for its subset of Lean. Hello world is four system calls, start to finish.</p></div>
+            <div class="def"><h3>Agrees with official Lean</h3><p>The official toolchain type-checks every file, and must match leanc on every test program's output.</p></div>
+            <div class="def"><h3>Builds reproducibly</h3><p>The published binary and a build on your machine have the same SHA-256.</p></div>
+            <div class="def"><h3>Survives hostile input</h3><p>The parsers are bounds-checked and fuzzed with 16,000 random and corrupted records on every commit.</p></div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="block" id="limits">
+      <div class="rail">Limits<small>where the line is</small></div>
+      <div>
+        <h2>What it is not</h2>
+        <div class="stack">
+          <div class="defs">
+            <div class="def"><h3>Not a validator</h3><p>It does not download blocks, replay transactions or vote. It observes and verifies the gossip plane.</p></div>
+            <div class="def"><h3>Listen-only</h3><p>It answers pings but does not yet serve or push records to other nodes.</p></div>
+            <div class="def"><h3>x86-64 Linux</h3><p>The code generator and the system-call numbers are specific to it.</p></div>
+            <div class="def"><h3>A subset of Lean</h3><p>No type classes, lambdas or polymorphism. The compiler does not check proofs; official Lean does that.</p></div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ---------------------------------------------------------- roadmap -->
+    <section class="block" id="roadmap">
+      <div class="rail">Roadmap<small>intentions, not dates</small></div>
+      <div>
+        <h2>From observing the network to following the chain</h2>
+        <p class="intro">Each step moves the client closer to checking the ledger itself instead of listening to what other nodes say about it.</p>
+        <div class="stack">
+          <div class="road">
+            <div class="stage done">
+              <h3><i></i>Shipped</h3>
+              <ul>
+                <li><b>Lean → x86-64 compiler</b>Static executables with no toolchain behind them.</li>
+                <li><b>Futex-backed IPC</b>Lock-free rings between processes.</li>
+                <li><b>Gossip client</b>Full signature verification on mainnet.</li>
+                <li><b>JSON and Prometheus export</b>The cluster as data.</li>
+                <li><b>A public node</b>Running around the clock, feeding this page.</li>
+              </ul>
+            </div>
+            <div class="stage next">
+              <h3><i></i>Next</h3>
+              <ul>
+                <li><b>Full gossip participant</b>Serve pull requests and push records, not only listen.</li>
+                <li><b>Record ageing</b>Expire old records one by one instead of flushing the store.</li>
+                <li><b>Self-hosting</b>leanc rewritten in Lean, compiling itself.</li>
+                <li><b>A second architecture</b>An aarch64 backend.</li>
+              </ul>
+            </div>
+            <div class="stage">
+              <h3><i></i>Later</h3>
+              <ul>
+                <li><b>Repair and Turbine</b>Receive shreds and rebuild blocks.</li>
+                <li><b>Ledger verification</b>Check proof of history and block signatures.</li>
+                <li><b>On-chain programs in Lean</b>An SBF backend for leanc.</li>
+                <li><b>Machine-checked proofs</b>Prove the wire parsers never read out of bounds.</li>
+              </ul>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ----------------------------------------------------------- get it -->
+    <section class="block" id="get">
+      <div class="rail">Get it<small>Linux on x86-64</small></div>
+      <div>
+        <h2>Run it in three commands</h2>
+        <div class="stack">
+          <div class="get">
+            <div>
+              <h3>Download</h3>
+<pre>curl -LO https://github.com/MidTermDev/lean-Solana-client/releases/latest/download/leansol-x86_64-linux
+chmod +x leansol-x86_64-linux
+<b>./leansol-x86_64-linux</b></pre>
+            </div>
+            <div>
+              <h3>Or build from source</h3>
+<pre>git clone https://github.com/MidTermDev/lean-Solana-client
+cd lean-Solana-client
+<b>make &amp;&amp; ./build/leansol</b>   <i># no compiler needed</i></pre>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <footer>
+      <span>leansol · MIT licensed · inspired by toly</span>
+      <span><a href="https://github.com/MidTermDev/lean-Solana-client">github.com/MidTermDev/lean-Solana-client</a></span>
+    </footer>
+  </div>
+</main>
+
+<script>
+const $ = (id) => document.getElementById(id);
+const fmt = (n) => Number(n).toLocaleString('en-US');
+const el = (tag, cls, text) => { const e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; };
+let prev = null, lastOk = 0;
+
+function clock(s) {
+  const d = Math.floor(s / 86400), h = Math.floor(s / 3600) % 24, m = Math.floor(s / 60) % 60;
+  const two = (x) => String(x).padStart(2, '0');
+  return d > 0 ? `${d}d ${two(h)}h` : `${two(h)}:${two(m)}:${two(s % 60)}`;
+}
+function rate(bytes) {
+  return bytes >= 1e6 ? (bytes / 1e6).toFixed(1) + ' MB/s' : bytes >= 1e3 ? (bytes / 1e3).toFixed(1) + ' kB/s' : Math.round(bytes) + ' B/s';
+}
+function bars(target, entries, total) {
+  const max = Math.max(1, ...entries.map(([, v]) => v));
+  target.replaceChildren(...entries.map(([name, v]) => {
+    const row = el('div', 'bar-row');
+    const label = el('span', 'name', name); label.title = name;
+    const track = el('div', 'track'), fill = el('div', 'fill');
+    fill.style.width = (100 * v / max).toFixed(1) + '%'; track.append(fill);
+    const qty = el('span', 'qty'); qty.append(el('b', null, fmt(v)), ` ${(100 * v / total).toFixed(1)}%`);
+    row.append(label, track, qty);
+    return row;
+  }));
+}
+function setState(kind, text) { $('state').className = 'state ' + kind; $('state-text').textContent = text; }
+
+async function tick() {
+  try {
+    const res = await fetch('/api/summary.json', { cache: 'no-store' });
+    if (!res.ok) throw new Error(res.status);
+    const d = await res.json();
+    lastOk = Date.now();
+    setState('live', 'LIVE');
+    $('h-cluster').textContent = d.cluster;
+    $('h-nodes').textContent = fmt(d.nodeCount);
+    $('h-tip').textContent = d.tipSlot ? fmt(d.tipSlot) : '…';
+    $('h-sigs').firstChild.textContent = fmt(d.signaturesVerified);
+    $('h-bad').textContent = fmt(d.signaturesBad);
+    $('h-bad').className = d.signaturesBad === 0 ? '' : 'alarm';
+    $('f-uptime').textContent = clock(d.uptimeSeconds);
+    $('n-id').textContent = d.identity;
+    $('n-cluster').textContent = `${d.cluster}, shred version ${d.shredVersion}`;
+    $('n-stored').textContent = fmt(d.recordsStored);
+    $('n-pongs').textContent = fmt(d.pingsAnswered);
+    bars($('clients'), Object.entries(d.clients), d.nodeCount);
+    bars($('versions'), Object.entries(d.versions).slice(0, 10), d.nodeCount);
+    $('records').replaceChildren(...Object.entries(d.records).sort((a, b) => b[1] - a[1]).map(([k, v]) => {
+      const chip = el('span', 'chip'); chip.append(k + ' ', el('b', null, fmt(v))); return chip;
+    }));
+    // rates need two different snapshots at least a second apart (the CDN may repeat one)
+    if (prev && d.timestampMs - prev.timestampMs >= 1000 && d.uptimeSeconds >= prev.uptimeSeconds) {
+      const dt = (d.timestampMs - prev.timestampMs) / 1000;
+      const sig = Math.round((d.signaturesVerified - prev.signaturesVerified) / dt);
+      $('h-rate').textContent = `${fmt(sig)} per second`;
+      const load = d.verifyBusyMicros.map((u, i) => Math.round((u - prev.verifyBusyMicros[i]) / (dt * 1e4)) + '%');
+      $('n-verify').textContent = `${fmt(sig)} signatures/s on ${load.length} processes, load ${load.join(' ')}`;
+      $('n-rx').textContent = `${rate((d.rxBytes - prev.rxBytes) / dt)}, ${fmt(d.rxPackets)} packets`;
+      $('n-tx').textContent = `${rate((d.txBytes - prev.txBytes) / dt)}, ${fmt(d.txPackets)} packets`;
+    }
+    if (!prev || d.timestampMs - prev.timestampMs >= 1000 || d.uptimeSeconds < prev.uptimeSeconds) prev = d;
+  } catch (err) {
+    const age = lastOk ? (Date.now() - lastOk) / 1000 : Infinity;
+    if (age > 60) setState('down', 'NODE UNREACHABLE'); else if (age > 10) setState('', 'RECONNECTING');
+  }
+}
+
+let nodes = [];
+function renderRows() {
+  const q = $('filter').value.trim().toLowerCase();
+  const hits = q ? nodes.filter((n) => n.key.includes(q)) : nodes;
+  $('tally').textContent = `${fmt(hits.length)} of ${fmt(nodes.length)} nodes` + (hits.length > 200 ? ', showing 200' : '');
+  $('rows').replaceChildren(...hits.slice(0, 200).map((n) => {
+    const tr = el('tr');
+    tr.append(el('td', null, n.identity), el('td', null, n.client), el('td', null, n.version), el('td', null, n.gossip || '—'),
+      el('td', 'r', n.snapshotSlot ? fmt(n.snapshotSlot) : '—'));
+    return tr;
+  }));
+}
+async function loadNodes() {
+  $('load').disabled = true; $('load').textContent = 'Loading…';
+  try {
+    const res = await fetch('/api/nodes.json');
+    if (!res.ok) throw new Error(res.status);
+    const d = await res.json();
+    nodes = d.nodes.map((n) => ({ ...n, key: `${n.identity} ${n.client} ${n.version} ${n.gossip || ''}`.toLowerCase() }))
+      .sort((a, b) => (b.snapshotSlot || 0) - (a.snapshotSlot || 0));
+    $('filter').disabled = false; $('load').textContent = 'Refresh';
+    renderRows();
+  } catch (err) {
+    $('tally').textContent = 'The node list did not load. Try again.'; $('load').textContent = 'Load the node list';
+  }
+  $('load').disabled = false;
+}
+$('load').addEventListener('click', loadNodes);
+$('filter').addEventListener('input', renderRows);
+tick(); setInterval(tick, 2000);
+</script>
+</body>
+</html>

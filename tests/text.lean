@@ -11,8 +11,9 @@ def main : IO Unit := do
   let get := "GET /metrics?x=1 HTTP/1.1\r\nHost: localhost\r\n\r\n".toUTF8
   IO.println s!"{Http.isPath (Http.requestPath get) "/metrics"} {(Http.requestPath get).size}"
   IO.println s!"{(Http.requestPath "POST /metrics HTTP/1.1\r\n".toUTF8).size} {(Http.requestPath "GET".toUTF8).size} {(Http.requestPath "GET /".toUTF8).size} {(Http.requestPath ByteArray.empty).size}"
-  let resp := Http.response "200 OK" "text/plain" "hello".toUTF8
+  let resp := Http.response "200 OK" "text/plain" 5 "hello".toUTF8
   IO.println s!"{resp.size} {String.fromUTF8! (resp.extract 0 15)}"
+  IO.println (Json.quote (String.fromUTF8! resp))
   let mut t := Tally.create 8
   for k in #[(5 : UInt64), 7, 5, 9, 7, 5, 11] do
     t := t.add k

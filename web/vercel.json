@@ -1,0 +1,7 @@
+{
+  "rewrites": [
+    { "source": "/api/summary.json", "destination": "/api/proxy?p=summary.json" },
+    { "source": "/api/nodes.json", "destination": "/api/proxy?p=nodes.json" },
+    { "source": "/metrics", "destination": "/api/proxy?p=metrics" }
+  ]
+}

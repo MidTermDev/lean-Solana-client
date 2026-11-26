@@ -20,9 +20,12 @@ def requestPath (req : ByteArray) : ByteArray := Id.run do
 
 def isPath (path : ByteArray) (want : String) : Bool := path == want.toUTF8
 
-/-- A complete response: status line, headers, body. -/
-def response (status contentType : String) (body : ByteArray) : ByteArray :=
+/-- A complete response: status line, headers, body. `maxAge` (seconds)
+lets a cache or CDN in front absorb repeated requests; the data is public,
+so any origin may read it. -/
+def response (status contentType : String) (maxAge : Nat) (body : ByteArray) : ByteArray :=
   (s!"HTTP/1.1 {status}\r\nContent-Type: {contentType}\r\nContent-Length: {body.size}\r\n" ++
-    "Connection: close\r\n\r\n").toUTF8 ++ body
+    s!"Cache-Control: public, max-age={maxAge}, s-maxage={maxAge}\r\n" ++
+    "Access-Control-Allow-Origin: *\r\nConnection: close\r\n\r\n").toUTF8 ++ body
 
 end Http

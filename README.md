@@ -10,6 +10,10 @@
 </p>
 
 <p align="center">
+  <b><a href="https://leansol.vercel.app">leansol.vercel.app</a></b>: a node running this code, live on mainnet
+</p>
+
+<p align="center">
   <a href="#quick-start">Quick start</a> ·
   <a href="#how-it-works">How it works</a> ·
   <a href="#the-lean-you-can-write">The Lean subset</a> ·
@@ -49,7 +53,7 @@ All of it — SHA-256, SHA-512, Ed25519, the bloom filters, the wire formats, th
 
 ## Quick start
 
-**Just run it.** Every release ships the client as a single 180 KB static binary (Linux, x86-64):
+**Just run it.** Every release ships the client as a single 188 KB static binary (Linux, x86-64):
 
 ```sh
 curl -LO https://github.com/MidTermDev/lean-Solana-client/releases/latest/download/leansol-x86_64-linux
@@ -77,6 +81,8 @@ usage: leansol [options]
   --fanout N          peers pulled from every 200 ms, besides entrypoints (default 12)
   --duration SECONDS  exit after this long (default: run until interrupted)
   --plain             one status line per second instead of the dashboard
+  --identity FILE     keep the node's key in FILE so its identity survives restarts
+                      (created on first use; default: a fresh identity every run)
   --json              print everything learned as one JSON document on exit
                       (status lines go to stderr; runs 30 s unless --duration is given)
   --json-file PATH    rewrite PATH with that JSON document every 5 seconds
@@ -157,9 +163,20 @@ $ curl -s localhost:9184/nodes.json | jq .nodeCount
 | path | what |
 |---|---|
 | `/metrics` | Prometheus text format: counters, the chain tip, `leansol_nodes_by_client{client=…}`, `leansol_nodes_by_version{version=…}`, `leansol_records_total{type=…}` |
-| `/nodes.json` | the same JSON document as `--json`, generated on request |
+| `/summary.json` | totals and the client/version breakdown: a kilobyte or so, cheap to poll |
+| `/nodes.json` | the same plus every node: the document `--json` prints, generated on request |
 
 It listens on `127.0.0.1` unless you say otherwise (`--metrics 0.0.0.0:9184`). There is no authentication or TLS, so put it behind something if you expose it. A scrape config is one line: `- targets: ['localhost:9184']`.
+
+### Run a public node
+
+The node behind [leansol.vercel.app](https://leansol.vercel.app) is this binary under systemd, with a key file so it keeps its identity across restarts:
+
+```sh
+leansol --plain --identity identity.key --port 8001 --tiles 2 --fanout 3 --metrics 0.0.0.0:9184
+```
+
+[`deploy/leansol.service`](deploy/leansol.service) is the unit file, and [`web/`](web/) is the site: one static page and one small proxy function that fetches `/summary.json` from the node and lets a CDN cache it, so any number of visitors costs the node one request every couple of seconds. Responses carry `Cache-Control` and CORS headers for that purpose.
 
 Like everything else here, the server is Lean: `socket`, `listen`, `accept` by syscall number, an HTTP request parser of a dozen lines, and a tile of its own that reads the shared pages without disturbing the others.
 
@@ -237,7 +254,7 @@ Destructuring a value you own hands you its fields for free, so the client's has
 
 ```lean
 @[inline] def rotr (x : UInt32) (n : UInt32) : UInt32 := (x >>> n) ||| (x <<< (32 - n))
--- rotr e 6   compiles to:   mov eax, [rbp-48] ; ror eax, 6
+-- rotr e 6   compiles to:   mov rax, [rbp-80] ; ror eax, 6
 ```
 
 ### 2. IPC on a raw futex
@@ -371,9 +388,9 @@ Measured on one machine (Xeon Gold 5515+), single core unless noted. They are he
 |---|---|
 | `leanc` source | about 5,800 lines of C |
 | `leanc` binary | 143 KB, static, zero undefined symbols |
-| Lean in this repo | 4,100 lines: runtime 565, libraries 2,271, client 1,230 |
+| Lean in this repo | 4,100 lines: runtime 565, libraries 2,277, client 1,265 |
 | Compiling the whole client | **under 30 ms** |
-| `leansol` binary | **180 KB**, static |
+| `leansol` binary | **188 KB**, static |
 | Full build from a fresh clone | about 40 ms |
 | Ed25519 verification (Lean, compiled by `leanc`) | about 2,950 signatures/s per core |
 | SHA-256 (Lean, compiled by `leanc`) | about 72 MB/s |
@@ -401,6 +418,8 @@ lib/
   Net/              IPv4 helpers and a DNS stub resolver
   Encoding/         hex, Base58
 client/           the tiles, the dashboard, the JSON/Prometheus export, main
+web/              the public site for a running node (static page + one proxy function)
+deploy/           a systemd unit for a long-running node
 tests/            programs + outputs produced by official Lean
 lakefile.toml     lets the official toolchain check all of the above
 ```
@@ -410,7 +429,7 @@ lakefile.toml     lets the official toolchain check all of the above
 Being straightforward about what this is:
 
 - **A gossip client, not a validator.** No blocks, no replay, no voting, no ledger verification. Getting from here to following the chain trustlessly means speaking the repair and turbine protocols, reassembling shreds (Reed–Solomon, Merkle proofs), and checking proof-of-history. That is the natural next step and none of it exists yet.
-- **Listen-only.** It answers pings but does not serve pull requests or push records to others, and its identity is fresh on every start.
+- **Listen-only.** It answers pings but does not serve pull requests or push records to others.
 - **A simple store.** Records are remembered by hash, up to 400,000; when that fills (every several minutes on mainnet) the hash set is flushed and refilled rather than aged out record by record. The node table survives the flush.
 - **x86-64 Linux only.** The code generator and the syscall numbers are specific to it.
 - **The compiler is not self-hosted.** Its source is C. Nothing in the build uses a C toolchain, because a prebuilt compiler is checked in, but changing the compiler does.
@@ -422,7 +441,7 @@ Being straightforward about what this is:
 ## FAQ
 
 **Is this the Lean theorem prover's language, or just "lean" as in small?**
-Both. The client is written in Lean 4, the language of the theorem prover, and the result is also small: a 180 KB static binary.
+Both. The client is written in Lean 4, the language of the theorem prover, and the result is also small: a 188 KB static binary.
 
 **Is there really no C toolchain involved?**
 Not in building or running anything here: `make` uses the checked-in `leanc` binary, which compiles Lean straight to an ELF. The compiler's *source* is C, so changing the compiler itself needs a C compiler (`make from-c`). The remaining step is for `leanc` to be written in Lean and compile itself; its subset is not there yet.
