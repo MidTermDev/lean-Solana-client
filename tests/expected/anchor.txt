@@ -1,0 +1,31 @@
+owner EWFZJuFzfx1bdWH5wa67KL1joEvYhGF5m6cL9mjHp1V
+vault 2j3hCg7jxGDmmQRdhbz3m7S5zjhxEisNfDGPPEHs7DsJ (bump 255)
+vault tokens AFfWTiLfBi1r4d9euES5UFsxNdBcGhwA8XAXevcxNwMM
+initialize: success, 26599 units
+  log: Instruction: Initialize
+  log: Create
+  log: Initialize the associated token account
+  vault: 81 bytes, 1454640 lamports, owned by the vault program: true
+  vault tokens: 165 bytes, 2039280 lamports, owned by the token program: true
+initialize again: custom error 0, 6130 units
+  log: Instruction: Initialize
+deposit 1500000: success, 7913 units
+  log: Instruction: Deposit
+  log: data: cjJHpFFzMIAZoSBDyJN7vrD5Jg1jgS2k8+t5CRyBVdoDZur02FwxZWDjFgAAAAAAYOMWAAAAAAA=
+  vault holds 1500000, owner holds 3500000, recorded 1500000
+withdraw 400000: success, 7959 units
+  log: Instruction: Withdraw
+  log: data: cjJHpFFzMIAZoSBDyJN7vrD5Jg1jgS2k8+t5CRyBVdoDZur02FwxZYAaBgAAAAAA4MgQAAAAAAA=
+  vault holds 1100000, owner holds 3900000, recorded 1100000
+withdraw 2000000: custom error 6001, 6841 units
+  log: Instruction: Withdraw
+  log: AnchorError thrown in src/lib.rs:50. Error Code: TooMuch. Error Number: 6001. Error Message: the vault does not hold that much.
+  vault holds 1100000, owner holds 3900000, recorded 1100000
+withdraw by a stranger: custom error 2006, 6995 units
+  log: Instruction: Withdraw
+  log: AnchorError caused by account: vault. Error Code: ConstraintSeeds. Error Number: 2006. Error Message: A seeds constraint was violated.
+  log: Left:
+  log: 2j3hCg7jxGDmmQRdhbz3m7S5zjhxEisNfDGPPEHs7DsJ
+  log: Right:
+  log: CiAsifESJuQas6iTy7W5pbnJ9G2YMjsgiRiD3k3mKwD1
+  vault holds 1100000, owner holds 3900000, recorded 1100000

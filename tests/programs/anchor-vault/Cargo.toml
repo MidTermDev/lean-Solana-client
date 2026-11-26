@@ -1,0 +1,23 @@
+[package]
+name = "anchor-vault"
+version = "0.1.0"
+edition = "2021"
+description = "A small Anchor program used to test cross-program calls made with the Rust calling convention"
+license = "MIT"
+
+[lib]
+crate-type = ["cdylib", "lib"]
+name = "anchor_vault"
+
+[features]
+default = []
+idl-build = ["anchor-lang/idl-build", "anchor-spl/idl-build"]
+
+[dependencies]
+anchor-lang = "0.32.1"
+anchor-spl = { version = "0.32.1", default-features = false, features = ["token", "associated_token"] }
+
+[profile.release]
+overflow-checks = true
+lto = "fat"
+codegen-units = 1

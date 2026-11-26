@@ -1,6 +1,7 @@
 import Crypto.Sha256
 import Crypto.Ed25519
 import Encoding.Base58
+import Encoding.Base64
 import Solana.Wire
 
 /-!
@@ -26,8 +27,11 @@ program runtime) closely enough that compute-unit totals come out the same;
 the test suite holds it to the numbers Agave reports for lean-svm's
 examples.
 
-Not supported: sBPF v3, and the Rust calling convention for cross-program
-calls (`sol_invoke_signed_rust`); programs here call out with the C one.
+Both calling conventions for cross-program calls are provided: the C one
+(`sol_invoke_signed_c`, used by lean-svm and Pinocchio programs) and the Rust
+one (`sol_invoke_signed_rust`, used by Anchor and `solana-program`).
+
+Not supported: sBPF v3.
 -/
 
 namespace Sbpf
@@ -105,6 +109,9 @@ def sysFindAddress : UInt64 := 18
 def sysCreateAddress : UInt64 := 19
 def sysSibling : UInt64 := 20
 def sysPanic : UInt64 := 21
+def sysInvokeRust : UInt64 := 22
+def sysLogData : UInt64 := 23
+def sysRemaining : UInt64 := 24
 def sysUnknown : UInt64 := 255
 
 /-- True when the NUL-terminated string at `b[o ..]` equals `name`. -/
@@ -126,6 +133,9 @@ def syscallId (b : ByteArray) (o : Nat) : UInt64 :=
   else if cstrIs b o "sol_panic_" then sysPanic
   else if cstrIs b o "sol_log_compute_units_" then sysLogUnits
   else if cstrIs b o "sol_invoke_signed_c" then sysInvoke
+  else if cstrIs b o "sol_invoke_signed_rust" then sysInvokeRust
+  else if cstrIs b o "sol_log_data" then sysLogData
+  else if cstrIs b o "sol_remaining_compute_units" then sysRemaining
   else if cstrIs b o "sol_get_rent_sysvar" then sysRent
   else if cstrIs b o "sol_set_return_data" then sysSetReturn
   else if cstrIs b o "sol_get_return_data" then sysGetReturn
@@ -534,14 +544,40 @@ def readSlices (p : Program) (mem : ByteArray) (inputLen : Nat) (addr count : UI
       | some bytes => out := out.push bytes
   return some out
 
-/-- The instruction a program wants to send (C layout): callee, account references, data. -/
+/-- The instruction a program wants to send: callee, account references
+(with bit 1 = signer, bit 2 = writable), data. -/
 structure Call where
   programId : ByteArray
   keys : Array ByteArray
   flags : Array UInt64
   data : ByteArray
 
-def readCall (p : Program) (mem : ByteArray) (inputLen : Nat) (addr : UInt64) : Option Call := Id.run do
+/-- Reads the instruction argument of a call. The two calling conventions
+describe the same thing with different layouts:
+
+* C (`SolInstruction`): address of the program id; address and count of 16-byte
+  account entries, each the address of a key followed by `is_writable`,
+  `is_signer`; address and length of the data.
+* Rust (`Instruction`): a vector of 34-byte account entries (the key itself,
+  then `is_signer`, `is_writable`), a vector of data bytes, then the program
+  id inline. A vector is address, capacity, length. -/
+def readCall (p : Program) (mem : ByteArray) (inputLen : Nat) (addr : UInt64) (rust : Bool) : Option Call := Id.run do
+  let mut keys : Array ByteArray := Array.emptyWithCapacity 8
+  let mut flags : Array UInt64 := Array.emptyWithCapacity 8
+  if rust then
+    match readBytes p mem inputLen addr 80 with
+    | none => return none
+    | some head =>
+      let count := Wire.u64 head 16
+      if count > 255 then
+        return none
+      match readBytes p mem inputLen (Wire.u64 head 0) (34 * count), readBytes p mem inputLen (Wire.u64 head 24) (Wire.u64 head 40) with
+      | some entries, some data =>
+        for i in [0:count.toNat] do
+          keys := keys.push (entries.extract (34 * i) (34 * i + 32))
+          flags := flags.push ((if Wire.u8 entries (34 * i + 32) != 0 then 2 else 0) ||| (if Wire.u8 entries (34 * i + 33) != 0 then 4 else 0))
+        return some ⟨head.extract 48 80, keys, flags, data⟩
+      | _, _ => return none
   match readBytes p mem inputLen addr 40 with
   | none => return none
   | some head =>
@@ -550,10 +586,7 @@ def readCall (p : Program) (mem : ByteArray) (inputLen : Nat) (addr : UInt64) : 
       return none
     match readBytes p mem inputLen (Wire.u64 head 0) 32, readBytes p mem inputLen (Wire.u64 head 24) (Wire.u64 head 32) with
     | some programId, some data =>
-      let mut keys : Array ByteArray := Array.emptyWithCapacity count.toNat
-      let mut flags : Array UInt64 := Array.emptyWithCapacity count.toNat
       for i in [0:count.toNat] do
-        -- SolAccountMeta: address of the key, then is_writable, is_signer
         match readBytes p mem inputLen (Wire.u64 head 8 + 16 * i.toUInt64) 16 with
         | none => return none
         | some entry =>
@@ -565,29 +598,50 @@ def readCall (p : Program) (mem : ByteArray) (inputLen : Nat) (addr : UInt64) : 
       return some ⟨programId, keys, flags, data⟩
     | _, _ => return none
 
-/-- The caller's view of an account (C layout `SolAccountInfo`): where in its
-memory the balance, owner and data live. -/
+/-- The caller's view of an account: where in its memory the balance, the
+owner and the data live, and where it keeps the data's length. -/
 structure Info where
-  addr : UInt64
   key : ByteArray
   lamportsAddr : UInt64
   dataLen : UInt64
   dataAddr : UInt64
   ownerAddr : UInt64
+  lenAddr : UInt64
   deriving Inhabited
 
-def readInfos (p : Program) (mem : ByteArray) (inputLen : Nat) (addr count : UInt64) : Option (Array Info) := Id.run do
+/-- Reads the caller's account views.
+
+* C (`SolAccountInfo`, 56 bytes): addresses of the key and the balance, the
+  data's length and address, the address of the owner.
+* Rust (`AccountInfo`, 48 bytes): the address of the key, an
+  `Rc<RefCell<&mut u64>>` for the balance, an `Rc<RefCell<&mut [u8]>>` for the
+  data, the address of the owner. An `Rc` points at two reference counts and
+  the cell's borrow flag; what the cell holds starts 24 bytes in. So the
+  balance is reached through two pointers, and the data's address and length
+  sit in the caller's heap, where a resize has to be written back. -/
+def readInfos (p : Program) (mem : ByteArray) (inputLen : Nat) (addr count : UInt64) (rust : Bool) : Option (Array Info) := Id.run do
   if count > 255 then
     return none
   let mut out : Array Info := Array.emptyWithCapacity count.toNat
   for i in [0:count.toNat] do
-    let at_ := addr + 56 * i.toUInt64
-    match readBytes p mem inputLen at_ 56 with
-    | none => return none
-    | some raw =>
-      match readBytes p mem inputLen (Wire.u64 raw 0) 32 with
+    if rust then
+      match readBytes p mem inputLen (addr + 48 * i.toUInt64) 48 with
       | none => return none
-      | some key => out := out.push ⟨at_, key, Wire.u64 raw 8, Wire.u64 raw 16, Wire.u64 raw 24, Wire.u64 raw 32⟩
+      | some raw =>
+        let cell := Wire.u64 raw 16 + 24
+        match readBytes p mem inputLen (Wire.u64 raw 0) 32, readBytes p mem inputLen (Wire.u64 raw 8 + 24) 8,
+            readBytes p mem inputLen cell 16 with
+        | some key, some balance, some slice =>
+          out := out.push ⟨key, Wire.u64 balance 0, Wire.u64 slice 8, Wire.u64 slice 0, Wire.u64 raw 24, cell + 8⟩
+        | _, _, _ => return none
+    else
+      let view := addr + 56 * i.toUInt64
+      match readBytes p mem inputLen view 56 with
+      | none => return none
+      | some raw =>
+        match readBytes p mem inputLen (Wire.u64 raw 0) 32 with
+        | none => return none
+        | some key => out := out.push ⟨key, Wire.u64 raw 8, Wire.u64 raw 16, Wire.u64 raw 24, Wire.u64 raw 32, view + 16⟩
   return some out
 
 def findInfo (infos : Array Info) (key : ByteArray) : Nat := Id.run do
@@ -638,70 +692,91 @@ def serialize (accounts : Array Account) (metas : Array Meta) (instruction progr
 -- The one program every other program needs is not bytecode: creating
 -- accounts and moving lamports between wallets is built into the runtime.
 
+/-- Fails with one of the standard program errors (2 = InvalidArgument, 3 =
+InvalidInstructionData, 8 = MissingRequiredSignature, 11 = NotEnoughAccountKeys). -/
 def programError (st : State) (code : UInt64) : State :=
   { st with status := programFailed, r0 := code <<< 32 }
 
+/-- Fails with one of the system program's own errors: 0 = account already in
+use, 1 = not enough lamports, 3 = data length too large. -/
+def systemError (st : State) (code : UInt64) : State :=
+  { st with status := programFailed, r0 := if code == 0 then 0x100000000 else code }
+
+/-- The system program's `allocate` followed by `assign`: gives an empty,
+system-owned account `space` zero bytes and hands it to `owner`. The account
+itself must sign: nobody else can decide what an address becomes. -/
+def allocateAndAssign (st : State) (target : Meta) (space : UInt64) (owner : ByteArray) (assign : Bool) : State :=
+  let account := st.accounts[target.index]!
+  if !target.signer then programError st 8
+  else if account.data.size != 0 || account.owner != systemProgram then systemError st 0
+  else if space > 10485760 then systemError st 3
+  else if !target.writable then st.stop accountRule "the system program was asked to change a read-only account"
+  else
+    let sized : Account := { account with data := zeros ByteArray.empty space.toNat }
+    let owned : Account := if assign then { sized with owner := owner } else sized
+    { st with accounts := st.accounts.set! target.index owned }
+
+/-- The system program's `transfer`: lamports from a signing, data-less, system-owned account to any account. -/
+def systemTransfer (st : State) (source dest : Meta) (amount : UInt64) : State :=
+  let from_ := st.accounts[source.index]!
+  if !source.signer then programError st 8
+  else if from_.data.size != 0 then programError st 2
+  else if amount > from_.lamports then systemError st 1
+  else if from_.owner != systemProgram then st.stop accountRule "lamports were taken from an account the system program does not own"
+  else if !source.writable || !dest.writable then st.stop accountRule "the system program was asked to change a read-only account"
+  else
+    let accounts := st.accounts.set! source.index { from_ with lamports := from_.lamports - amount }
+    let to := accounts[dest.index]!
+    { st with accounts := accounts.set! dest.index { to with lamports := to.lamports + amount } }
+
 def systemInstruction (st : State) (metas : Array Meta) (data : ByteArray) : State := Id.run do
   let st := st.charge 150
-  let tag := Wire.u32 data 0
-  if data.size < 4 || metas.size == 0 then
+  if data.size < 4 then
     return programError st 3
-  let a := metas[0]!
-  let source := st.accounts[a.index]!
-  if tag == 2 then
-    -- Transfer { lamports }: from a signing system account to any account
-    if metas.size < 2 || data.size < 12 then
-      return programError st 11
-    let amount := Wire.u64 data 4
-    let b := metas[1]!
-    if !a.signer then
-      return programError st 8
-    if source.data.size != 0 || source.owner != systemProgram || !a.writable || !b.writable then
-      return programError st 2
-    if source.lamports < amount then
-      return { st with status := programFailed, r0 := 1 }
-    let accounts := st.accounts.set! a.index { source with lamports := source.lamports - amount }
-    let dest := accounts[b.index]!
-    return { st with accounts := accounts.set! b.index { dest with lamports := dest.lamports + amount } }
+  let tag := Wire.u32 data 0
   if tag == 0 then
-    -- CreateAccount { lamports, space, owner }: fund, size and hand over a new account
-    if metas.size < 2 || data.size < 52 then
+    -- CreateAccount { lamports, space, owner }: size and hand over a new account, then fund it
+    if data.size < 52 then
+      return programError st 3
+    if metas.size < 2 then
       return programError st 11
-    let amount := Wire.u64 data 4
-    let space := Wire.u64 data 12
-    let b := metas[1]!
-    let fresh := st.accounts[b.index]!
-    if !a.signer || !b.signer then
-      return programError st 8
-    if fresh.lamports != 0 || fresh.data.size != 0 || fresh.owner != systemProgram then
-      return { st with status := programFailed, r0 := 0x100000000 }
-    if space > 10485760 || !a.writable || !b.writable || source.owner != systemProgram then
-      return programError st 2
-    if source.lamports < amount then
-      return { st with status := programFailed, r0 := 1 }
-    let accounts := st.accounts.set! a.index { source with lamports := source.lamports - amount }
-    let created : Account := { fresh with lamports := amount, data := zeros ByteArray.empty space.toNat, owner := data.extract 20 52 }
-    return { st with accounts := accounts.set! b.index created }
+    if st.accounts[metas[1]!.index]!.lamports > 0 then
+      return systemError st 0
+    let made := allocateAndAssign st metas[1]! (Wire.u64 data 12) (data.extract 20 52) true
+    if made.status != finished then
+      return made
+    return systemTransfer made metas[0]! metas[1]! (Wire.u64 data 4)
   if tag == 1 then
     -- Assign { owner }
     if data.size < 36 then
       return programError st 3
-    if !a.signer then
+    if metas.size < 1 then
+      return programError st 11
+    let target := metas[0]!
+    let account := st.accounts[target.index]!
+    let owner := data.extract 4 36
+    if account.owner == owner then
+      return st
+    if !target.signer then
       return programError st 8
-    if source.owner != systemProgram || !a.writable then
-      return programError st 2
-    return { st with accounts := st.accounts.set! a.index { source with owner := data.extract 4 36 } }
+    if account.owner != systemProgram || !target.writable then
+      return st.stop accountRule "the system program was asked to reassign an account it may not change"
+    return { st with accounts := st.accounts.set! target.index { account with owner := owner } }
+  if tag == 2 then
+    -- Transfer { lamports }
+    if data.size < 12 then
+      return programError st 3
+    if metas.size < 2 then
+      return programError st 11
+    return systemTransfer st metas[0]! metas[1]! (Wire.u64 data 4)
   if tag == 8 then
     -- Allocate { space }
     if data.size < 12 then
       return programError st 3
-    let space := Wire.u64 data 4
-    if !a.signer then
-      return programError st 8
-    if source.owner != systemProgram || source.data.size != 0 || space > 10485760 || !a.writable then
-      return programError st 2
-    return { st with accounts := st.accounts.set! a.index { source with data := zeros ByteArray.empty space.toNat } }
-  return programError st 3
+    if metas.size < 1 then
+      return programError st 11
+    return allocateAndAssign st metas[0]! (Wire.u64 data 4) ByteArray.empty false
+  return st.stop unsupportedInstruction s!"system program instruction {tag} is not provided (only create account, assign, transfer and allocate are)"
 
 -- ---------------------------------------------------------------- execution
 
@@ -725,10 +800,14 @@ def hex64 (v : UInt64) : String := Id.run do
 /-- Cost of a memory operation over `n` bytes: Solana charges per 250 bytes, at least 10. -/
 def memCost (n : UInt64) : UInt64 := if n / 250 > 10 then n / 250 else 10
 
-/-- The `Rent` sysvar as programs see it in memory: lamports per byte-year,
-the exemption threshold (the double 2.0) and the burn percentage. -/
+/-- The `Rent` sysvar as programs see it in memory: lamports per byte, the
+exemption threshold (the double 1.0) and the burn percentage. These are the
+values Agave serves today; older descriptions give 3,480 lamports per
+byte-year and a threshold of 2.0, which is the same minimum balance. Programs
+can tell the difference (p-token takes a different path), so it matters for
+compute units. -/
 def rentBytes : ByteArray :=
-  zeros ((Wire.putU64 (Wire.putU64 (ByteArray.emptyWithCapacity 24) 3480) 0x4000000000000000).push 50) 7
+  zeros ((Wire.putU64 (Wire.putU64 (ByteArray.emptyWithCapacity 24) 6960) 0x3FF0000000000000).push 50) 7
 
 def clockBytes (c : Clock) : ByteArray :=
   Wire.putU64 (Wire.putU64 (Wire.putU64 (Wire.putU64 (Wire.putU64 (ByteArray.emptyWithCapacity 40) c.slot)
@@ -736,7 +815,8 @@ def clockBytes (c : Clock) : ByteArray :=
 
 mutual
 
-/-- One program calling another (`sol_invoke_signed_c`). `st` and `mem` are
+/-- One program calling another (`sol_invoke_signed_c`, or `sol_invoke_signed_rust`
+when `rust` is set: the same call with differently laid out arguments). `st` and `mem` are
 the caller's; the result is the state after the callee ran and the caller's
 memory with the callee's changes written back.
 
@@ -747,10 +827,10 @@ provides); copy the caller's pending changes into the account store; run the
 callee; copy what the callee changed back into the caller's memory. -/
 partial def invoke (m : Machine) (st0 : State) (callerId : ByteArray) (callerMetas : Array Meta)
     (entry : Array Account) (p : Program) (mem0 : ByteArray) (inputLen : Nat)
-    (callAddr infosAddr infosLen seedsAddr seedsLen : UInt64) (depth : Nat) : State × ByteArray := Id.run do
+    (callAddr infosAddr infosLen seedsAddr seedsLen : UInt64) (depth : Nat) (rust : Bool) : State × ByteArray := Id.run do
   let mut st := st0.charge 946
   let mut mem := mem0
-  match readCall p mem inputLen callAddr, readInfos p mem inputLen infosAddr infosLen with
+  match readCall p mem inputLen callAddr rust, readInfos p mem inputLen infosAddr infosLen rust with
   | some call, some infos =>
     st := st.charge (call.data.size.toUInt64 / 250 + call.keys.size.toUInt64 * 34 / 250 + infos.size.toUInt64 * 80 / 250)
     -- addresses the caller can sign for because it derived them from seeds
@@ -842,7 +922,7 @@ partial def invoke (m : Machine) (st0 : State) (callerId : ByteArray) (callerMet
           -- the account was resized: clear what it gave up, and update both places its length is kept
           for k in [account.data.size:info.dataLen.toNat] do
             mem := mem.set! (dataAt + k) 0
-          let lenInView := writable p inputLen (info.addr + 16) 8
+          let lenInView := writable p inputLen info.lenAddr 8
           let lenInInput := writable p inputLen (info.dataAddr - 8) 8
           if !(Wire.ok lenInView) || !(Wire.ok lenInInput) then
             return (st.stop accessViolation "an account view points outside the caller's memory", mem)
@@ -1097,6 +1177,20 @@ partial def execute (m : Machine) (st0 : State) (programId : ByteArray) (metas :
               result := payload.size.toUInt64
             else
               status := accessViolation
+        else if id == sysLogData then
+          -- binary data for whoever reads the logs (Anchor's events): a1 points at (address, length) pairs
+          units := units + 100 + 100 * a2
+          match readSlices p mem inputLen a1 a2 with
+          | none => status := accessViolation
+          | some fields =>
+            let mut line := "data:"
+            for field in fields do
+              units := units + field.size.toUInt64
+              line := line ++ " " ++ Base64.encode field
+            logs := logs.push line
+        else if id == sysRemaining then
+          units := units + 100
+          result := budget - units
         else if id == sysStackHeight then
           units := units + 100
           result := depth.toUInt64
@@ -1133,9 +1227,9 @@ partial def execute (m : Machine) (st0 : State) (programId : ByteArray) (metas :
               else
                 status := accessViolation
           | _, _ => status := accessViolation
-        else if id == sysInvoke then
+        else if id == sysInvoke || id == sysInvokeRust then
           let (after, memAfter) := invoke m ⟨accounts, units, logs, returnData, finished, 0, ""⟩ programId metas entry
-            p mem inputLen a1 a2 a3 regs[4]! regs[5]! depth
+            p mem inputLen a1 a2 a3 regs[4]! regs[5]! depth (id == sysInvokeRust)
           mem := memAfter
           let ⟨accounts1, units1, logs1, returnData1, status1, r01, detail1⟩ := after
           accounts := accounts1

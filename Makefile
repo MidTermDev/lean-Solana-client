@@ -84,6 +84,16 @@ programs:
 	done
 	cd tests/programs && sha256sum -c SHA256SUMS
 
+# tests/anchor.lean runs an Anchor program through five programs' worth of
+# cross-program calls. tests/oracle runs the same scenario on Agave's own
+# program runtime (through LiteSVM) and prints the same report. This builds
+# it and requires the two to agree exactly: results, compute units, logs,
+# addresses, balances. Needs a Rust toolchain; not part of `make test`.
+oracle:
+	cargo build --release --quiet --manifest-path tests/oracle/Cargo.toml --target-dir build/oracle
+	build/oracle/release/oracle tests/programs/anchor_vault.so | diff - tests/expected/anchor.txt
+	@echo "Agave's runtime and the Lean virtual machine agree on tests/anchor.lean"
+
 # Optional: have the official Lean toolchain type-check every Lean file here
 # and re-run the tests under it. Needs `lake` (https://lean-lang.org).
 lean-check: $(LEANC)
@@ -93,4 +103,4 @@ lean-check: $(LEANC)
 clean:
 	rm -rf build
 
-.PHONY: all run test from-c verify-seed update-seed programs lean-check clean
+.PHONY: all run test from-c verify-seed update-seed programs oracle lean-check clean
