@@ -62,6 +62,25 @@ build/leanc-debug: $(SRC)
 	$(CC) -std=gnu11 -g -O0 -Wall -Wextra -Wno-unused-parameter -DLEANC_HOSTED -fsanitize=address,undefined \
 		-fno-builtin -o $@ leanc/*.c
 
+# ---- optional: on-chain programs --------------------------------------------
+#
+# tests/programs/*.so are sBPF programs written in Lean and compiled by
+# toly's lean-svm (https://github.com/aeyakovenko/lean-svm, Apache-2.0).
+# This rebuilds them from that repository at a pinned commit and checks the
+# result against the checked-in files. Needs git and `lake`.
+LEAN_SVM := https://github.com/aeyakovenko/lean-svm
+LEAN_SVM_COMMIT := 81507bb6f8309b4f20be5dd4ee326ed030079c68
+
+programs:
+	@mkdir -p build/programs
+	@test -d build/lean-svm || git clone -q $(LEAN_SVM) build/lean-svm
+	cd build/lean-svm && git fetch -q && git checkout -q $(LEAN_SVM_COMMIT) && lake build LeanSVM Examples lean-svm
+	@for p in Noop Counter Vault HashCheck; do \
+		out=$$(echo $$p | tr A-Z a-z).so; \
+		(cd build/lean-svm && lake exe lean-svm build Examples.$$p Examples.$$p.entrypoint -o ../programs/$$out > /dev/null) && \
+		cmp build/programs/$$out tests/programs/$$out && echo "$$out: identical to tests/programs/$$out" || exit 1; \
+	done
+
 # Optional: have the official Lean toolchain type-check every Lean file here
 # and re-run the tests under it. Needs `lake` (https://lean-lang.org).
 lean-check: $(LEANC)
@@ -71,4 +90,4 @@ lean-check: $(LEANC)
 clean:
 	rm -rf build
 
-.PHONY: all run test from-c verify-seed update-seed lean-check clean
+.PHONY: all run test from-c verify-seed update-seed programs lean-check clean

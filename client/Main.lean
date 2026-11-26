@@ -4,6 +4,7 @@ import VerifyTile
 import GossipTile
 import Dashboard
 import HttpTile
+import RunProgram
 import Net.Dns
 
 /-!
@@ -32,7 +33,10 @@ def usage : String :=
   "  --json-file PATH    rewrite PATH with that JSON document every 5 seconds\n" ++
   "  --metrics [IP:]PORT serve Prometheus metrics at /metrics and the JSON at /nodes.json\n" ++
   "                      (binds 127.0.0.1 unless an IP is given; 0.0.0.0 for all interfaces)\n" ++
-  "  --help              this text\n"
+  "  --help              this text\n" ++
+  "\n" ++
+  "       leansol run PROGRAM.so [options]   execute an on-chain program locally\n" ++
+  "                                          (see `leansol run --help`)\n"
 
 def die (msg : String) : IO Unit := do
   IO.eprintln s!"leansol: {msg}"
@@ -114,6 +118,9 @@ def killAll (pids : Array UInt64) : IO Unit := do
 def main : IO Unit := do
   -- ------------------------------------------------------------ command line
   let argc ← Sys.argc
+  if argc >= 2 && (← Sys.arg 1) == "run" then
+    RunProgram.main
+    return
   let mut cluster := "mainnet"
   let mut hosts : Array String := #[]
   let mut port : UInt16 := 0

@@ -4,10 +4,21 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>leansol · a Solana client in Lean</title>
-<meta name="description" content="A Solana gossip client written in Lean 4, compiled by its own dependency-free compiler, with processes that talk over shared memory and a futex. Live from mainnet.">
+<meta name="description" content="A Solana client written in Lean 4 and compiled by its own dependency-free compiler: a gossip node live on mainnet, and a virtual machine that runs on-chain programs compiled by lean-svm.">
 <meta property="og:title" content="leansol · a Solana client in Lean">
-<meta property="og:description" content="Written in Lean 4, compiled by its own dependency-free compiler, running live on Solana mainnet.">
+<meta property="og:description" content="Written in Lean 4, compiled by its own dependency-free compiler, live on Solana mainnet. Runs on-chain programs compiled by lean-svm.">
 <meta property="og:type" content="website">
+<meta property="og:url" content="https://leansvm.com/">
+<meta property="og:site_name" content="leansol">
+<meta property="og:image" content="https://leansvm.com/og.png">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta property="og:image:alt" content="leansol: a Solana client written in Lean, compiled by its own compiler">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="leansol · a Solana client in Lean">
+<meta name="twitter:description" content="Written in Lean 4, compiled by its own dependency-free compiler, live on Solana mainnet. Runs on-chain programs compiled by lean-svm.">
+<meta name="twitter:image" content="https://leansvm.com/og.png">
+<link rel="canonical" href="https://leansvm.com/">
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' fill='%230f0e0c'/%3E%3Cpath d='M9 7v18h14' fill='none' stroke='%23ffb020' stroke-width='4'/%3E%3C/svg%3E">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -135,7 +146,7 @@
   th.r, td.r { text-align: right; padding-right: 0; }
 
   /* ---- how it works */
-  .parts { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 28px; }
+  .parts { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 36px 40px; }
   .part h3 { color: var(--ink); font: 600 17px var(--sans); letter-spacing: -0.01em; text-transform: none; }
   .part p { margin: 10px 0 14px; color: var(--ink-dim); font-size: 15px; }
   pre { margin: 0; padding: 14px 16px; background: var(--raised); border: 1px solid var(--line); font: 12.5px/1.65 var(--mono); color: var(--ink-dim); overflow-x: auto; }
@@ -204,7 +215,8 @@
         <h1>A Solana client written in Lean, compiled by <em>its own compiler</em>.</h1>
         <p class="lede"><b>leansol</b> joins Solana's gossip network and checks the signature on every record it hears.
           It is written in Lean&nbsp;4 and turned into machine code by <b>leanc</b>, a compiler in the same repository
-          that needs no libc, no LLVM and no linker. Its processes talk through shared memory and a single futex.</p>
+          that needs no libc, no LLVM and no linker. Its processes talk through shared memory and a single futex.
+          It also runs on-chain programs: its sBPF virtual machine executes what toly's lean-svm compiles.</p>
         <div class="cta">
           <a class="btn primary" href="https://github.com/MidTermDev/lean-Solana-client">Read the source</a>
           <a class="btn" href="https://github.com/MidTermDev/lean-Solana-client/releases/latest">Download the binary</a>
@@ -229,7 +241,7 @@
     </div>
 
     <div class="facts">
-      <div class="fact"><strong>188 KB</strong><span>the whole client, one static binary</span></div>
+      <div class="fact"><strong>234 KB</strong><span>the whole client, one static binary</span></div>
       <div class="fact"><strong>40 ms</strong><span>to build it from source</span></div>
       <div class="fact"><strong>0</strong><span>dependencies to build or run</span></div>
       <div class="fact"><strong id="f-uptime">—</strong><span>this node's uptime</span></div>
@@ -287,9 +299,9 @@
 
     <!-- ----------------------------------------------------- how it works -->
     <section class="block" id="built">
-      <div class="rail">How it works<small>three pieces, all in one repository</small></div>
+      <div class="rail">How it works<small>four pieces, all in one repository</small></div>
       <div>
-        <h2>A compiler, an IPC layer, and a client built on both</h2>
+        <h2>A compiler, an IPC layer, a node and a virtual machine</h2>
         <div class="stack">
           <div class="parts">
             <div class="part">
@@ -324,6 +336,17 @@ if empty:   <b>futex_wait</b></pre>
 socket ◀─ net-tx ◀─── gossip
 <i>every arrow between processes is a ring</i></pre>
             </div>
+            <div class="part">
+              <h3>sBPF virtual machine</h3>
+              <p>Loads an on-chain program and executes it: interpreter, memory map, system calls and compute-unit
+                meter. Programs written in Lean and compiled by lean-svm run here with the same compute-unit counts
+                Agave reports.</p>
+<pre>$ leansol run counter.so --data 01 \
+    --account counter:program:1000000:e703000000000000:w
+result    <b>success</b>
+units     <b>50</b> of 200,000
+account   counter   data e803000000000000   <i>(changed)</i></pre>
+            </div>
           </div>
         </div>
       </div>
@@ -340,6 +363,7 @@ socket ◀─ net-tx ◀─── gossip
             <div class="def"><h3>Verifies every signature</h3><p>Strict Ed25519, the rules validators apply, written in Lean. About 2,900 checks per second per core.</p></div>
             <div class="def"><h3>Reads every record type</h3><p>Knows the wire layout of all 14 gossip record types, so it can find where each record ends and who signed it.</p></div>
             <div class="def"><h3>Proves it owns its address</h3><p>Answers the ping challenges peers send with signed pongs, as the protocol requires before anyone replies.</p></div>
+            <div class="def"><h3>Runs on-chain programs</h3><p>An sBPF virtual machine executes programs compiled by toly's lean-svm, locally, and meters them exactly as Agave does.</p></div>
             <div class="def"><h3>Exports what it learns</h3><p>A JSON snapshot of every node, a JSON file that stays fresh, and Prometheus metrics over HTTP.</p></div>
             <div class="def"><h3>Keeps a stable identity</h3><p>An optional key file makes a long-running node the same node after a restart.</p></div>
             <div class="def"><h3>Compiles other programs</h3><p>leanc is a general compiler for its subset of Lean. Hello world is four system calls, start to finish.</p></div>
@@ -359,6 +383,8 @@ socket ◀─ net-tx ◀─── gossip
           <div class="defs">
             <div class="def"><h3>Not a validator</h3><p>It does not download blocks, replay transactions or vote. It observes and verifies the gossip plane.</p></div>
             <div class="def"><h3>Listen-only</h3><p>It answers pings but does not yet serve or push records to other nodes.</p></div>
+            <div class="def"><h3>Programs run alone</h3><p>The virtual machine does not yet let one program call another, so programs that use tokens or the system program cannot run in it.</p></div>
+            <div class="def"><h3>Nothing is sent on-chain</h3><p>Programs execute locally. The client does not build, sign or submit transactions.</p></div>
             <div class="def"><h3>x86-64 Linux</h3><p>The code generator and the system-call numbers are specific to it.</p></div>
             <div class="def"><h3>A subset of Lean</h3><p>No type classes, lambdas or polymorphism. The compiler does not check proofs; official Lean does that.</p></div>
           </div>
@@ -372,8 +398,8 @@ socket ◀─ net-tx ◀─── gossip
       <div>
         <h2>From observing the network to following the chain</h2>
         <p class="intro">Each step moves the client closer to checking the ledger itself instead of listening to what other nodes say about it.
-          For writing on-chain programs in Lean, see toly's <a href="https://github.com/aeyakovenko/lean-svm">lean-svm</a>, which compiles Lean 4 to sBPF.
-          This project is the other side: the node.</p>
+          On-chain programs are written in Lean with toly's <a href="https://github.com/aeyakovenko/lean-svm">lean-svm</a>, which compiles Lean 4 to sBPF.
+          This project is the other side: the node, and the machine that runs those programs.</p>
         <div class="stack">
           <div class="road">
             <div class="stage done">
@@ -384,11 +410,13 @@ socket ◀─ net-tx ◀─── gossip
                 <li><b>Gossip client</b>Full signature verification on mainnet.</li>
                 <li><b>JSON and Prometheus export</b>The cluster as data.</li>
                 <li><b>A public node</b>Running around the clock, feeding this page.</li>
+                <li><b>sBPF virtual machine</b>Runs lean-svm programs with Agave's compute-unit counts.</li>
               </ul>
             </div>
             <div class="stage next">
               <h3><i></i>Next</h3>
               <ul>
+                <li><b>Programs calling programs</b>Cross-program invocation in the virtual machine.</li>
                 <li><b>Full gossip participant</b>Serve pull requests and push records, not only listen.</li>
                 <li><b>Record ageing</b>Expire old records one by one instead of flushing the store.</li>
                 <li><b>Self-hosting</b>leanc rewritten in Lean, compiling itself.</li>
@@ -400,7 +428,7 @@ socket ◀─ net-tx ◀─── gossip
               <ul>
                 <li><b>Repair and Turbine</b>Receive shreds and rebuild blocks.</li>
                 <li><b>Ledger verification</b>Check proof of history and block signatures.</li>
-                <li><b>Run on-chain programs</b>An sBPF virtual machine in the client, to replay transactions.</li>
+                <li><b>Replay transactions</b>Run real blocks through the virtual machine.</li>
                 <li><b>Machine-checked proofs</b>Prove the wire parsers never read out of bounds.</li>
               </ul>
             </div>
@@ -434,7 +462,7 @@ cd lean-Solana-client
     </section>
 
     <footer>
-      <span>leansol · MIT licensed · inspired by toly</span>
+      <span>leansol · MIT licensed · inspired by toly · runs programs compiled by <a href="https://github.com/aeyakovenko/lean-svm">lean-svm</a></span>
       <span><a href="https://github.com/MidTermDev/lean-Solana-client">github.com/MidTermDev/lean-Solana-client</a></span>
     </footer>
   </div>
