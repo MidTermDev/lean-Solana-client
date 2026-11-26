@@ -433,7 +433,26 @@ impl Chain {
     }
 }
 
-fn builtins() {
+const LOADER: Address = address!("BPFLoaderUpgradeab1e11111111111111111111111");
+
+/// Uploads `code` into a new buffer account, 900 bytes per transaction.
+fn upload(chain: &mut Chain, name: &str, code: &[u8]) -> Address {
+    let buffer_keys = Keypair::new_from_array(hash(name));
+    let buffer = buffer_keys.pubkey();
+    let payer = chain.payer.pubkey();
+    let size = 37 + code.len();
+    let rent = (128 + size as u64) * 6960;
+    chain.signed(&format!("create {name}"), &[&buffer_keys], &[create_account(&payer, &buffer, rent, size as u64, &LOADER),
+        tagged(LOADER, 0, &[], vec![w(buffer), r(payer)])]);
+    for (i, chunk) in code.chunks(900).enumerate() {
+        chain.signed(&format!("write piece {i} into {name}"), &[], &[tagged(LOADER, 1,
+            &[&((i * 900) as u32).to_le_bytes(), &(chunk.len() as u64).to_le_bytes(), chunk], vec![w(buffer), rs(payer)])]);
+    }
+    chain.show(name, &buffer);
+    buffer
+}
+
+fn builtins(counter_so: &str, noop_so: &str) {
     let mut svm = LiteSVM::new();
     let wallet = |lamports| Account { lamports, owner: SYSTEM, ..Default::default() };
     let payer_keys = Keypair::new_from_array(hash("payer"));
@@ -552,13 +571,57 @@ fn builtins() {
     chain.show("stake", &stake);
     chain.signed("alice withdraws below the reserve", &[&alice_keys], &[tagged(STAKE, 4, &[&1_499_000_000u64.to_le_bytes()],
         vec![w(stake), w(alice), r(CLOCK), r(STAKE_HISTORY), rs(alice)])]);
+
+    // --- the loader: a program is uploaded into a buffer, deployed, called, upgraded, handed over, extended, closed
+    let counter_code = std::fs::read(counter_so).unwrap();
+    let buffer = upload(&mut chain, "a buffer", &counter_code);
+    chain.signed("someone else writes into the buffer", &[&alice_keys], &[tagged(LOADER, 1,
+        &[&0u32.to_le_bytes(), &4u64.to_le_bytes(), b"oops"], vec![w(buffer), rs(alice)])]);
+    let program_keys = Keypair::new_from_array(hash("deployed program"));
+    let program = program_keys.pubkey();
+    let (program_data, _) = Address::find_program_address(&[program.as_ref()], &LOADER);
+    let room = 2 * counter_code.len() as u64;
+    chain.signed("deploy the program", &[&program_keys], &[create_account(&payer, &program, 1_141_440, 36, &LOADER),
+        tagged(LOADER, 2, &[&room.to_le_bytes()], vec![ws(payer), w(program_data), w(program), w(buffer), r(RENT), r(CLOCK), r(SYSTEM), rs(payer)])]);
+    chain.show("program", &program);
+    chain.show("program data", &program_data);
+    chain.show("a buffer", &buffer);
+    chain.svm.warp_to_slot(2);
+    let tally_keys = Keypair::new_from_array(hash("tally"));
+    let tally = tally_keys.pubkey();
+    let call = |data: Vec<u8>| Instruction { program_id: program, accounts: vec![w(tally)], data };
+    chain.signed("call the deployed program", &[&tally_keys], &[create_account(&payer, &tally, 946_560, 8, &program),
+        call(vec![0]), call(vec![1]), call(vec![1]), call(vec![1])]);
+    chain.show("tally", &tally);
+    let noop_code = std::fs::read(noop_so).unwrap();
+    let second = upload(&mut chain, "a second buffer", &noop_code);
+    let upgrade = |authority: Address, buffer: Address| tagged(LOADER, 3, &[], vec![w(program_data), w(program), w(buffer), w(payer), r(RENT), r(CLOCK), rs(authority)]);
+    chain.signed("someone else upgrades the program", &[&alice_keys], &[upgrade(alice, second)]);
+    chain.signed("upgrade the program", &[], &[upgrade(payer, second)]);
+    chain.show("program data", &program_data);
+    chain.svm.warp_to_slot(3);
+    chain.signed("call the upgraded program", &[], &[transfer(&payer, &alice, 3), call(vec![1])]);
+    chain.show("tally", &tally);
+    chain.signed("hand the program to alice", &[], &[tagged(LOADER, 4, &[], vec![w(program_data), rs(payer), r(alice)])]);
+    chain.signed("the old authority extends it", &[], &[tagged(LOADER, 9, &[&1_000u32.to_le_bytes()],
+        vec![w(program_data), w(program), rs(payer), r(SYSTEM), ws(payer)])]);
+    chain.signed("alice extends it", &[&alice_keys], &[tagged(LOADER, 9, &[&1_000u32.to_le_bytes()],
+        vec![w(program_data), w(program), rs(alice), r(SYSTEM), ws(payer)])]);
+    chain.show("program data", &program_data);
+    chain.signed("close the second buffer", &[], &[tagged(LOADER, 5, &[], vec![w(second), w(alice), rs(payer)])]);
+    chain.show("a second buffer", &second);
+    chain.signed("alice makes the program immutable", &[&alice_keys], &[transfer(&payer, &alice, 4), tagged(LOADER, 4, &[], vec![w(program_data), rs(alice)])]);
+    chain.signed("alice extends the immutable program", &[&alice_keys], &[tagged(LOADER, 9, &[&8u32.to_le_bytes()],
+        vec![w(program_data), w(program), rs(alice), r(SYSTEM), ws(payer)])]);
+    chain.show("program data", &program_data);
+    chain.signed("an instruction for the old loader", &[], &[Instruction { program_id: address!("BPFLoader2111111111111111111111111111111111"), accounts: vec![], data: vec![0, 0, 0, 0] }]);
 }
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();
     match args.get(1).map(String::as_str) {
         Some("versions") if args.len() >= 3 => versions(&args[2..]),
-        Some("builtins") if args.len() == 2 => builtins(),
+        Some("builtins") if args.len() == 4 => builtins(&args[2], &args[3]),
         Some("anchor") if args.len() >= 3 => args[2..].iter().for_each(|file| anchor(file)),
         Some("transaction") if args.len() == 4 => transaction(&args[2], &args[3]),
         _ => {

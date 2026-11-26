@@ -48,6 +48,7 @@ def missingAccount : UInt64 := 14
 def invalidRealloc : UInt64 := 15
 def invalidSeeds : UInt64 := 16
 def meterExceeded : UInt64 := 17
+def runtimeError : UInt64 := 18
 
 def statusName (s : UInt64) : String :=
   if s == 0 then "finished"
@@ -67,6 +68,7 @@ def statusName (s : UInt64) : String :=
   else if s == 14 then "an account the call refers to was not passed in"
   else if s == 15 then "an account grew by more than 10240 bytes"
   else if s == 17 then "compute budget exceeded"
+  else if s == 18 then "refused by the runtime"
   else "the seeds do not derive a valid program address"
 
 -- System calls, numbered here; programs name them and the loader resolves the names.
@@ -167,10 +169,12 @@ structure Program where
   textAddr : UInt64
   /-- Which 4 GiB region of the address space the constants are in: 1, or 0 from sBPF v3. -/
   roRegion : UInt64
+  /-- The first slot in which the program can be called: the one after it was deployed or upgraded. -/
+  since : UInt64
   deriving Inhabited
 
 def Program.failed (elf : ByteArray) (why : String) : Program :=
-  ⟨elf, 0, 0, 0, 0, 0, Array.emptyWithCapacity 0, Array.emptyWithCapacity 0, why, 32768, 0, 0, 0, 1⟩
+  ⟨elf, 0, 0, 0, 0, 0, Array.emptyWithCapacity 0, Array.emptyWithCapacity 0, why, 32768, 0, 0, 0, 1, 0⟩
 
 /-- Where a section sits in the file, and the address it asks for. Size 0 means "absent". -/
 structure Section where
@@ -281,7 +285,7 @@ def loadStrict (elf : ByteArray) : Program := Id.run do
         return Program.failed elf "the program makes a system call this machine does not provide"
       syscalls := syscalls.set! pc id
   return ⟨elf, textOff, count, 0, roSize, ((entry - programStart) / 8).toNat, syscalls, Array.replicate count 0, "", 32768,
-    3, roOff, programStart, 0⟩
+    3, roOff, programStart, 0, 0⟩
 
 /-- Parses and relocates an sBPF ELF file as written by Solana toolchains. Versions 0 to 2 share
 this loader; version 3 has its own. -/
@@ -366,7 +370,7 @@ def load (image : ByteArray) : Program := Id.run do
         else if nameOff < names.size then
           syscalls := syscalls.set! pc (syscallId elf (names.off + nameOff))
   return ⟨elf, text.off, count, roLow, roHigh, ((entryAddr - text.addr) / 8).toNat, syscalls, calls, "", 32768,
-    version.toNat, roLow, programStart + text.off.toUInt64, 1⟩
+    version.toNat, roLow, programStart + text.off.toUInt64, 1, 0⟩
 
 -- ------------------------------------------------------------------- memory
 --
@@ -599,6 +603,8 @@ def zeros (b : ByteArray) (n : Nat) : ByteArray := Id.run do
 def systemProgram : ByteArray := zeros ByteArray.empty 32
 
 def loaderId : ByteArray := Base58.decode "BPFLoaderUpgradeab1e11111111111111111111111"
+def loaderV2 : ByteArray := Base58.decode "BPFLoader2111111111111111111111111111111111"
+def loaderV1 : ByteArray := Base58.decode "BPFLoader1111111111111111111111111111111111"
 def nativeLoader : ByteArray := Base58.decode "NativeLoader1111111111111111111111111111111"
 def computeBudgetProgram : ByteArray := Base58.decode "ComputeBudget111111111111111111111111111111"
 def sysvarOwner : ByteArray := Base58.decode "Sysvar1111111111111111111111111111111111111"

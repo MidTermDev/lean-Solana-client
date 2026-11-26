@@ -70,6 +70,23 @@ def showAccount (bank : Bank.Bank) (name : String) (k : ByteArray) : IO Unit := 
 def withdrawStake (stake dest : ByteArray) (amount : UInt64) (signer : ByteArray) : Tx.Instruction :=
   tagged stakeProgram 4 (u64le amount) #[w stake, w dest, r clock, r stakeHistory, rs signer]
 
+def loader : ByteArray := Sbpf.loaderId
+
+/-- Uploads `code` into a new buffer account, 900 bytes per transaction. -/
+def upload (bank0 : Bank.Bank) (name : String) (code : ByteArray) : IO Bank.Bank := do
+  let payer := Ed25519.publicKey (key "payer")
+  let buffer := Ed25519.publicKey (key name)
+  let size := 37 + code.size
+  let mut bank ← signed s!"create {name}" bank0 #[key name] #[createAccount payer buffer ((128 + size).toUInt64 * 6960) size.toUInt64 loader,
+    tagged loader 0 ByteArray.empty #[w buffer, r payer]]
+  let pieces := (code.size + 899) / 900
+  for i in [0:pieces] do
+    let chunk := code.extract (900 * i) (if 900 * i + 900 < code.size then 900 * i + 900 else code.size)
+    bank ← signed s!"write piece {i} into {name}" bank (Array.emptyWithCapacity 0) #[tagged loader 1
+      (u32le (900 * i).toUInt64 ++ u64le chunk.size.toUInt64 ++ chunk) #[w buffer, rs payer]]
+  showAccount bank name buffer
+  return bank
+
 def nobody : Array ByteArray := Array.emptyWithCapacity 0
 
 def main : IO Unit := do
@@ -179,3 +196,49 @@ def main : IO Unit := do
   bank ← signed "alice withdraws" bank #[key "alice"] #[withdrawStake stake alice 500000000 alice]
   showAccount bank "stake" stake
   bank ← signed "alice withdraws below the reserve" bank #[key "alice"] #[withdrawStake stake alice 1499000000 alice]
+
+  -- --- the loader: a program is uploaded into a buffer, deployed, called, upgraded, handed over, extended, closed
+  let counterCode ← IO.FS.readBinFile "tests/programs/counter.so"
+  let buffer := Ed25519.publicKey (key "a buffer")
+  bank ← upload bank "a buffer" counterCode
+  bank ← signed "someone else writes into the buffer" bank #[key "alice"] #[tagged loader 1
+    (u32le 0 ++ u64le 4 ++ "oops".toUTF8) #[w buffer, rs alice]]
+  let program := Ed25519.publicKey (key "deployed program")
+  let (programData, _) := Sbpf.findProgramAddress #[program] loader
+  bank ← signed "deploy the program" bank #[key "deployed program"] #[createAccount payer program 1141440 36 loader,
+    tagged loader 2 (u64le (2 * counterCode.size).toUInt64) #[ws payer, w programData, w program, w buffer, r rent, r clock, r system, rs payer]]
+  showAccount bank "program" program
+  showAccount bank "program data" programData
+  showAccount bank "a buffer" buffer
+  -- a program can be called from the slot after it was deployed
+  bank := bank.withClock ⟨2, 0, 0, 0, 0⟩
+  let tally := Ed25519.publicKey (key "tally")
+  let counting : Array Tx.Key := #[w tally]
+  bank ← signed "call the deployed program" bank #[key "tally"] #[createAccount payer tally 946560 8 program,
+    ⟨program, counting, ByteArray.empty.push 0⟩, ⟨program, counting, ByteArray.empty.push 1⟩,
+    ⟨program, counting, ByteArray.empty.push 1⟩, ⟨program, counting, ByteArray.empty.push 1⟩]
+  showAccount bank "tally" tally
+  let second := Ed25519.publicKey (key "a second buffer")
+  bank ← upload bank "a second buffer" (← IO.FS.readBinFile "tests/programs/noop.so")
+  bank ← signed "someone else upgrades the program" bank #[key "alice"] #[tagged loader 3 ByteArray.empty
+    #[w programData, w program, w second, w payer, r rent, r clock, rs alice]]
+  bank ← signed "upgrade the program" bank nobody #[tagged loader 3 ByteArray.empty
+    #[w programData, w program, w second, w payer, r rent, r clock, rs payer]]
+  showAccount bank "program data" programData
+  bank := bank.withClock ⟨3, 0, 0, 0, 0⟩
+  bank ← signed "call the upgraded program" bank nobody #[transfer payer alice 3, ⟨program, counting, ByteArray.empty.push 1⟩]
+  showAccount bank "tally" tally
+  bank ← signed "hand the program to alice" bank nobody #[tagged loader 4 ByteArray.empty #[w programData, rs payer, r alice]]
+  bank ← signed "the old authority extends it" bank nobody #[tagged loader 9 (u32le 1000)
+    #[w programData, w program, rs payer, r system, ws payer]]
+  bank ← signed "alice extends it" bank #[key "alice"] #[tagged loader 9 (u32le 1000)
+    #[w programData, w program, rs alice, r system, ws payer]]
+  showAccount bank "program data" programData
+  bank ← signed "close the second buffer" bank nobody #[tagged loader 5 ByteArray.empty #[w second, w alice, rs payer]]
+  showAccount bank "a second buffer" second
+  bank ← signed "alice makes the program immutable" bank #[key "alice"] #[transfer payer alice 4,
+    tagged loader 4 ByteArray.empty #[w programData, rs alice]]
+  bank ← signed "alice extends the immutable program" bank #[key "alice"] #[tagged loader 9 (u32le 8)
+    #[w programData, w program, rs alice, r system, ws payer]]
+  showAccount bank "program data" programData
+  bank ← signed "an instruction for the old loader" bank nobody #[⟨Sbpf.loaderV2, Array.emptyWithCapacity 0, u32le 0⟩]

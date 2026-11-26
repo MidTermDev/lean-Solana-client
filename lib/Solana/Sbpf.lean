@@ -214,9 +214,14 @@ partial def execute (m : Machine) (st0 : State) (programId : ByteArray) (metas :
   for i in [0:metas.size] do
     if !(isRepeat metas i) then
       entrySum := entrySum + entry[metas[i]!.index]!.lamports
-  if programId == systemProgram || programId == computeBudgetProgram then
-    -- built into the runtime; the compute budget program's work is done before the transaction runs
-    let after := if programId == systemProgram then systemInstruction m st0 metas data else st0.charge 150
+  if programId == systemProgram || programId == computeBudgetProgram || programId == loaderId || programId == loaderV1
+      || programId == loaderV2 then
+    -- built into the runtime. The compute budget program's work is done before the transaction runs, and the
+    -- two older loaders no longer accept instructions.
+    let after := if programId == systemProgram then systemInstruction m st0 metas data
+      else if programId == loaderId then loaderInstruction m st0 metas data
+      else if programId == computeBudgetProgram then st0.charge 150
+      else refused (st0.charge (if programId == loaderV2 then 570 else 1140)) "UnsupportedProgramId"
     if after.units > m.budget then
       return { after with units := m.budget, status := meterExceeded }
     return after
@@ -228,6 +233,8 @@ partial def execute (m : Machine) (st0 : State) (programId : ByteArray) (metas :
     return st0.stop unknownProgram (Base58.encode programId)
   if m.programs[which]!.error != "" then
     return st0.stop unsupportedInstruction m.programs[which]!.error
+  if m.clock.slot < m.programs[which]!.since then
+    return refused st0 "UnsupportedProgramId"
   let loaded : Program := m.programs[which]!
   let p : Program := { loaded with heap := m.heap }
   let ⟨accounts0, units0, logs0, returnData0, _, _, _, trace0⟩ := st0

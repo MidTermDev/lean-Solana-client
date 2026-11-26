@@ -11,6 +11,9 @@ exactly like a bytecode program run by the interpreter.
 
 * **System**: creates accounts, moves lamports, assigns ownership, and keeps
   nonce accounts, which let a transaction be signed now and sent much later.
+* **The loader**: puts programs on chain. A program's code is uploaded into
+  a buffer account in pieces, then deployed, and can later be upgraded,
+  given more room, handed to another authority, made immutable, or closed.
 -/
 
 namespace Sbpf
@@ -285,6 +288,322 @@ def systemInstruction (m : Machine) (st : State) (metas : Array Meta) (data : By
     if account.owner != systemProgram then
       return st.stop accountRule ruleData
     return { st with accounts := st.accounts.set! target.index { account with data := after } }
+  return programError st 3
+
+-- ---------------------------------------------------------------- the loader
+--
+-- The upgradeable loader owns three kinds of account, told apart by the first
+-- four bytes of their data:
+--   1  a buffer:        an authority (optional), then the code being uploaded          (37-byte header)
+--   2  a program:       the address of its program data account                        (36 bytes)
+--   3  program data:    the slot it was deployed in, an authority (optional), the code (45-byte header)
+-- The program account is the address people call. The code lives in the
+-- program data account so that it can be replaced without the address changing.
+
+/-- Fails with an error of the runtime that programs themselves cannot return, by Agave's name for it. -/
+def refused (st : State) (name : String) : State := st.stop runtimeError name
+
+def loaderKind (a : Account) : UInt64 := if a.data.size < 4 then 99 else Wire.u32 a.data 0
+
+/-- The optional address at `o`: a presence byte, then 32 bytes. Empty if absent. -/
+def optionalKey (data : ByteArray) (o : Nat) : ByteArray :=
+  if Wire.u8 data o == 1 then data.extract (o + 1) (o + 33) else ByteArray.empty
+
+def putOptionalKey (b key : ByteArray) : ByteArray :=
+  if key.size == 32 then b.push 1 ++ key else b.push 0
+
+/-- Overwrites the start of an account's data, as storing a new state does. -/
+def withHeader (a : Account) (header : ByteArray) : Account :=
+  { a with data := header.copySlice 0 a.data 0 header.size }
+
+def bufferHeader (authority : ByteArray) : ByteArray := putOptionalKey (Wire.putU32 (ByteArray.emptyWithCapacity 37) 1) authority
+
+def programDataHeader (slot : UInt64) (authority : ByteArray) : ByteArray :=
+  putOptionalKey (Wire.putU64 (Wire.putU32 (ByteArray.emptyWithCapacity 45) 3) slot) authority
+
+/-- Why the loader may not modify account `mt`, or `""`. -/
+def loaderMay (st : State) (mt : Meta) : String :=
+  if !mt.writable then ruleReadOnly
+  else if st.accounts[mt.index]!.owner != loaderId then ruleData
+  else ""
+
+def setAccount (st : State) (mt : Meta) (a : Account) : State :=
+  { st with accounts := st.accounts.set! mt.index a }
+
+/-- Moves `amount` lamports between two accounts of the instruction, the way a program that owns the source may. -/
+def moveLamports (st : State) (source dest : Meta) (amount : UInt64) : State :=
+  if amount == 0 then st
+  else if !source.writable || !dest.writable then st.stop accountRule ruleReadOnlyBalance
+  else
+    let from_ := st.accounts[source.index]!
+    let accounts := st.accounts.set! source.index { from_ with lamports := from_.lamports - amount }
+    let to := accounts[dest.index]!
+    { st with accounts := accounts.set! dest.index { to with lamports := to.lamports + amount } }
+
+/-- The checks shared by everything an authority may do: there is one, it is account `who`, and it signed. -/
+def authorityError (st : State) (metas : Array Meta) (authority : ByteArray) (who : Nat) : UInt64 :=
+  if authority.size != 32 then 25
+  else if who >= metas.size || keyOf st metas[who]! != authority then 26
+  else if !metas[who]!.signer then 8
+  else 0
+
+def loaderInstruction (m : Machine) (st0 : State) (metas : Array Meta) (data : ByteArray) : State := Id.run do
+  let st := st0.charge 2370
+  if data.size < 4 then
+    return programError st 3
+  let tag := Wire.u32 data 0
+  let slot := m.clock.slot
+  if tag == 0 then
+    -- InitializeBuffer: account 0 becomes a buffer that account 1 may write to
+    if metas.size < 2 then
+      return programError st 11
+    let buffer := st.accounts[metas[0]!.index]!
+    if loaderKind buffer == 99 then
+      return programError st 4
+    if loaderKind buffer != 0 then
+      return programError st 9
+    if buffer.data.size < 37 then
+      return programError st 5
+    if loaderMay st metas[0]! != "" then
+      return st.stop accountRule (loaderMay st metas[0]!)
+    return setAccount st metas[0]! (withHeader buffer (bufferHeader (keyOf st metas[1]!)))
+  if tag == 1 then
+    -- Write { offset, bytes }: a piece of the code, into the buffer after its header
+    if data.size < 16 || Wire.u64 data 8 > data.size.toUInt64 || data.size < 16 + (Wire.u64 data 8).toNat then
+      return programError st 3
+    if metas.size < 2 then
+      return programError st 11
+    let buffer := st.accounts[metas[0]!.index]!
+    if loaderKind buffer != 1 then
+      return programError st 4
+    let bad := authorityError st metas (optionalKey buffer.data 4) 1
+    if bad != 0 then
+      return programError st bad
+    let at_ := 37 + (Wire.u32 data 4).toNat
+    let bytes := data.extract 16 (16 + (Wire.u64 data 8).toNat)
+    if buffer.data.size < at_ + bytes.size then
+      return programError st 5
+    if loaderMay st metas[0]! != "" then
+      return st.stop accountRule (loaderMay st metas[0]!)
+    return setAccount st metas[0]! { buffer with data := bytes.copySlice 0 buffer.data at_ bytes.size }
+  if tag == 2 then
+    -- DeployWithMaxDataLen: accounts are payer, program data, program, buffer, rent, clock, system program, authority.
+    -- The buffer's code is checked, moved into a new program data account at an address derived from the
+    -- program's, and the program account is marked executable.
+    if metas.size < 4 then
+      return programError st 11
+    let need := sysvarArgument st metas 4 rentSysvar
+    if need != 0 then
+      return programError st need
+    let needClock := sysvarArgument st metas 5 clockSysvar
+    if needClock != 0 then
+      return programError st needClock
+    if metas.size < 8 || data.size < 12 then
+      return programError st (if metas.size < 8 then 11 else 3)
+    let program := st.accounts[metas[2]!.index]!
+    if loaderKind program == 99 then
+      return programError st 4
+    if loaderKind program != 0 then
+      return programError st 9
+    if program.data.size < 36 then
+      return programError st 5
+    if program.lamports < m.rentMinimum program.data.size then
+      return refused st "ExecutableAccountNotRentExempt"
+    let buffer := st.accounts[metas[3]!.index]!
+    if loaderKind buffer != 1 then
+      return programError st 2
+    let authority := keyOf st metas[7]!
+    if optionalKey buffer.data 4 != authority then
+      return programError st 26
+    if !metas[7]!.signer then
+      return programError st 8
+    if buffer.data.size <= 37 then
+      return programError st 4
+    let code := buffer.data.extract 37 buffer.data.size
+    let room := Wire.u64 data 4
+    if room < code.size.toUInt64 then
+      return programError st 5
+    if room > 10485760 - 45 then
+      return programError st 2
+    let (derived, _) := findProgramAddress #[program.key] loaderId
+    if derived != keyOf st metas[1]! then
+      return programError st 2
+    -- the buffer's lamports go back to the payer, who then pays for the program data account
+    let refunded := moveLamports st metas[3]! metas[0]! buffer.lamports
+    if refunded.status != finished then
+      return refunded
+    let size := 45 + room.toNat
+    let created := systemInstruction m refunded #[metas[0]!, { metas[1]! with signer := true }]
+      (Wire.putU64 (Wire.putU64 (Wire.putU32 ByteArray.empty 0) (m.rentMinimum size)) size.toUInt64 ++ loaderId)
+    if created.status != finished then
+      return created
+    if (load code).error != "" then
+      return programError created 4
+    let programData := created.accounts[metas[1]!.index]!
+    let filled := code.copySlice 0 (withHeader programData (programDataHeader slot authority)).data 45 code.size
+    let st1 := setAccount created metas[1]! { programData with data := filled }
+    let st2 := setAccount st1 metas[3]! { st1.accounts[metas[3]!.index]! with data := buffer.data.extract 0 37 }
+    if loaderMay st2 metas[2]! != "" then
+      return st2.stop accountRule (loaderMay st2 metas[2]!)
+    let header := Wire.putU32 (ByteArray.emptyWithCapacity 36) 2 ++ derived
+    return setAccount st2 metas[2]! { withHeader program header with executable := true }
+  if tag == 3 then
+    -- Upgrade: accounts are program data, program, buffer, spill, rent, clock, authority.
+    -- The buffer's code replaces the program's; lamports no longer needed go to the spill account.
+    if metas.size < 3 then
+      return programError st 11
+    let need := sysvarArgument st metas 4 rentSysvar
+    if need != 0 then
+      return programError st need
+    let needClock := sysvarArgument st metas 5 clockSysvar
+    if needClock != 0 then
+      return programError st needClock
+    if metas.size < 7 then
+      return programError st 11
+    let program := st.accounts[metas[1]!.index]!
+    if !metas[1]!.writable then
+      return programError st 2
+    if program.owner != loaderId then
+      return programError st 7
+    if loaderKind program != 2 then
+      return programError st 4
+    if program.data.extract 4 36 != keyOf st metas[0]! then
+      return programError st 2
+    let buffer := st.accounts[metas[2]!.index]!
+    if loaderKind buffer != 1 then
+      return programError st 2
+    let authority := keyOf st metas[6]!
+    if optionalKey buffer.data 4 != authority then
+      return programError st 26
+    if !metas[6]!.signer then
+      return programError st 8
+    if buffer.data.size <= 37 then
+      return programError st 4
+    let code := buffer.data.extract 37 buffer.data.size
+    let programData := st.accounts[metas[0]!.index]!
+    let required := if m.rentMinimum programData.data.size == 0 then 1 else m.rentMinimum programData.data.size
+    if programData.data.size < 45 + code.size then
+      return programError st 5
+    if programData.lamports + buffer.lamports < required then
+      return programError st 6
+    if loaderKind programData != 3 then
+      return programError st 4
+    if Wire.u64 programData.data 4 == slot then
+      return programError st 2
+    let bad := authorityError st metas (optionalKey programData.data 12) 6
+    if bad != 0 then
+      return programError st bad
+    if (load code).error != "" then
+      return programError st 4
+    if loaderMay st metas[0]! != "" || loaderMay st metas[2]! != "" then
+      return st.stop accountRule ruleReadOnly
+    if !metas[3]!.writable then
+      return st.stop accountRule ruleReadOnlyBalance
+    let fresh := zeros (programDataHeader slot authority) (programData.data.size - 45)
+    let st1 := setAccount st metas[0]! { programData with data := code.copySlice 0 fresh 45 code.size, lamports := required }
+    let st2 := setAccount st1 metas[2]! { st1.accounts[metas[2]!.index]! with data := buffer.data.extract 0 37, lamports := 0 }
+    let spill := st2.accounts[metas[3]!.index]!
+    return setAccount st2 metas[3]! { spill with lamports := spill.lamports + programData.lamports + buffer.lamports - required }
+  if tag == 4 || tag == 7 then
+    -- SetAuthority: account 1, the present authority, hands a buffer or a program to account 2.
+    -- With no account 2 a program becomes immutable. The checked form requires the new authority to sign too.
+    if metas.size < (if tag == 7 then 3 else 2) then
+      return programError st 11
+    let account := st.accounts[metas[0]!.index]!
+    let kind := loaderKind account
+    let next := if metas.size > 2 then keyOf st metas[2]! else ByteArray.empty
+    if kind == 99 then
+      return programError st 4
+    if kind != 1 && kind != 3 then
+      return programError st 2
+    if kind == 1 && next.size != 32 then
+      return programError st 26
+    let bad := authorityError st metas (optionalKey account.data (if kind == 1 then 4 else 12)) 1
+    if bad != 0 then
+      return programError st bad
+    if tag == 7 && !metas[2]!.signer then
+      return programError st 8
+    if loaderMay st metas[0]! != "" then
+      return st.stop accountRule (loaderMay st metas[0]!)
+    let header := if kind == 1 then bufferHeader next else programDataHeader (Wire.u64 account.data 4) next
+    return setAccount st metas[0]! (withHeader account header)
+  if tag == 5 then
+    -- Close: account 0's lamports go to account 1 and it is emptied. A buffer or a program needs its
+    -- authority (account 2); closing a program also needs the program account (account 3).
+    if metas.size < 2 then
+      return programError st 11
+    if metas[0]!.index == metas[1]!.index then
+      return programError st 2
+    let account := st.accounts[metas[0]!.index]!
+    let kind := loaderKind account
+    if kind == 99 then
+      return programError st 4
+    if kind == 2 || kind > 3 then
+      return programError st 2
+    if kind != 0 then
+      if metas.size < (if kind == 1 then 3 else 4) then
+        return programError st 11
+      if kind == 3 then
+        let program := st.accounts[metas[3]!.index]!
+        if !metas[3]!.writable then
+          return programError st 2
+        if program.owner != loaderId then
+          return programError st 7
+        if Wire.u64 account.data 4 == slot then
+          return programError st 2
+        if loaderKind program != 2 || program.data.extract 4 36 != account.key then
+          return programError st 2
+      let bad := authorityError st metas (optionalKey account.data (if kind == 1 then 4 else 12)) 2
+      if bad != 0 then
+        return programError st bad
+    if loaderMay st metas[0]! != "" then
+      return st.stop accountRule (loaderMay st metas[0]!)
+    let emptied := setAccount st metas[0]! { account with data := zeros ByteArray.empty 4 }
+    return moveLamports emptied metas[0]! metas[1]! account.lamports
+  if tag == 9 then
+    -- ExtendProgramChecked { bytes }: more room for the code, paid for by account 4 if rent requires it.
+    -- Accounts: program data, program, authority, system program, payer.
+    if data.size < 8 || Wire.u32 data 4 == 0 then
+      return programError st 3
+    if metas.size < 3 then
+      return programError st 11
+    let programData := st.accounts[metas[0]!.index]!
+    let program := st.accounts[metas[1]!.index]!
+    if programData.owner != loaderId then
+      return programError st 23
+    if !metas[0]!.writable || !metas[1]!.writable then
+      return programError st 2
+    if program.owner != loaderId then
+      return programError st 23
+    if loaderKind program != 2 then
+      return programError st 4
+    if program.data.extract 4 36 != programData.key then
+      return programError st 2
+    let size := programData.data.size + (Wire.u32 data 4).toNat
+    if size > 10485760 then
+      return programError st 20
+    if loaderKind programData != 3 then
+      return programError st 4
+    if Wire.u64 programData.data 4 == slot then
+      return programError st 2
+    let authority := optionalKey programData.data 12
+    let bad := authorityError st metas authority 2
+    if bad != 0 then
+      return programError st bad
+    let required := if m.rentMinimum size == 0 then 1 else m.rentMinimum size
+    let mut paid := st
+    if required > programData.lamports then
+      if metas.size < 5 then
+        return programError st 11
+      paid := systemInstruction m st #[metas[4]!, metas[0]!] (Wire.putU64 (Wire.putU32 ByteArray.empty 2) (required - programData.lamports))
+      if paid.status != finished then
+        return paid
+    let grown := paid.accounts[metas[0]!.index]!
+    let bigger := zeros grown.data (size - grown.data.size)
+    if (load (bigger.extract 45 size)).error != "" then
+      return programError paid 4
+    return setAccount paid metas[0]! { grown with data := (programDataHeader slot authority).copySlice 0 bigger 0 45 }
+  -- ExtendProgram (replaced by the checked form), Migrate (to a loader that is not enabled), or unknown
   return programError st 3
 
 end Sbpf

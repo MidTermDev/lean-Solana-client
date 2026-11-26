@@ -38,8 +38,8 @@ def lookupTableProgram : ByteArray := Base58.decode "AddressLookupTab1e111111111
 def voteProgram : ByteArray := Base58.decode "Vote111111111111111111111111111111111111111"
 def stakeProgram : ByteArray := Base58.decode "Stake11111111111111111111111111111111111111"
 def configProgram : ByteArray := Base58.decode "Config1111111111111111111111111111111111111"
-def loaderV2 : ByteArray := Base58.decode "BPFLoader2111111111111111111111111111111111"
-def loaderV1 : ByteArray := Base58.decode "BPFLoader1111111111111111111111111111111111"
+def loaderV2 : ByteArray := Sbpf.loaderV2
+def loaderV1 : ByteArray := Sbpf.loaderV1
 def loaderV4 : ByteArray := Base58.decode "LoaderV411111111111111111111111111111111111"
 
 /-- Accounts, programs, and the state of the chain around them. -/
@@ -111,6 +111,29 @@ def hasProgram (bank : Bank) (id : ByteArray) : Bool := Id.run do
       return true
   return false
 
+/-- Programs live in accounts. For each of `keys` that is a program account
+of the loader, the code in its program data account is loaded and registered,
+callable from the slot after it was deployed. A program whose data account
+was closed stops being callable. With `all` unset, programs that are already
+registered are left alone. -/
+def Bank.withPrograms (bank : Bank) (keys : Array ByteArray) (all : Bool) : Bank := Id.run do
+  let mut out := bank
+  for key in keys do
+    let at_ := find out.accounts key
+    if at_ != Sbpf.notFound then
+      let account := out.accounts[at_]!
+      if account.owner == Sbpf.loaderId && Sbpf.loaderKind account == 2 && (all || !(hasProgram out key)) then
+        let holder := find out.accounts (account.data.extract 4 36)
+        let code := if holder == Sbpf.notFound then ByteArray.empty else out.accounts[holder]!.data
+        let program := if code.size > 45 && Wire.u32 code 0 == 3 then Sbpf.load (code.extract 45 code.size)
+          else Sbpf.Program.failed ByteArray.empty "the program was closed"
+        if program.error != "" then
+          -- cannot run: every call to it is refused
+          out := { out with machine := out.machine.add key { program with since := 0xFFFFFFFFFFFFFFFF } }
+        else
+          out := { out with machine := out.machine.add key { program with since := Wire.u64 code 4 + 1 } }
+  return out
+
 -- ------------------------------------------------------------------- sysvars
 
 /-- A sysvar account: one lamport, owned by the sysvar address, holding the
@@ -147,6 +170,9 @@ def Bank.get (bank : Bank) (key : ByteArray) : Sbpf.Account :=
   if at_ != Sbpf.notFound then bank.accounts[at_]!
   else if key == Sbpf.systemProgram then builtin "system_program" key
   else if key == Sbpf.computeBudgetProgram then builtin "compute_budget_program" key
+  else if key == Sbpf.loaderId then builtin "solana_bpf_loader_upgradeable_program" key
+  else if key == loaderV2 then builtin "solana_bpf_loader_program" key
+  else if key == loaderV1 then builtin "solana_bpf_loader_deprecated_program" key
   else if key == ed25519Program then builtin "ed25519_program" key
   else
     let s := sysvar bank key
@@ -220,6 +246,7 @@ def instructionError (st : Sbpf.State) : String :=
   let s := st.status
   if s == Sbpf.programFailed then programError st.r0
   else if s == Sbpf.meterExceeded then "ComputationalBudgetExceeded"
+  else if s == Sbpf.runtimeError then st.detail
   else if s == Sbpf.privilegeEscalation then "PrivilegeEscalation"
   else if s == Sbpf.missingAccount || s == Sbpf.unknownProgram then "MissingAccount"
   else if s == Sbpf.unbalanced then "UnbalancedInstruction"
@@ -427,6 +454,8 @@ def Bank.process (bank : Bank) (tx : Tx.Transaction) (verify : Bool) : Receipt :
   let priority := if price > 0xFFFFFFFFFFFFFFFF / 1400000 then 0xFFFFFFFFFFFFFFFF else (price * limit + 999999) / 1000000
   let fee := if priority > 0xFFFFFFFFFFFFFFFF - bank.lamportsPerSignature * signatures then 0xFFFFFFFFFFFFFFFF
     else bank.lamportsPerSignature * signatures + priority
+  -- programs deployed through the loader are run from their accounts
+  let bank := bank.withPrograms keys false
   let payer := bank.get keys[0]!
   if payer.lamports == 0 then
     return ⟨"AccountNotFound", false, fee, 0, limit, Array.emptyWithCapacity 0, ByteArray.empty, bank⟩
@@ -442,7 +471,7 @@ def Bank.process (bank : Bank) (tx : Tx.Transaction) (verify : Bool) : Receipt :
   for ix in msg.instructions do
     let program := keys[ix.program]!
     if !(program == Sbpf.systemProgram || program == Sbpf.computeBudgetProgram || program == ed25519Program
-        || hasProgram bank program) then
+        || program == Sbpf.loaderId || program == loaderV1 || program == loaderV2 || hasProgram bank program) then
       let why := if (bank.get program).lamports == 0 then "ProgramAccountNotFound" else "InvalidProgramForExecution"
       return ⟨why, false, fee, 0, limit, Array.emptyWithCapacity 0, ByteArray.empty, bank⟩
   -- from here on the fee is paid, whatever happens
@@ -506,6 +535,9 @@ def Bank.process (bank : Bank) (tx : Tx.Transaction) (verify : Bool) : Receipt :
       if writable[i]! && (st.accounts[i]!.lamports != before[i]!.lamports || st.accounts[i]!.data != before[i]!.data
           || st.accounts[i]!.owner != before[i]!.owner) then
         after := after.set st.accounts[i]!
+  if error == "" then
+    -- programs this transaction deployed, upgraded or closed
+    after := after.withPrograms keys true
   return ⟨error, true, fee, st.units, limit, st.logs, st.returnData, after⟩
 
 end Bank

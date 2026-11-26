@@ -129,3 +129,68 @@ alice withdraws below the reserve: InstructionError(0, InsufficientFunds), fee 1
   log: Instruction: Withdraw
   log: ERROR: An account's balance was too small to complete the instruction
   payer 4990652959, alice 2750100000
+create a buffer: success, fee 10000, 2520 units
+  signature 5uPHFUvMv1rKDxcN7cbzWy6DWNES3BsHNxp3mLGHTVXLvZ8EGJS1HNh7K45scnLnoTeRzbwvFx99f7QX3zViWtcW
+  payer 4980752799, alice 2750100000
+write piece 0 into a buffer: success, fee 5000, 2370 units
+  signature 3sijJgBp6UxtKdpkMAq2LsGgCJEfRFHTV2NqUV5JwLgG9BirKMUg7KgFYNvjsrksjMPNDTmQDLazXGGPcDjyppNF
+  payer 4980747799, alice 2750100000
+write piece 1 into a buffer: success, fee 5000, 2370 units
+  signature 4DhPdJ3RF5516xLETq9uBTzB94fggxqGmXav2xtYzBMjHRLnv6Y1WQn4UGXng5aCQThV2s44UAmhsJuARihXYiwA
+  payer 4980742799, alice 2750100000
+  a buffer: 9890160 lamports, 1293 bytes, owner BPFLoaderUpgradeab1e11111111111111111111111, data DJgEAedgiTeV4EGyvfPFjNpuc9tfuBsaXcxcj6eLgj4y
+someone else writes into the buffer: InstructionError(0, IncorrectAuthority), fee 10000, 2370 units
+  signature 45QAZSqN4uDYBCjyNLQyt7nhzcNPvoKpWetSdY2iMHUotatomiFT6eKuuHDstkW77pm7rjazQZ14jRVtLcm4zgMf
+  payer 4980732799, alice 2750100000
+deploy the program: success, fee 10000, 2670 units
+  signature 33MzUU4dRkyQ1EyJwA6WifFMz8szoSCUjUPCdv2wLbvhssGWvtzEMuGDnBodtJV3sLQa33mo4RfYdbYPg9gMP8Vh
+  payer 4970783919, alice 2750100000
+  program: 1141440 lamports, 36 bytes, owner BPFLoaderUpgradeab1e11111111111111111111111, data 9YygFH6tPsvPoycDiYUUgbvqAEqhoWKeWa9iXzYcQtX7
+  program data: 18687600 lamports, 2557 bytes, owner BPFLoaderUpgradeab1e11111111111111111111111, data 9v7Zm13WWPz1krhGittaRM3JLd1QM5tZYPmV95fr9GPC
+  a buffer: no such account
+call the deployed program: success, fee 10000, 345 units
+  signature 2s9kVqEmLGCgbfP44WsjKrRZKmR1Zn3zzSZU6dseA6umYDFhznuLQciTGa6VYjYceruCwTYxfa7qESpQDUTjifav
+  payer 4969827359, alice 2750100000
+  tally: 946560 lamports, 8 bytes, owner 99dYJS2xWZoi4MVXHn5DbGAFdhF61Ls8Dx9LPNyySGHw, data 4cnpTijzsPmWH6rXccpLfwW9Fc13cMnQAd7DL5XpQ5Px
+create a second buffer: success, fee 10000, 2520 units
+  signature 5fdWXqr6mCt2oDPV2HMnKPeLEuQNRtFxumcEXjUJ5tU6bJXnHnXPHksgxP8yEGwuMxVTBoAXEAVNm2YAdBoKA7La
+  payer 4966219039, alice 2750100000
+write piece 0 into a second buffer: success, fee 5000, 2370 units
+  signature 5uGihzVGaDjLMSttXLbW8i28kq4jrkp5hihqFS83WrbhX99U1QtpPrpEkzKYFSdHvA7sRDmLxesnh3c2nACMaG51
+  payer 4966214039, alice 2750100000
+  a second buffer: 3598320 lamports, 389 bytes, owner BPFLoaderUpgradeab1e11111111111111111111111, data BDwtpMH6P5NiM6J24mNw75dDpwYGdK9FULxRraonXb57
+someone else upgrades the program: InstructionError(0, IncorrectAuthority), fee 10000, 2370 units
+  signature 3BHVrNnEdjMtbQEoGQejCUEgpKB3zAum2SWkqQ27Gm1ewh4yY6Ek9a6c7mktoNwGtygEc1sG8wktUbZa7Z8o5mun
+  payer 4966204039, alice 2750100000
+upgrade the program: success, fee 5000, 2370 units
+  signature 3DukUg5gYxQQkKdNzG2okL2KJVWtM4myajBgSpW3FUYjwTViiB2uRViaY4gam4eSRyZGNBKRwVfSzDQtLRVN3bjN
+  payer 4969797359, alice 2750100000
+  program data: 18687600 lamports, 2557 bytes, owner BPFLoaderUpgradeab1e11111111111111111111111, data GG1YiacHRx2Gog4uUvGY48AwpjNbZQ47abMZVxqgPNbx
+call the upgraded program: success, fee 5000, 152 units
+  signature 5Cg8a686g9pvnVBizZXomXjqgBuGt5rEXjMYDQJmZg1jrNuu8XcHTmv2MaZLA2p3X79biqXrj6FYm6GXih8pdWGU
+  payer 4969792356, alice 2750100003
+  tally: 946560 lamports, 8 bytes, owner 99dYJS2xWZoi4MVXHn5DbGAFdhF61Ls8Dx9LPNyySGHw, data 4cnpTijzsPmWH6rXccpLfwW9Fc13cMnQAd7DL5XpQ5Px
+hand the program to alice: success, fee 5000, 2370 units
+  signature 2js4ig7Csz881TFmJi4p4U2R3W5sJzaUV7yikWzRXV2Ha1sbk9SVrNLptAJAUy7tcbijAh5qrXrEF13tHATzeRu6
+  payer 4969787356, alice 2750100003
+the old authority extends it: InstructionError(0, IncorrectAuthority), fee 5000, 2370 units
+  signature 4k8ZMBDx4AE5TR9BpQRukpGNspnehxdn5SxAdsYYCZhGCQ6vTcYU8wgTJpBw5AzcoiMJrddKdRjkoxp7B1DEVSuF
+  payer 4969782356, alice 2750100003
+alice extends it: success, fee 10000, 2520 units
+  signature 5fpYWRBEdLAKp7QhWj3fbqDN5Mh9b123wzBv5mfG4hcbMetGkdh6K8GdP6ogSCKTRaes79ftWwX43jTq89vGgSSj
+  payer 4962812356, alice 2750100003
+  program data: 25647600 lamports, 3557 bytes, owner BPFLoaderUpgradeab1e11111111111111111111111, data Ayi5YeSim1NwJ4wcZ6ckxVJU8WG8FjqmzY1tTmweZywf
+close the second buffer: InstructionError(0, InvalidAccountData), fee 5000, 2370 units
+  signature 3tEwaKR2He9sEMXrzVVyAcPZHVwDWGfvhwY9UkfnsA5mA7yskB31sSjDjCtA8vp9C4SGEtq6LdGEjwyooG7SvdWL
+  payer 4962807356, alice 2750100003
+  a second buffer: no such account
+alice makes the program immutable: success, fee 10000, 2520 units
+  signature 4PtZwFwGUVxceLBm59KxrhJHL3KE1PKyzBY27JLpAJq6qXZvFsh5JGaVaqaCFYcXTtru7BVsKSHgD8DwiQKVq3v2
+  payer 4962797352, alice 2750100007
+alice extends the immutable program: InstructionError(0, InvalidArgument), fee 10000, 2370 units
+  signature 4vBcGYe6TdvVGyJmv65JGaQeACpMMk5oSgqj348GTP5eJoBLyeDLMvZpXHPtHdqi1zWSGJA1PJWjqJJcvXWKHWYo
+  payer 4962787352, alice 2750100007
+  program data: 25647600 lamports, 3557 bytes, owner BPFLoaderUpgradeab1e11111111111111111111111, data 9wHLB8b1KWWnTA8tkLFMzwsomtHTw2veA8kGERX6FYYM
+an instruction for the old loader: InstructionError(0, UnsupportedProgramId), fee 5000, 570 units
+  signature 3sxpVzMik1H95kTkKxX2GbZmHJZrh8zayCrW1AjZDcgNhh9oWDZHkp83pfX1zWu4JWSY1cDgTrfLt4eseBZvAvuG
+  payer 4962782352, alice 2750100007
