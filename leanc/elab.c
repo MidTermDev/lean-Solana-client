@@ -450,6 +450,7 @@ static Builtin builtins[] = {
     {"String.singleton", "c>S", B_RT, 0, "Rt.strSingleton"},
     {"String.isEmpty", "S&>B", B_RT, 0, "Rt.baIsEmpty"},
     {"String.toNat!", "S&>N", B_RT, 0, "Rt.strToNat"},
+    {"IO.FS.readBinFile", "S&>Y", B_RT, 0, "Rt.readFile"},
     {"IO.sleep", "d>U", B_RT, 0, "Rt.sleepMs"},
     {"IO.monoMsNow", ">N", B_RT, 0, "Rt.monoMs"},
     {"IO.monoNanosNow", ">N", B_RT, 0, "Rt.monoNs"},

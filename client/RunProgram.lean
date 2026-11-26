@@ -21,12 +21,15 @@ def usage : String :=
   "  --data HEX          instruction data (default: none)\n" ++
   "  --account SPEC      an account, in order; repeatable. SPEC is\n" ++
   "                        KEY:OWNER:LAMPORTS:DATAHEX[:FLAGS]\n" ++
-  "                      KEY and OWNER are Base58 addresses, or `program` (this program),\n" ++
+  "                      KEY and OWNER are Base58 addresses, or `program` (the program being run),\n" ++
   "                      `system`, or any other word, which becomes a stand-in address.\n" ++
   "                      FLAGS: s = signer, w = writable.\n" ++
-  "  --program-id ADDR   the program's own address (default: a stand-in)\n" ++
+  "                      A SPEC that is only a KEY names a loaded program (or `system`) as an account.\n" ++
+  "  --program KEY=FILE  another program this one may call, loaded under address KEY; repeatable\n" ++
+  "  --program-id ADDR   the address of the program being run (default: a stand-in)\n" ++
   "  --slot N            the slot the Clock sysvar reports (default 0)\n" ++
   "  --budget N          compute-unit limit (default 200000)\n" ++
+  "  --full              print account data in full, so it can be fed to the next run\n" ++
   "\n" ++
   "example: a counter account holding 999, incremented once\n" ++
   "  leansol run counter.so --data 01 --account counter:program:1000000:e703000000000000:w\n"
@@ -92,86 +95,117 @@ def main : IO Unit := do
     return
   let mut data := ByteArray.empty
   let mut specs : Array String := Array.emptyWithCapacity 4
+  let mut others : Array String := Array.emptyWithCapacity 2
   let mut programName := "program-under-test"
   let mut slot : UInt64 := 0
   let mut budget : UInt64 := 200000
+  let mut full := false
   let mut i := 3
   while i < argc do
     let a ← Sys.arg i
-    if i + 1 >= argc then
-      fail s!"{a} needs a value"
-    let v ← Sys.arg (i + 1)
-    if a == "--data" then
-      if !(isHex v) then
-        fail "--data expects hexadecimal bytes"
-      data := Hex.decode v
-    else if a == "--account" then
-      specs := specs.push v
-    else if a == "--program-id" then
-      programName := v
-    else if a == "--slot" || a == "--budget" then
-      match number v with
-      | none => fail s!"{a} expects a number"
-      | some n =>
-        if a == "--slot" then
-          slot := n
-        else
-          budget := n
+    if a == "--full" then
+      full := true
+      i := i + 1
     else
-      fail s!"unknown option {a}"
-    i := i + 2
+      if i + 1 >= argc then
+        fail s!"{a} needs a value"
+      let v ← Sys.arg (i + 1)
+      if a == "--data" then
+        if !(isHex v) then
+          fail "--data expects hexadecimal bytes"
+        data := Hex.decode v
+      else if a == "--account" then
+        specs := specs.push v
+      else if a == "--program" then
+        others := others.push v
+      else if a == "--program-id" then
+        programName := v
+      else if a == "--slot" || a == "--budget" then
+        match number v with
+        | none => fail s!"{a} expects a number"
+        | some n =>
+          if a == "--slot" then
+            slot := n
+          else
+            budget := n
+      else
+        fail s!"unknown option {a}"
+      i := i + 2
 
   let elf ← Sys.readFile path 0x1000000
   if elf.size == 0 then
     fail s!"cannot read {path}"
+  let size := elf.size
   let program := Sbpf.load elf
   if program.error != "" then
     fail s!"{path}: {program.error}"
+  let count := program.count
   let programId := address programName ByteArray.empty
+  let mut machine := (Sbpf.Machine.create ⟨slot, 0, 0, 0, 0⟩ budget).add programId program
+  for spec in others do
+    let f := split spec 61
+    if f.size != 2 then
+      fail s!"--program expects KEY=FILE, got '{spec}'"
+    let bytes ← Sys.readFile f[1]! 0x1000000
+    if bytes.size == 0 then
+      fail s!"cannot read {f[1]!}"
+    let other := Sbpf.load bytes
+    if other.error != "" then
+      fail s!"{f[1]!}: {other.error}"
+    machine := machine.add (address f[0]! programId) other
 
   let mut accounts : Array Sbpf.Account := Array.emptyWithCapacity 4
+  let mut metas : Array Sbpf.Meta := Array.emptyWithCapacity 4
   let mut names : Array String := Array.emptyWithCapacity 4
   for spec in specs do
     let f := split spec 58
-    if f.size < 4 || f.size > 5 then
-      fail s!"account '{spec}' should be KEY:OWNER:LAMPORTS:DATAHEX[:FLAGS]"
-    if !(isHex f[3]!) then
-      fail s!"account '{spec}': the data is not hexadecimal"
-    let flags := if f.size == 5 then f[4]!.toUTF8 else ByteArray.empty
+    let key := address f[0]! programId
     let mut signer := false
     let mut writable := false
-    for c in flags do
-      if c == 115 then
-        signer := true
-      else if c == 119 then
-        writable := true
+    if f.size == 1 then
+      -- a program passed as an account
+      if key == Sbpf.systemProgram then
+        accounts := accounts.push ⟨key, Base58.decode "NativeLoader1111111111111111111111111111111", 1, "system_program".toUTF8, true⟩
       else
-        fail s!"account '{spec}': flags are s (signer) and w (writable)"
-    match number f[2]! with
-    | none => fail s!"account '{spec}': lamports is not a number"
-    | some lamports =>
-      accounts := accounts.push ⟨address f[0]! programId, address f[1]! programId, lamports, Hex.decode f[3]!, signer, writable⟩
-      names := names.push f[0]!
+        accounts := accounts.push (Sbpf.programAccount key)
+    else
+      if f.size < 4 || f.size > 5 then
+        fail s!"account '{spec}' should be KEY:OWNER:LAMPORTS:DATAHEX[:FLAGS]"
+      if !(isHex f[3]!) then
+        fail s!"account '{spec}': the data is not hexadecimal"
+      let flags := if f.size == 5 then f[4]!.toUTF8 else ByteArray.empty
+      for c in flags do
+        if c == 115 then
+          signer := true
+        else if c == 119 then
+          writable := true
+        else
+          fail s!"account '{spec}': flags are s (signer) and w (writable)"
+      match number f[2]! with
+      | none => fail s!"account '{spec}': lamports is not a number"
+      | some lamports => accounts := accounts.push ⟨key, address f[1]! programId, lamports, Hex.decode f[3]!, false⟩
+    -- the same account may be listed twice; later mentions refer to the first
+    let existing := Sbpf.findAccount accounts key
+    if existing + 1 != accounts.size then
+      accounts := accounts.pop
+    metas := metas.push ⟨existing, signer, writable⟩
+    names := names.push f[0]!
 
-  let clock : Sbpf.Clock := ⟨slot, 0, 0, 0, 0⟩
-  let o := Sbpf.run program (Sbpf.serialize accounts data programId) clock budget
-  let ok := o.status == 0 && o.r0 == 0
-  IO.println s!"program   {path} · {Fmt.thousands elf.size.toUInt64} bytes · {Fmt.thousands program.count.toUInt64} instructions"
-  if o.status != 0 then
-    IO.println s!"result    stopped: {Sbpf.statusName o.status}{if o.detail == "" then "" else " (" ++ o.detail ++ ")"}"
-  else
-    IO.println s!"result    {Sbpf.errorName o.r0}"
-  IO.println s!"units     {Fmt.thousands o.units} of {Fmt.thousands budget}"
-  for line in o.logs do
+  let before := accounts
+  let st := Sbpf.process machine accounts programId metas data
+  IO.println s!"program   {path} · {Fmt.thousands size.toUInt64} bytes · {Fmt.thousands count.toUInt64} instructions"
+  IO.println s!"result    {Sbpf.outcome st}"
+  IO.println s!"units     {Fmt.thousands st.units} of {Fmt.thousands budget}"
+  for line in st.logs do
     IO.println s!"log       {line}"
-  -- a failed instruction changes nothing, as on chain
-  let after := if ok then Sbpf.readBack accounts o.input else accounts
-  for k in [0:after.size] do
-    let before := accounts[k]!
-    let now := after[k]!
-    let changed := now.lamports != before.lamports || now.data != before.data
-    IO.println s!"account   {Fmt.padRight names[k]! 12} lamports {Fmt.padLeft (Fmt.thousands now.lamports) 14}   data {preview now.data}{if changed then "   (changed)" else ""}"
-  if !ok then
+  for k in [0:metas.size] do
+    if !(Sbpf.isRepeat metas k) then
+      let was := before[metas[k]!.index]!
+      let now := st.accounts[metas[k]!.index]!
+      if !now.executable then
+        let changed := now.lamports != was.lamports || now.data != was.data || now.owner != was.owner
+        IO.println s!"account   {Fmt.padRight names[k]! 12} lamports {Fmt.padLeft (Fmt.thousands now.lamports) 14}   data {if full then Hex.encode now.data else preview now.data}{if changed then "   (changed)" else ""}"
+  if st.status != 0 then
     Sys.exit 1
 
 end RunProgram

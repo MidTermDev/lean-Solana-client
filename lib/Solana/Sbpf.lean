@@ -1,29 +1,33 @@
 import Crypto.Sha256
+import Crypto.Ed25519
 import Encoding.Base58
 import Solana.Wire
 
 /-!
 # An sBPF virtual machine
 
-Solana's on-chain programs are sBPF bytecode. This file loads such a program
-from its ELF file and executes it: the interpreter, the memory map, the
-compute-unit meter, the account serialization programs expect as input, and
-the system calls a program can make without calling other programs.
+Solana's on-chain programs are sBPF bytecode. This file loads such programs
+from their ELF files and executes instructions against a set of accounts:
+the interpreter, the loader with its relocations, the memory map, the
+compute-unit meter, the account serialization programs expect, the system
+calls, and **cross-program invocation**: a program calling another program,
+with the runtime's rules about who may sign for and modify which account.
 
-It targets **sBPF v0**, the version Solana runs today and the default output
-of [lean-svm](https://github.com/aeyakovenko/lean-svm), toly's Lean 4 → sBPF
+It targets **sBPF v0**, the version Solana runs today. That covers programs
+built by the standard Rust toolchain (the SPL Token programs run here
+unmodified) and the default output of
+[lean-svm](https://github.com/aeyakovenko/lean-svm), toly's Lean 4 → sBPF
 compiler. A program written in Lean and compiled by lean-svm runs here,
 inside a virtual machine that is itself written in Lean and compiled by
-leanc: Lean on both sides of the bytecode.
+leanc, and can call the real token programs from it.
 
-Semantics follow the reference interpreter (`anza-xyz/sbpf`) instruction by
-instruction, including the parts that are easy to get wrong: 32-bit
-additions, subtractions and multiplications sign-extend their result in v0,
-the other 32-bit operations zero-extend. The test suite runs lean-svm's own
-example programs and requires the exact compute-unit counts Agave reports.
+Semantics follow the reference implementation (`anza-xyz/sbpf` and Agave's
+program runtime) closely enough that compute-unit totals come out the same;
+the test suite holds it to the numbers Agave reports for lean-svm's
+examples.
 
-Not supported: cross-program invocation (a program calling another
-program), and sBPF v3.
+Not supported: sBPF v3, and the Rust calling convention for cross-program
+calls (`sol_invoke_signed_rust`); programs here call out with the C one.
 -/
 
 namespace Sbpf
@@ -36,8 +40,12 @@ def frameBytes : Nat := 4096
 def maxDepth : Nat := 64
 def stackBytes : Nat := 262144
 def heapBytes : Nat := 32768
+/-- How deep programs may call one another (the top-level instruction is 1). -/
+def maxInstructionDepth : Nat := 5
+/-- How much an account's data may grow within one instruction. -/
+def maxGrowth : Nat := 10240
 
--- How a run ended.
+-- How processing an instruction ended.
 def finished : UInt64 := 0
 def accessViolation : UInt64 := 1
 def divideByZero : UInt64 := 2
@@ -47,6 +55,14 @@ def budgetExceeded : UInt64 := 5
 def unsupportedSyscall : UInt64 := 6
 def executionOverrun : UInt64 := 7
 def aborted : UInt64 := 8
+def programFailed : UInt64 := 9
+def privilegeEscalation : UInt64 := 10
+def unknownProgram : UInt64 := 11
+def accountRule : UInt64 := 12
+def unbalanced : UInt64 := 13
+def missingAccount : UInt64 := 14
+def invalidRealloc : UInt64 := 15
+def invalidSeeds : UInt64 := 16
 
 def statusName (s : UInt64) : String :=
   if s == 0 then "finished"
@@ -57,7 +73,15 @@ def statusName (s : UInt64) : String :=
   else if s == 5 then "compute budget exceeded"
   else if s == 6 then "unsupported system call"
   else if s == 7 then "execution ran past the end of the program"
-  else "program aborted"
+  else if s == 8 then "program aborted"
+  else if s == 9 then "program returned an error"
+  else if s == 10 then "a call asked for a signature or write access the caller does not have"
+  else if s == 11 then "call to a program that is not loaded"
+  else if s == 12 then "account rule violated"
+  else if s == 13 then "lamports were created or destroyed"
+  else if s == 14 then "an account the call refers to was not passed in"
+  else if s == 15 then "an account grew by more than 10240 bytes"
+  else "the seeds do not derive a valid program address"
 
 -- System calls, numbered here; programs name them and the loader resolves the names.
 def sysLog : UInt64 := 1
@@ -71,6 +95,16 @@ def sysSha256 : UInt64 := 8
 def sysClock : UInt64 := 9
 def sysAbort : UInt64 := 10
 def sysLogUnits : UInt64 := 11
+def sysInvoke : UInt64 := 12
+def sysRent : UInt64 := 13
+def sysSetReturn : UInt64 := 14
+def sysGetReturn : UInt64 := 15
+def sysStackHeight : UInt64 := 16
+def sysGetSysvar : UInt64 := 17
+def sysFindAddress : UInt64 := 18
+def sysCreateAddress : UInt64 := 19
+def sysSibling : UInt64 := 20
+def sysPanic : UInt64 := 21
 def sysUnknown : UInt64 := 255
 
 /-- True when the NUL-terminated string at `b[o ..]` equals `name`. -/
@@ -88,14 +122,31 @@ def syscallId (b : ByteArray) (o : Nat) : UInt64 :=
   else if cstrIs b o "sol_memcmp_" then sysMemcmp
   else if cstrIs b o "sol_sha256" then sysSha256
   else if cstrIs b o "sol_get_clock_sysvar" then sysClock
-  else if cstrIs b o "abort" || cstrIs b o "sol_panic_" then sysAbort
+  else if cstrIs b o "abort" then sysAbort
+  else if cstrIs b o "sol_panic_" then sysPanic
   else if cstrIs b o "sol_log_compute_units_" then sysLogUnits
+  else if cstrIs b o "sol_invoke_signed_c" then sysInvoke
+  else if cstrIs b o "sol_get_rent_sysvar" then sysRent
+  else if cstrIs b o "sol_set_return_data" then sysSetReturn
+  else if cstrIs b o "sol_get_return_data" then sysGetReturn
+  else if cstrIs b o "sol_get_stack_height" then sysStackHeight
+  else if cstrIs b o "sol_get_sysvar" then sysGetSysvar
+  else if cstrIs b o "sol_try_find_program_address" then sysFindAddress
+  else if cstrIs b o "sol_create_program_address" then sysCreateAddress
+  else if cstrIs b o "sol_get_processed_sibling_instruction" then sysSibling
   else sysUnknown
 
+def storeAt (mem : ByteArray) (idx size : Nat) (v : UInt64) : ByteArray := Id.run do
+  let mut m := mem
+  for i in [0:size] do
+    m := m.set! (idx + i) (v >>> (8 * i).toUInt64).toUInt8
+  return m
+
 /-- A loaded program. `syscalls[pc]` is the system call made by the `call`
-instruction at `pc`, or 0. Program memory is the file itself: the byte at
-file offset `x` is readable at address `programStart + x` for `x` in
-`[roLow, roHigh)`. -/
+instruction at `pc` (or 0) and `calls[pc]` the function it calls by symbol
+(as target + 1, or 0). Program memory is the relocated file itself: the
+byte at file offset `x` is readable at address `programStart + x` for `x`
+in `[roLow, roHigh)`. -/
 structure Program where
   elf : ByteArray
   textOff : Nat
@@ -104,14 +155,20 @@ structure Program where
   roHigh : Nat
   entry : Nat
   syscalls : Array UInt64
+  calls : Array UInt64
   error : String
   deriving Inhabited
 
 def Program.failed (elf : ByteArray) (why : String) : Program :=
-  ⟨elf, 0, 0, 0, 0, 0, Array.emptyWithCapacity 0, why⟩
+  ⟨elf, 0, 0, 0, 0, 0, Array.emptyWithCapacity 0, Array.emptyWithCapacity 0, why⟩
 
-/-- One section header: offset and size of the section named `name`, or (0, 0). -/
-def findSection (elf : ByteArray) (shoff shnum strOff : Nat) (name : String) : Nat × Nat := Id.run do
+/-- Where a section sits in the file, and the address it asks for. Size 0 means "absent". -/
+structure Section where
+  off : Nat
+  size : Nat
+  addr : UInt64
+
+def findSection (elf : ByteArray) (shoff shnum strOff : Nat) (name : String) : Section := Id.run do
   for i in [0:shnum] do
     let h := shoff + 64 * i
     let nameOff := (Wire.u32 elf h).toNat
@@ -120,52 +177,89 @@ def findSection (elf : ByteArray) (shoff shnum strOff : Nat) (name : String) : N
       let size := Wire.u64 elf (h + 32)
       -- lengths come from the file: check them before doing arithmetic with them
       if off > elf.size.toUInt64 || size > elf.size.toUInt64 || off.toNat + size.toNat > elf.size then
-        return (0, 0)
-      return (off.toNat, size.toNat)
-  return (0, 0)
+        return ⟨0, 0, 0⟩
+      return ⟨off.toNat, size.toNat, Wire.u64 elf (h + 16)⟩
+  return ⟨0, 0, 0⟩
 
-/-- Parses an sBPF v0 ELF file as written by Solana toolchains. -/
-def load (elf : ByteArray) : Program := Id.run do
+/-- Parses and relocates an sBPF v0 ELF file as written by Solana toolchains. -/
+def load (image : ByteArray) : Program := Id.run do
+  let mut elf := image
   if elf.size < 64 || Wire.u32 elf 0 != 0x464c457f then
     return Program.failed elf "not an ELF file"
-  if Wire.u8 elf 4 != 2 || Wire.u16 elf 18 != 247 then
-    return Program.failed elf "not a 64-bit sBPF program (expected machine type EM_BPF)"
+  let machine := Wire.u16 elf 18
+  if Wire.u8 elf 4 != 2 || (machine != 247 && machine != 263) then
+    return Program.failed elf "not a 64-bit sBPF program"
   if Wire.u32 elf 48 != 0 then
     return Program.failed elf "only sBPF v0 programs are supported (this one sets e_flags)"
-  let shoff := Wire.u64 elf 40
+  let shoff64 := Wire.u64 elf 40
   let shnum := (Wire.u16 elf 60).toNat
   let shstrndx := (Wire.u16 elf 62).toNat
-  if shoff > elf.size.toUInt64 || shoff.toNat + 64 * shnum > elf.size || shstrndx >= shnum then
+  if shoff64 > elf.size.toUInt64 || shoff64.toNat + 64 * shnum > elf.size || shstrndx >= shnum then
     return Program.failed elf "malformed section table"
-  let strOff := Wire.u64 elf (shoff.toNat + 64 * shstrndx + 24)
-  if strOff > elf.size.toUInt64 then
+  let shoff := shoff64.toNat
+  let strOff64 := Wire.u64 elf (shoff + 64 * shstrndx + 24)
+  if strOff64 > elf.size.toUInt64 then
     return Program.failed elf "malformed section name table"
-  let (textOff, textLen) := findSection elf shoff.toNat shnum strOff.toNat ".text"
-  if textLen == 0 || textLen % 8 != 0 then
+  let strOff := strOff64.toNat
+  let text := findSection elf shoff shnum strOff ".text"
+  if text.size == 0 || text.size % 8 != 0 then
     return Program.failed elf "no .text section"
-  let (roOff, roLen) := findSection elf shoff.toNat shnum strOff.toNat ".rodata"
-  let roHigh := if roLen != 0 && roOff + roLen > textOff + textLen then roOff + roLen else textOff + textLen
-  let roLow := if roLen != 0 && roOff < textOff then roOff else textOff
-  let count := textLen / 8
+  -- everything read-only that a program can address: code and constants
+  let mut roLow := text.off
+  let mut roHigh := text.off + text.size
+  for name in #[".text", ".rodata", ".data.rel.ro", ".eh_frame"] do
+    let sec := findSection elf shoff shnum strOff name
+    if sec.size != 0 then
+      if sec.addr != sec.off.toUInt64 then
+        return Program.failed elf "unsupported layout: a section's address differs from its file offset"
+      if sec.off < roLow then
+        roLow := sec.off
+      if sec.off + sec.size > roHigh then
+        roHigh := sec.off + sec.size
+  let count := text.size / 8
   let entryAddr := Wire.u64 elf 24
-  if entryAddr < textOff.toUInt64 || entryAddr >= (textOff + textLen).toUInt64 || (entryAddr - textOff.toUInt64) % 8 != 0 then
+  if entryAddr < text.addr || entryAddr >= text.addr + text.size.toUInt64 || (entryAddr - text.addr) % 8 != 0 then
     return Program.failed elf "entry point is outside .text"
-  -- system calls are `call` instructions whose target a relocation names
   let mut syscalls : Array UInt64 := Array.replicate count 0
-  let (relOff, relLen) := findSection elf shoff.toNat shnum strOff.toNat ".rel.dyn"
-  let (symOff, symLen) := findSection elf shoff.toNat shnum strOff.toNat ".dynsym"
-  let (dynstrOff, dynstrLen) := findSection elf shoff.toNat shnum strOff.toNat ".dynstr"
-  for i in [0:relLen / 16] do
-    let site := Wire.u64 elf (relOff + 16 * i)
-    let info := Wire.u64 elf (relOff + 16 * i + 8)
+  let mut calls : Array UInt64 := Array.replicate count 0
+  let rel := findSection elf shoff shnum strOff ".rel.dyn"
+  let syms := findSection elf shoff shnum strOff ".dynsym"
+  let names := findSection elf shoff shnum strOff ".dynstr"
+  for i in [0:rel.size / 16] do
+    let site64 := Wire.u64 elf (rel.off + 16 * i)
+    let info := Wire.u64 elf (rel.off + 16 * i + 8)
+    let kind := info &&& 0xFFFFFFFF
     let sym := info >>> 32
-    -- R_BPF_64_32: the call's immediate is the hash of the symbol's name
-    if info &&& 0xFFFFFFFF == 10 && site >= textOff.toUInt64 && site < (textOff + textLen).toUInt64 &&
-        sym < (symLen / 24).toUInt64 then
-      let nameOff := (Wire.u32 elf (symOff + 24 * sym.toNat)).toNat
-      if nameOff < dynstrLen then
-        syscalls := syscalls.set! ((site.toNat - textOff) / 8) (syscallId elf (dynstrOff + nameOff))
-  return ⟨elf, textOff, count, roLow, roHigh, (entryAddr.toNat - textOff) / 8, syscalls, ""⟩
+    if site64 < elf.size.toUInt64 && site64.toNat + 16 <= elf.size then
+      let site := site64.toNat
+      let inText := site >= text.off && site < text.off + text.size
+      let symValue := if sym < (syms.size / 24).toUInt64 then Wire.u64 elf (syms.off + 24 * sym.toNat + 8) else 0
+      if kind == 8 then
+        -- R_BPF_64_RELATIVE: an address that must be moved into the program region
+        if inText then
+          let lo := Wire.u32 elf (site + 4)
+          let va := lo ||| (Wire.u32 elf (site + 12) <<< 32)
+          let moved := if va < programStart then va + programStart else va
+          elf := storeAt elf (site + 4) 4 moved
+          elf := storeAt elf (site + 12) 4 (moved >>> 32)
+        else
+          elf := storeAt elf site 8 (programStart + Wire.u32 elf (site + 4))
+      else if kind == 1 && inText then
+        -- R_BPF_64_64: the address of a symbol, loaded by a two-slot instruction
+        let va := symValue + Wire.u32 elf (site + 4)
+        let moved := if va < programStart then va + programStart else va
+        elf := storeAt elf (site + 4) 4 moved
+        elf := storeAt elf (site + 12) 4 (moved >>> 32)
+      else if kind == 10 && inText && sym < (syms.size / 24).toUInt64 then
+        -- R_BPF_64_32: a call by name, to a function of the program or to a system call
+        let symInfo := Wire.u8 elf (syms.off + 24 * sym.toNat + 4)
+        let nameOff := (Wire.u32 elf (syms.off + 24 * sym.toNat)).toNat
+        let pc := (site - text.off) / 8
+        if symInfo &&& 15 == 2 && symValue >= text.addr && symValue < text.addr + text.size.toUInt64 then
+          calls := calls.set! pc ((symValue - text.addr) / 8 + 1)
+        else if nameOff < names.size then
+          syscalls := syscalls.set! pc (syscallId elf (names.off + nameOff))
+  return ⟨elf, text.off, count, roLow, roHigh, ((entryAddr - text.addr) / 8).toNat, syscalls, calls, ""⟩
 
 -- ------------------------------------------------------------------- memory
 --
@@ -194,12 +288,6 @@ def loadAt (p : Program) (mem : ByteArray) (idx size : Nat) : UInt64 :=
   else if size == 1 then Wire.u8 mem idx else if size == 2 then Wire.u16 mem idx
   else if size == 4 then Wire.u32 mem idx else Wire.u64 mem idx
 
-def storeAt (mem : ByteArray) (idx size : Nat) (v : UInt64) : ByteArray := Id.run do
-  let mut m := mem
-  for i in [0:size] do
-    m := m.set! (idx + i) (v >>> (8 * i).toUInt64).toUInt8
-  return m
-
 /-- The bytes at `[addr, addr + len)`, wherever they live; `none` if any are unmapped. -/
 def readBytes (p : Program) (mem : ByteArray) (inputLen : Nat) (addr len : UInt64) : Option ByteArray :=
   if len > 0x10000000 then none
@@ -208,6 +296,10 @@ def readBytes (p : Program) (mem : ByteArray) (inputLen : Nat) (addr len : UInt6
     if !(Wire.ok idx) then none
     else if idx >= progBase then some (p.elf.extract (idx - progBase) (idx - progBase + len.toNat))
     else some (mem.extract idx (idx + len.toNat))
+
+/-- Where `len` writable bytes at `addr` live, or `Wire.bad`. Lengths beyond any region are refused first. -/
+def writable (p : Program) (inputLen : Nat) (addr len : UInt64) : Nat :=
+  if len > 0x10000000 then Wire.bad else locate p inputLen addr len.toNat true
 
 -- --------------------------------------------------------------- arithmetic
 
@@ -281,7 +373,23 @@ def jumpTaken (op a b : UInt64) : Bool :=
   else if op == 0xc0 then slt a b
   else !(slt b a)
 
--- ---------------------------------------------------------------- execution
+-- ----------------------------------------------------------------- accounts
+
+/-- An account: an address, the program that owns it, a balance and data. -/
+structure Account where
+  key : ByteArray
+  owner : ByteArray
+  lamports : UInt64
+  data : ByteArray
+  executable : Bool
+  deriving Inhabited
+
+/-- A reference to an account by an instruction: which one, and with what rights. -/
+structure Meta where
+  index : Nat
+  signer : Bool
+  writable : Bool
+  deriving Inhabited
 
 /-- The `Clock` sysvar a program can ask for. -/
 structure Clock where
@@ -290,18 +398,312 @@ structure Clock where
   epoch : UInt64
   leaderScheduleEpoch : UInt64
   unixTimestamp : UInt64
+  deriving Inhabited
 
-/-- What a run produced. `status` is 0 when the program reached its final
-`exit`; `r0` is then its return value (0 for success, a `ProgramError`
-otherwise). `input` is the input region afterwards, where the program's
-changes to accounts live. -/
-structure Outcome where
+/-- The programs that exist, and the world they run in. -/
+structure Machine where
+  ids : Array ByteArray
+  programs : Array Program
+  clock : Clock
+  budget : UInt64
+  deriving Inhabited
+
+/-- Everything an instruction can change. `status` is `finished` (0) while
+all is well; `r0` carries a failing program's error code. -/
+structure State where
+  accounts : Array Account
+  units : UInt64
+  logs : Array String
+  returnData : ByteArray
   status : UInt64
   r0 : UInt64
-  units : UInt64
-  input : ByteArray
-  logs : Array String
   detail : String
+  deriving Inhabited
+
+def notFound : Nat := 0xFFFFFFFF
+
+def zeros (b : ByteArray) (n : Nat) : ByteArray := Id.run do
+  let mut out := b
+  for _ in [0:n] do
+    out := out.push 0
+  return out
+
+/-- The system program's address: 32 zero bytes. -/
+def systemProgram : ByteArray := zeros ByteArray.empty 32
+
+def loaderId : ByteArray := Base58.decode "BPFLoaderUpgradeab1e11111111111111111111111"
+def rentSysvar : ByteArray := Base58.decode "SysvarRent111111111111111111111111111111111"
+def clockSysvar : ByteArray := Base58.decode "SysvarC1ock11111111111111111111111111111111"
+
+def Machine.create (clock : Clock) (budget : UInt64) : Machine :=
+  ⟨Array.emptyWithCapacity 4, Array.emptyWithCapacity 4, clock, budget⟩
+
+/-- Registers a program under an address. -/
+def Machine.add (m : Machine) (id : ByteArray) (p : Program) : Machine :=
+  let ⟨ids, programs, clock, budget⟩ := m
+  ⟨ids.push id, programs.push p, clock, budget⟩
+
+/-- The account that stands for a deployed program when it is passed to another program. -/
+def programAccount (id : ByteArray) : Account :=
+  ⟨id, loaderId, 1141440, zeros ByteArray.empty 36, true⟩
+
+def findAccount (accounts : Array Account) (key : ByteArray) : Nat := Id.run do
+  for i in [0:accounts.size] do
+    if accounts[i]!.key == key then
+      return i
+  return notFound
+
+/-- Rights an instruction holds over account `index`: bit 0 present, bit 1 signer, bit 2 writable. -/
+def rights (metas : Array Meta) (index : Nat) : UInt64 := Id.run do
+  let mut r : UInt64 := 0
+  for mt in metas do
+    if mt.index == index then
+      r := r ||| 1 ||| (if mt.signer then 2 else 0) ||| (if mt.writable then 4 else 0)
+  return r
+
+/-- True when an earlier reference in `metas` names the same account as reference `i`. -/
+def isRepeat (metas : Array Meta) (i : Nat) : Bool := Id.run do
+  for j in [0:i] do
+    if metas[j]!.index == metas[i]!.index then
+      return true
+  return false
+
+def State.stop (st : State) (status : UInt64) (detail : String) : State :=
+  { st with status := status, detail := detail }
+
+def State.charge (st : State) (units : UInt64) : State :=
+  { st with units := st.units + units }
+
+/-- Why `program` may not turn `old` into the given balance, owner and data,
+or `""` if it may. These are the runtime's ownership rules. -/
+def changeError (program : ByteArray) (mayWrite : Bool) (old : Account) (lamports : UInt64)
+    (owner data : ByteArray) : String :=
+  let dataChanged := data != old.data
+  let ownerChanged := owner != old.owner
+  if lamports == old.lamports && !dataChanged && !ownerChanged then ""
+  else if old.executable then "an executable account was modified"
+  else if !mayWrite then "an account that was not passed as writable was modified"
+  else if lamports < old.lamports && old.owner != program then
+    "lamports were taken from an account the program does not own"
+  else if dataChanged && old.owner != program then "the data of an account the program does not own was modified"
+  else if ownerChanged && old.owner != program then "the owner of an account the program does not own was changed"
+  else ""
+
+-- ----------------------------------------------- program-derived addresses
+
+/-- A program address is the hash of seeds, the program's address and a
+marker, provided the result is *not* a point on the Ed25519 curve, so that no
+private key can exist for it. Only the program itself can sign for it. -/
+def createProgramAddress (seeds : Array ByteArray) (programId : ByteArray) : Option ByteArray := Id.run do
+  if seeds.size > 16 then
+    return none
+  let mut message := ByteArray.emptyWithCapacity 128
+  for seed in seeds do
+    if seed.size > 32 then
+      return none
+    message := message ++ seed
+  message := message ++ programId ++ "ProgramDerivedAddress".toUTF8
+  let hash := Sha256.hash message
+  if (Ed25519.Point.decode hash).isSome then
+    return none
+  return some hash
+
+/-- Tries bump seeds from 255 downwards until one gives a valid program
+address. Returns the address and the bump; the address is empty if none works. -/
+def findProgramAddress (seeds : Array ByteArray) (programId : ByteArray) : ByteArray × UInt8 := Id.run do
+  for i in [0:256] do
+    let bump := (255 - i).toUInt8
+    match createProgramAddress (seeds.push (ByteArray.empty.push bump)) programId with
+    | some address => return (address, bump)
+    | none => pure ()
+  return (ByteArray.empty, 0)
+
+-- ---------------------------------------------- reading a call's arguments
+
+/-- A slice of slices: `count` (address, length) pairs at `addr`. -/
+def readSlices (p : Program) (mem : ByteArray) (inputLen : Nat) (addr count : UInt64) : Option (Array ByteArray) := Id.run do
+  if count > 64 then
+    return none
+  let mut out : Array ByteArray := Array.emptyWithCapacity count.toNat
+  for i in [0:count.toNat] do
+    match readBytes p mem inputLen (addr + 16 * i.toUInt64) 16 with
+    | none => return none
+    | some pair =>
+      match readBytes p mem inputLen (Wire.u64 pair 0) (Wire.u64 pair 8) with
+      | none => return none
+      | some bytes => out := out.push bytes
+  return some out
+
+/-- The instruction a program wants to send (C layout): callee, account references, data. -/
+structure Call where
+  programId : ByteArray
+  keys : Array ByteArray
+  flags : Array UInt64
+  data : ByteArray
+
+def readCall (p : Program) (mem : ByteArray) (inputLen : Nat) (addr : UInt64) : Option Call := Id.run do
+  match readBytes p mem inputLen addr 40 with
+  | none => return none
+  | some head =>
+    let count := Wire.u64 head 16
+    if count > 255 then
+      return none
+    match readBytes p mem inputLen (Wire.u64 head 0) 32, readBytes p mem inputLen (Wire.u64 head 24) (Wire.u64 head 32) with
+    | some programId, some data =>
+      let mut keys : Array ByteArray := Array.emptyWithCapacity count.toNat
+      let mut flags : Array UInt64 := Array.emptyWithCapacity count.toNat
+      for i in [0:count.toNat] do
+        -- SolAccountMeta: address of the key, then is_writable, is_signer
+        match readBytes p mem inputLen (Wire.u64 head 8 + 16 * i.toUInt64) 16 with
+        | none => return none
+        | some entry =>
+          match readBytes p mem inputLen (Wire.u64 entry 0) 32 with
+          | none => return none
+          | some key =>
+            keys := keys.push key
+            flags := flags.push ((if Wire.u8 entry 9 != 0 then 2 else 0) ||| (if Wire.u8 entry 8 != 0 then 4 else 0))
+      return some ⟨programId, keys, flags, data⟩
+    | _, _ => return none
+
+/-- The caller's view of an account (C layout `SolAccountInfo`): where in its
+memory the balance, owner and data live. -/
+structure Info where
+  addr : UInt64
+  key : ByteArray
+  lamportsAddr : UInt64
+  dataLen : UInt64
+  dataAddr : UInt64
+  ownerAddr : UInt64
+  deriving Inhabited
+
+def readInfos (p : Program) (mem : ByteArray) (inputLen : Nat) (addr count : UInt64) : Option (Array Info) := Id.run do
+  if count > 255 then
+    return none
+  let mut out : Array Info := Array.emptyWithCapacity count.toNat
+  for i in [0:count.toNat] do
+    let at_ := addr + 56 * i.toUInt64
+    match readBytes p mem inputLen at_ 56 with
+    | none => return none
+    | some raw =>
+      match readBytes p mem inputLen (Wire.u64 raw 0) 32 with
+      | none => return none
+      | some key => out := out.push ⟨at_, key, Wire.u64 raw 8, Wire.u64 raw 16, Wire.u64 raw 24, Wire.u64 raw 32⟩
+  return some out
+
+def findInfo (infos : Array Info) (key : ByteArray) : Nat := Id.run do
+  for i in [0:infos.size] do
+    if infos[i]!.key == key then
+      return i
+  return notFound
+
+-- ---------------------------------------------------------------- the input
+--
+-- A program receives its accounts, instruction data and own address in one
+-- buffer, laid out the way Solana's loader does (the "aligned" format).
+
+/-- Bytes an account occupies in the input: header, data, room to grow, alignment, rent epoch. -/
+def accountSpan (dataLen : Nat) : Nat := (dataLen + 10343) / 8 * 8
+
+def serialize (accounts : Array Account) (metas : Array Meta) (instruction programId : ByteArray) : ByteArray := Id.run do
+  let mut b := Wire.putU64 (ByteArray.emptyWithCapacity 16384) metas.size.toUInt64
+  for i in [0:metas.size] do
+    let mt := metas[i]!
+    -- an account referenced twice is serialized once; later mentions point at the first
+    let mut first := i
+    for j in [0:i] do
+      if first == i && metas[j]!.index == mt.index then
+        first := j
+    if first != i then
+      b := zeros (b.push first.toUInt8) 7
+    else
+      let a := accounts[mt.index]!
+      b := b.push 0xff
+      b := b.push (if mt.signer then 1 else 0)
+      b := b.push (if mt.writable then 1 else 0)
+      b := b.push (if a.executable then 1 else 0)
+      b := zeros b 4
+      b := b ++ a.key
+      b := b ++ a.owner
+      b := Wire.putU64 b a.lamports
+      b := Wire.putU64 b a.data.size.toUInt64
+      b := b ++ a.data
+      b := zeros b (accountSpan a.data.size - 88 - a.data.size - 8)
+      b := Wire.putU64 b 0xFFFFFFFFFFFFFFFF
+  b := Wire.putU64 b instruction.size.toUInt64
+  b := b ++ instruction
+  return b ++ programId
+
+-- ------------------------------------------------------- the system program
+--
+-- The one program every other program needs is not bytecode: creating
+-- accounts and moving lamports between wallets is built into the runtime.
+
+def programError (st : State) (code : UInt64) : State :=
+  { st with status := programFailed, r0 := code <<< 32 }
+
+def systemInstruction (st : State) (metas : Array Meta) (data : ByteArray) : State := Id.run do
+  let st := st.charge 150
+  let tag := Wire.u32 data 0
+  if data.size < 4 || metas.size == 0 then
+    return programError st 3
+  let a := metas[0]!
+  let source := st.accounts[a.index]!
+  if tag == 2 then
+    -- Transfer { lamports }: from a signing system account to any account
+    if metas.size < 2 || data.size < 12 then
+      return programError st 11
+    let amount := Wire.u64 data 4
+    let b := metas[1]!
+    if !a.signer then
+      return programError st 8
+    if source.data.size != 0 || source.owner != systemProgram || !a.writable || !b.writable then
+      return programError st 2
+    if source.lamports < amount then
+      return { st with status := programFailed, r0 := 1 }
+    let accounts := st.accounts.set! a.index { source with lamports := source.lamports - amount }
+    let dest := accounts[b.index]!
+    return { st with accounts := accounts.set! b.index { dest with lamports := dest.lamports + amount } }
+  if tag == 0 then
+    -- CreateAccount { lamports, space, owner }: fund, size and hand over a new account
+    if metas.size < 2 || data.size < 52 then
+      return programError st 11
+    let amount := Wire.u64 data 4
+    let space := Wire.u64 data 12
+    let b := metas[1]!
+    let fresh := st.accounts[b.index]!
+    if !a.signer || !b.signer then
+      return programError st 8
+    if fresh.lamports != 0 || fresh.data.size != 0 || fresh.owner != systemProgram then
+      return { st with status := programFailed, r0 := 0x100000000 }
+    if space > 10485760 || !a.writable || !b.writable || source.owner != systemProgram then
+      return programError st 2
+    if source.lamports < amount then
+      return { st with status := programFailed, r0 := 1 }
+    let accounts := st.accounts.set! a.index { source with lamports := source.lamports - amount }
+    let created : Account := { fresh with lamports := amount, data := zeros ByteArray.empty space.toNat, owner := data.extract 20 52 }
+    return { st with accounts := accounts.set! b.index created }
+  if tag == 1 then
+    -- Assign { owner }
+    if data.size < 36 then
+      return programError st 3
+    if !a.signer then
+      return programError st 8
+    if source.owner != systemProgram || !a.writable then
+      return programError st 2
+    return { st with accounts := st.accounts.set! a.index { source with owner := data.extract 4 36 } }
+  if tag == 8 then
+    -- Allocate { space }
+    if data.size < 12 then
+      return programError st 3
+    let space := Wire.u64 data 4
+    if !a.signer then
+      return programError st 8
+    if source.owner != systemProgram || source.data.size != 0 || space > 10485760 || !a.writable then
+      return programError st 2
+    return { st with accounts := st.accounts.set! a.index { source with data := zeros ByteArray.empty space.toNat } }
+  return programError st 3
+
+-- ---------------------------------------------------------------- execution
 
 /-- Replaces bytes that are not printable ASCII, so program output can become a `String`. -/
 def printable (b : ByteArray) : String := Id.run do
@@ -323,9 +725,163 @@ def hex64 (v : UInt64) : String := Id.run do
 /-- Cost of a memory operation over `n` bytes: Solana charges per 250 bytes, at least 10. -/
 def memCost (n : UInt64) : UInt64 := if n / 250 > 10 then n / 250 else 10
 
-/-- Runs `p` on a serialized `input` until it exits, faults, or spends `budget` compute units.
-Every instruction costs one unit; system calls add their own. -/
-def run (p : Program) (input : ByteArray) (clock : Clock) (budget : UInt64) : Outcome := Id.run do
+/-- The `Rent` sysvar as programs see it in memory: lamports per byte-year,
+the exemption threshold (the double 2.0) and the burn percentage. -/
+def rentBytes : ByteArray :=
+  zeros ((Wire.putU64 (Wire.putU64 (ByteArray.emptyWithCapacity 24) 3480) 0x4000000000000000).push 50) 7
+
+def clockBytes (c : Clock) : ByteArray :=
+  Wire.putU64 (Wire.putU64 (Wire.putU64 (Wire.putU64 (Wire.putU64 (ByteArray.emptyWithCapacity 40) c.slot)
+    c.epochStartTimestamp) c.epoch) c.leaderScheduleEpoch) c.unixTimestamp
+
+mutual
+
+/-- One program calling another (`sol_invoke_signed_c`). `st` and `mem` are
+the caller's; the result is the state after the callee ran and the caller's
+memory with the callee's changes written back.
+
+The steps mirror Agave's: charge for the call; read the instruction, the
+caller's account views and its signer seeds; check that every right the
+callee is given is one the caller has (or that a seed-derived address
+provides); copy the caller's pending changes into the account store; run the
+callee; copy what the callee changed back into the caller's memory. -/
+partial def invoke (m : Machine) (st0 : State) (callerId : ByteArray) (callerMetas : Array Meta)
+    (entry : Array Account) (p : Program) (mem0 : ByteArray) (inputLen : Nat)
+    (callAddr infosAddr infosLen seedsAddr seedsLen : UInt64) (depth : Nat) : State × ByteArray := Id.run do
+  let mut st := st0.charge 946
+  let mut mem := mem0
+  match readCall p mem inputLen callAddr, readInfos p mem inputLen infosAddr infosLen with
+  | some call, some infos =>
+    st := st.charge (call.data.size.toUInt64 / 250 + call.keys.size.toUInt64 * 34 / 250 + infos.size.toUInt64 * 80 / 250)
+    -- addresses the caller can sign for because it derived them from seeds
+    let mut derived : Array ByteArray := Array.emptyWithCapacity 2
+    if seedsLen > 16 then
+      return (st.stop invalidSeeds "too many signers", mem)
+    for i in [0:seedsLen.toNat] do
+      match readBytes p mem inputLen (seedsAddr + 16 * i.toUInt64) 16 with
+      | none => return (st.stop accessViolation "signer seeds are not readable", mem)
+      | some pair =>
+        match readSlices p mem inputLen (Wire.u64 pair 0) (Wire.u64 pair 8) with
+        | none => return (st.stop accessViolation "signer seeds are not readable", mem)
+        | some seeds =>
+          match createProgramAddress seeds callerId with
+          | none => return (st.stop invalidSeeds "", mem)
+          | some address => derived := derived.push address
+    -- the callee's account references, each checked against what the caller holds
+    let mut metas : Array Meta := Array.emptyWithCapacity call.keys.size
+    for i in [0:call.keys.size] do
+      let key := call.keys[i]!
+      let index := findAccount st.accounts key
+      if index == notFound then
+        return (st.stop missingAccount (Base58.encode key), mem)
+      let held := rights callerMetas index
+      let mut maySign := held &&& 2 != 0
+      for d in derived do
+        if d == key then
+          maySign := true
+      let wantSign := call.flags[i]! &&& 2 != 0
+      let wantWrite := call.flags[i]! &&& 4 != 0
+      if held == 0 then
+        return (st.stop missingAccount (Base58.encode key), mem)
+      if (wantSign && !maySign) || (wantWrite && held &&& 4 == 0) then
+        return (st.stop privilegeEscalation (Base58.encode key), mem)
+      metas := metas.push ⟨index, wantSign, wantWrite⟩
+    -- a reference repeated with different rights gets the union of them
+    for i in [0:metas.size] do
+      let r := rights metas metas[i]!.index
+      metas := metas.set! i ⟨metas[i]!.index, r &&& 2 != 0, r &&& 4 != 0⟩
+    -- the caller may have changed accounts since it started: bring the store up to date
+    for i in [0:metas.size] do
+      if !(isRepeat metas i) then
+        let index := metas[i]!.index
+        let account := st.accounts[index]!
+        if account.executable then
+          st := st.charge (account.data.size.toUInt64 / 250)
+        else
+          let k := findInfo infos account.key
+          if k == notFound then
+            return (st.stop missingAccount (Base58.encode account.key), mem)
+          let info := infos[k]!
+          st := st.charge (info.dataLen / 250)
+          match readBytes p mem inputLen info.lamportsAddr 8, readBytes p mem inputLen info.ownerAddr 32,
+              readBytes p mem inputLen info.dataAddr info.dataLen with
+          | some balance, some owner, some data =>
+            let lamports := Wire.u64 balance 0
+            let why := changeError callerId (rights callerMetas index &&& 4 != 0) account lamports owner data
+            if why != "" then
+              return (st.stop accountRule why, mem)
+            if data.size > entry[index]!.data.size + maxGrowth then
+              return (st.stop invalidRealloc "", mem)
+            st := { st with accounts := st.accounts.set! index { account with lamports := lamports, owner := owner, data := data } }
+          | _, _, _ => return (st.stop accessViolation "an account view points outside the caller's memory", mem)
+    if st.units > m.budget then
+      return (st.stop budgetExceeded "", mem)
+    -- run the callee
+    st := execute m st call.programId metas call.data (depth + 1)
+    if st.status != finished then
+      return (st, mem)
+    -- what the callee changed becomes visible in the caller's memory
+    for i in [0:metas.size] do
+      let index := metas[i]!.index
+      let account := st.accounts[index]!
+      if !(isRepeat metas i) && metas[i]!.writable && !account.executable then
+        let info := infos[findInfo infos account.key]!
+        let size := account.data.size.toUInt64
+        if account.data.size > entry[index]!.data.size + maxGrowth then
+          return (st.stop invalidRealloc "", mem)
+        let balanceAt := writable p inputLen info.lamportsAddr 8
+        let ownerAt := writable p inputLen info.ownerAddr 32
+        let span := if size > info.dataLen then size else info.dataLen
+        let dataAt := writable p inputLen info.dataAddr span
+        if !(Wire.ok balanceAt) || !(Wire.ok ownerAt) || !(Wire.ok dataAt) then
+          return (st.stop accessViolation "an account view points outside the caller's memory", mem)
+        mem := storeAt mem balanceAt 8 account.lamports
+        mem := account.owner.copySlice 0 mem ownerAt 32
+        mem := account.data.copySlice 0 mem dataAt account.data.size
+        if size != info.dataLen then
+          -- the account was resized: clear what it gave up, and update both places its length is kept
+          for k in [account.data.size:info.dataLen.toNat] do
+            mem := mem.set! (dataAt + k) 0
+          let lenInView := writable p inputLen (info.addr + 16) 8
+          let lenInInput := writable p inputLen (info.dataAddr - 8) 8
+          if !(Wire.ok lenInView) || !(Wire.ok lenInInput) then
+            return (st.stop accessViolation "an account view points outside the caller's memory", mem)
+          mem := storeAt mem lenInView 8 size
+          mem := storeAt mem lenInInput 8 size
+    return (st, mem)
+  | _, _ => return (st.stop accessViolation "the arguments of the call are not readable", mem)
+
+/-- Processes one instruction: `programId` is run on the accounts `metas`
+refers to, with `data`. Returns the state afterwards; if `status` is not
+`finished` the instruction failed and the caller discards the changes. -/
+partial def execute (m : Machine) (st0 : State) (programId : ByteArray) (metas : Array Meta)
+    (data : ByteArray) (depth : Nat) : State := Id.run do
+  if depth > maxInstructionDepth then
+    return st0.stop callDepthExceeded "programs called one another more than 4 levels deep"
+  let entry := st0.accounts
+  let mut entrySum : UInt64 := 0
+  for i in [0:metas.size] do
+    if !(isRepeat metas i) then
+      entrySum := entrySum + entry[metas[i]!.index]!.lamports
+  if programId == systemProgram then
+    return systemInstruction st0 metas data
+  let mut which := notFound
+  for i in [0:m.ids.size] do
+    if m.ids[i]! == programId then
+      which := i
+  if which == notFound then
+    return st0.stop unknownProgram (Base58.encode programId)
+  let p := m.programs[which]!
+  if p.error != "" then
+    return st0.stop unsupportedInstruction p.error
+  let ⟨accounts0, units0, logs0, returnData0, _, _, _⟩ := st0
+  let mut accounts := accounts0
+  let mut units := units0
+  let mut logs := logs0
+  let mut returnData := returnData0
+  let budget := m.budget
+
+  let input := serialize accounts metas data programId
   let inputLen := input.size
   let mut mem := ByteArray.emptyWithCapacity (stackBytes + heapBytes + inputLen)
   for _ in [0:stackBytes + heapBytes] do
@@ -336,17 +892,12 @@ def run (p : Program) (input : ByteArray) (clock : Clock) (budget : UInt64) : Ou
   regs := regs.set! 10 (stackStart + frameBytes.toUInt64)
   -- saved r6..r9, frame pointer and return address of every active call
   let mut frames : Array UInt64 := Array.replicate (maxDepth * 6) 0
-  let mut depth := 0
+  let mut calls := 0
   let mut pc := p.entry
-  let mut units : UInt64 := 0
   let mut status := finished
+  let mut r0 : UInt64 := 0
   let mut detail := ""
-  let mut logs : Array String := Array.emptyWithCapacity 4
-  let mut running := p.error == ""
-  if !running then
-    status := unsupportedInstruction
-    detail := p.error
-  while running do
+  repeat
     if units >= budget then
       status := budgetExceeded
       break
@@ -391,24 +942,25 @@ def run (p : Program) (input : ByteArray) (clock : Clock) (budget : UInt64) : Ou
       if opc == 0x05 then
         next := (next.toUInt64 + off).toNat
       else if opc == 0x95 then
-        if depth == 0 then
+        if calls == 0 then
           break
         -- return from a call inside the program
-        depth := depth - 1
+        calls := calls - 1
         for k in [0:4] do
-          regs := regs.set! (6 + k) frames[depth * 6 + k]!
-        regs := regs.set! 10 frames[depth * 6 + 4]!
-        next := frames[depth * 6 + 5]!.toNat
-      else if opc == 0x85 && imm32 != 0xFFFFFFFF || opc == 0x8d then
-        -- call a function of the program: relative target, or (callx) an address in a register
-        let target := if opc == 0x85 then next.toUInt64 + imm
-          else (regs[(imm32 &&& 15).toNat]! - programStart - p.textOff.toUInt64) / 8
+          regs := regs.set! (6 + k) frames[calls * 6 + k]!
+        regs := regs.set! 10 frames[calls * 6 + 4]!
+        next := frames[calls * 6 + 5]!.toNat
+      else if opc == 0x8d || (opc == 0x85 && p.syscalls[pc]! == 0) then
+        -- call a function of the program: by symbol, by relative offset, or (callx) through a register
+        let target := if opc == 0x8d then (regs[(imm32 &&& 15).toNat]! - programStart - p.textOff.toUInt64) / 8
+          else if p.calls[pc]! != 0 then p.calls[pc]! - 1
+          else next.toUInt64 + imm
         for k in [0:4] do
-          frames := frames.set! (depth * 6 + k) regs[6 + k]!
-        frames := frames.set! (depth * 6 + 4) regs[10]!
-        frames := frames.set! (depth * 6 + 5) next.toUInt64
-        depth := depth + 1
-        if depth == maxDepth then
+          frames := frames.set! (calls * 6 + k) regs[6 + k]!
+        frames := frames.set! (calls * 6 + 4) regs[10]!
+        frames := frames.set! (calls * 6 + 5) next.toUInt64
+        calls := calls + 1
+        if calls == maxDepth then
           status := callDepthExceeded
           break
         regs := regs.set! 10 (regs[10]! + frameBytes.toUInt64)
@@ -422,6 +974,7 @@ def run (p : Program) (input : ByteArray) (clock : Clock) (budget : UInt64) : Ou
         let a1 := regs[1]!
         let a2 := regs[2]!
         let a3 := regs[3]!
+        let mut result : UInt64 := 0
         if id == sysLog then
           units := units + (if a2 > 100 then a2 else 100)
           match readBytes p mem inputLen a1 a2 with
@@ -440,7 +993,7 @@ def run (p : Program) (input : ByteArray) (clock : Clock) (budget : UInt64) : Ou
           logs := logs.push s!"consumption: {budget - units} units remaining"
         else if id == sysMemcpy || id == sysMemmove then
           units := units + memCost a3
-          let dest := locate p inputLen a1 (if a3 > 0x10000000 then 0x10000001 else a3.toNat) true
+          let dest := writable p inputLen a1 a3
           match readBytes p mem inputLen a2 a3 with
           | none => status := accessViolation
           | some bytes =>
@@ -450,7 +1003,7 @@ def run (p : Program) (input : ByteArray) (clock : Clock) (budget : UInt64) : Ou
               status := accessViolation
         else if id == sysMemset then
           units := units + memCost a3
-          let dest := locate p inputLen a1 (if a3 > 0x10000000 then 0x10000001 else a3.toNat) true
+          let dest := writable p inputLen a1 a3
           if Wire.ok dest then
             for i in [0:a3.toNat] do
               mem := mem.set! (dest + i) a2.toUInt8
@@ -459,7 +1012,7 @@ def run (p : Program) (input : ByteArray) (clock : Clock) (budget : UInt64) : Ou
         else if id == sysMemcmp then
           -- compares two ranges and stores the difference of the first unequal bytes as an i32
           units := units + memCost a3
-          let dest := locate p inputLen regs[4]! 4 true
+          let dest := writable p inputLen regs[4]! 4
           match readBytes p mem inputLen a1 a3, readBytes p mem inputLen a2 a3 with
           | some x, some y =>
             if Wire.ok dest then
@@ -488,34 +1041,126 @@ def run (p : Program) (input : ByteArray) (clock : Clock) (budget : UInt64) : Ou
                 match readBytes p mem inputLen (Wire.u64 pair 0) len with
                 | none => status := accessViolation
                 | some part => message := message ++ part
-            let dest := locate p inputLen a3 32 true
+            let dest := writable p inputLen a3 32
             if status == finished && Wire.ok dest then
               mem := (Sha256.hash message).copySlice 0 mem dest 32
             else
               status := accessViolation
-        else if id == sysClock then
-          units := units + 140
-          let dest := locate p inputLen a1 40 true
+        else if id == sysClock || id == sysRent then
+          -- a sysvar, copied out in its in-memory layout
+          let bytes := if id == sysClock then clockBytes m.clock else rentBytes
+          units := units + 100 + bytes.size.toUInt64
+          let dest := writable p inputLen a1 bytes.size.toUInt64
           if Wire.ok dest then
-            mem := storeAt mem dest 8 clock.slot
-            mem := storeAt mem (dest + 8) 8 clock.epochStartTimestamp
-            mem := storeAt mem (dest + 16) 8 clock.epoch
-            mem := storeAt mem (dest + 24) 8 clock.leaderScheduleEpoch
-            mem := storeAt mem (dest + 32) 8 clock.unixTimestamp
+            mem := bytes.copySlice 0 mem dest bytes.size
           else
             status := accessViolation
-        else if id == sysAbort then
+        else if id == sysGetSysvar then
+          -- part of a sysvar's serialized form: a1 names it, a3 and r4 give offset and length
+          let length := regs[4]!
+          units := units + 100 + (if length / 250 > 10 then length / 250 else 10)
+          match readBytes p mem inputLen a1 32 with
+          | none => status := accessViolation
+          | some name =>
+            let whole := if name == rentSysvar then rentBytes.extract 0 17
+              else if name == clockSysvar then clockBytes m.clock else ByteArray.empty
+            let dest := writable p inputLen a2 length
+            if whole.size == 0 then
+              result := 2
+            else if a3 > whole.size.toUInt64 || length > whole.size.toUInt64 || a3 + length > whole.size.toUInt64 then
+              result := 1
+            else if Wire.ok dest then
+              mem := (whole.extract a3.toNat (a3 + length).toNat).copySlice 0 mem dest length.toNat
+            else
+              status := accessViolation
+        else if id == sysSetReturn then
+          units := units + 100 + a2 / 250
+          match readBytes p mem inputLen a1 a2 with
+          | none => status := accessViolation
+          | some bytes =>
+            if bytes.size > 1024 then
+              status := accessViolation
+            else
+              returnData := programId ++ bytes
+        else if id == sysGetReturn then
+          -- copies up to a2 bytes of the last return data to a1 and its program to a3; returns its length
+          units := units + 100
+          if returnData.size > 32 then
+            let payload := returnData.extract 32 returnData.size
+            let n := if a2 < payload.size.toUInt64 then a2 else payload.size.toUInt64
+            units := units + (n + 32) / 250
+            let dest := writable p inputLen a1 n
+            let idDest := writable p inputLen a3 32
+            if Wire.ok dest && Wire.ok idDest then
+              mem := (payload.extract 0 n.toNat).copySlice 0 mem dest n.toNat
+              mem := (returnData.extract 0 32).copySlice 0 mem idDest 32
+              result := payload.size.toUInt64
+            else
+              status := accessViolation
+        else if id == sysStackHeight then
+          units := units + 100
+          result := depth.toUInt64
+        else if id == sysSibling then
+          units := units + 100
+        else if id == sysFindAddress || id == sysCreateAddress then
+          -- seeds at a1 (a2 of them), program address at a3; results to r4 (and the bump to r5)
+          units := units + 1500
+          match readSlices p mem inputLen a1 a2, readBytes p mem inputLen a3 32 with
+          | some seeds, some owner =>
+            let mut address := ByteArray.empty
+            let mut bump : UInt64 := 0
+            if id == sysCreateAddress then
+              match createProgramAddress seeds owner with
+              | some found => address := found
+              | none => result := 1
+            else
+              result := 1
+              for i in [0:256] do
+                if result == 1 then
+                  match createProgramAddress (seeds.push (ByteArray.empty.push (255 - i).toUInt8)) owner with
+                  | some found =>
+                    address := found
+                    bump := (255 - i).toUInt64
+                    result := 0
+                  | none => units := units + 1500
+            if result == 0 then
+              let dest := writable p inputLen regs[4]! 32
+              let bumpDest := if id == sysFindAddress then writable p inputLen regs[5]! 1 else 0
+              if Wire.ok dest && Wire.ok bumpDest then
+                mem := address.copySlice 0 mem dest 32
+                if id == sysFindAddress then
+                  mem := mem.set! bumpDest bump.toUInt8
+              else
+                status := accessViolation
+          | _, _ => status := accessViolation
+        else if id == sysInvoke then
+          let (after, memAfter) := invoke m ⟨accounts, units, logs, returnData, finished, 0, ""⟩ programId metas entry
+            p mem inputLen a1 a2 a3 regs[4]! regs[5]! depth
+          mem := memAfter
+          let ⟨accounts1, units1, logs1, returnData1, status1, r01, detail1⟩ := after
+          accounts := accounts1
+          units := units1
+          logs := logs1
+          returnData := returnData1
+          status := status1
+          r0 := r01
+          detail := detail1
+        else if id == sysAbort || id == sysPanic then
           status := aborted
+          if id == sysPanic then
+            match readBytes p mem inputLen a1 a2 with
+            | none => pure ()
+            | some file => detail := s!"panicked at {printable file}:{a3}"
         else
           status := unsupportedSyscall
-          detail := "the program makes a system call this machine does not provide (for example calling another program)"
+          detail := "the program makes a system call this machine does not provide"
         if status != finished then
           break
         if units > budget then
           status := budgetExceeded
           break
-        regs := regs.set! 0 0
-      else if op == 0 || op == 0x80 || op == 0x90 || op > 0xd0 || opc &&& 7 != 5 then
+        regs := regs.set! 0 result
+      else if op == 0 || op == 0x80 || op == 0x90 || op > 0xd0 then
         status := unsupportedInstruction
         break
       else
@@ -537,7 +1182,7 @@ def run (p : Program) (input : ByteArray) (clock : Clock) (budget : UInt64) : Ou
       let idx := locate p inputLen addr size (cls != 1)
       if !(Wire.ok idx) then
         status := accessViolation
-        detail := s!"at address {hex64 addr}"
+        detail := s!"at address {hex64 addr}, instruction {pc}"
         break
       if cls == 1 then
         regs := regs.set! dst (loadAt p mem idx size)
@@ -549,85 +1194,54 @@ def run (p : Program) (input : ByteArray) (clock : Clock) (budget : UInt64) : Ou
     pc := next
   if status == unsupportedInstruction && detail == "" then
     detail := s!"at instruction {pc}"
-  return ⟨status, regs[0]!, units, mem.extract (stackBytes + heapBytes) mem.size, logs, detail⟩
+  if status == finished && regs[0]! != 0 then
+    status := programFailed
+    r0 := regs[0]!
+  if status == finished then
+    -- the program is done: take its changes to the accounts, if the rules allow them
+    let mut o := stackBytes + heapBytes + 8
+    let mut sum : UInt64 := 0
+    for i in [0:metas.size] do
+      if status == finished then
+        if isRepeat metas i then
+          o := o + 8
+        else
+          let index := metas[i]!.index
+          let account := accounts[index]!
+          let was := entry[index]!.data.size
+          let len := Wire.u64 mem (o + 80)
+          if len > (was + maxGrowth).toUInt64 then
+            status := invalidRealloc
+          else
+            let lamports := Wire.u64 mem (o + 72)
+            let owner := mem.extract (o + 40) (o + 72)
+            let contents := mem.extract (o + 88) (o + 88 + len.toNat)
+            let why := changeError programId metas[i]!.writable account lamports owner contents
+            if why != "" then
+              status := accountRule
+              detail := why
+            else
+              accounts := accounts.set! index { account with lamports := lamports, owner := owner, data := contents }
+              sum := sum + lamports
+          o := o + accountSpan was
+    if status == finished && sum != entrySum then
+      status := unbalanced
+  return ⟨accounts, units, logs, returnData, status, r0, detail⟩
 
--- ------------------------------------------------------------------- input
---
--- A program receives its accounts, instruction data and own address in one
--- buffer, laid out the way Solana's loader does (the "aligned" format).
+end
 
-/-- An account as passed to a program. -/
-structure Account where
-  key : ByteArray
-  owner : ByteArray
-  lamports : UInt64
-  data : ByteArray
-  signer : Bool
-  writable : Bool
-  deriving Inhabited
-
-def zeros (b : ByteArray) (n : Nat) : ByteArray := Id.run do
-  let mut out := b
-  for _ in [0:n] do
-    out := out.push 0
-  return out
-
-/-- Bytes an account occupies in the input: header, data, room to grow, alignment, rent epoch. -/
-def accountSpan (dataLen : Nat) : Nat := (dataLen + 10343) / 8 * 8
-
-def serialize (accounts : Array Account) (instruction programId : ByteArray) : ByteArray := Id.run do
-  let mut b := Wire.putU64 (ByteArray.emptyWithCapacity 16384) accounts.size.toUInt64
-  for i in [0:accounts.size] do
-    let a := accounts[i]!
-    -- an account listed twice is serialized once; later mentions point at the first
-    let mut first := i
-    for j in [0:i] do
-      if first == i && accounts[j]!.key == a.key then
-        first := j
-    if first != i then
-      b := zeros (b.push first.toUInt8) 7
-    else
-      b := b.push 0xff
-      b := b.push (if a.signer then 1 else 0)
-      b := b.push (if a.writable then 1 else 0)
-      b := zeros b 5
-      b := b ++ a.key
-      b := b ++ a.owner
-      b := Wire.putU64 b a.lamports
-      b := Wire.putU64 b a.data.size.toUInt64
-      b := b ++ a.data
-      b := zeros b (accountSpan a.data.size - 88 - a.data.size - 8)
-      b := Wire.putU64 b 0xFFFFFFFFFFFFFFFF
-  b := Wire.putU64 b instruction.size.toUInt64
-  b := b ++ instruction
-  return b ++ programId
-
-/-- Reads the accounts back out of the input region after a run. -/
-def readBack (accounts : Array Account) (input : ByteArray) : Array Account := Id.run do
-  let mut out : Array Account := Array.emptyWithCapacity accounts.size
-  let mut o := 8
-  for i in [0:accounts.size] do
-    let a := accounts[i]!
-    let mut first := i
-    for j in [0:i] do
-      if first == i && accounts[j]!.key == a.key then
-        first := j
-    if first != i then
-      out := out.push out[first]!
-      o := o + 8
-    else
-      let len := Wire.u64 input (o + 80)
-      -- a program may grow an account by up to 10240 bytes
-      let size := if len > (a.data.size + 10240).toUInt64 then a.data.size else len.toNat
-      out := out.push { a with lamports := Wire.u64 input (o + 72), data := input.extract (o + 88) (o + 88 + size) }
-      o := o + accountSpan a.data.size
-  return out
+/-- Processes a top-level instruction. A failed instruction leaves the accounts as they were. -/
+def process (m : Machine) (accounts : Array Account) (programId : ByteArray) (metas : Array Meta)
+    (data : ByteArray) : State :=
+  let st := execute m ⟨accounts, 0, Array.emptyWithCapacity 4, ByteArray.empty, finished, 0, ""⟩ programId metas data 1
+  if st.status == finished then st else { st with accounts := accounts }
 
 /-- Names for the standard program errors a program returns in `r0`. -/
 def errorName (r0 : UInt64) : String :=
   let code := r0 >>> 32
   if r0 == 0 then "success"
   else if r0 &&& 0xFFFFFFFF != 0 && code == 0 then s!"custom error {r0}"
+  else if code == 1 then "custom error 0"
   else if code == 2 then "InvalidArgument"
   else if code == 3 then "InvalidInstructionData"
   else if code == 4 then "InvalidAccountData"
@@ -641,5 +1255,12 @@ def errorName (r0 : UInt64) : String :=
   else if code == 18 then "IllegalOwner"
   else if code == 24 then "ArithmeticOverflow"
   else s!"program error {hex64 r0}"
+
+/-- One line describing how an instruction ended. -/
+def outcome (st : State) : String :=
+  if st.status == finished then "success"
+  else if st.status == programFailed then errorName st.r0
+  else if st.detail == "" then statusName st.status
+  else s!"{statusName st.status}: {st.detail}"
 
 end Sbpf

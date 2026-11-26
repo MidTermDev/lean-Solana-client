@@ -141,75 +141,147 @@ def hashCheckProgram : ByteArray := Hex.decode (
   "0000000000000800000000000000100000000000000031000000030000000000000000000000000000000000000050050000" ++
   "000000003b00000000000000000000000000000001000000000000000000000000000000")
 
-def key (name : String) : ByteArray := Sha256.hash name.toUTF8
+/-- Wraps raw instructions in the smallest ELF file the loader accepts: a
+header, the code, a section-name table and three section headers. Used to
+write programs that break the rules, which no compiler will produce. -/
+def wrap (code : ByteArray) : ByteArray := Id.run do
+  let names := Hex.decode "002e74657874002e736873747274616200"   -- "", ".text", ".shstrtab"
+  let table := 64 + code.size + 24
+  let mut f := Sbpf.zeros ByteArray.empty (table + 192)
+  f := (Hex.decode "7f454c46020101").copySlice 0 f 0 7
+  f := Sbpf.storeAt f 16 2 3            -- a shared object
+  f := Sbpf.storeAt f 18 2 247          -- for the BPF machine
+  f := Sbpf.storeAt f 24 8 64           -- entry: the first instruction
+  f := Sbpf.storeAt f 40 8 table.toUInt64
+  f := Sbpf.storeAt f 60 2 3
+  f := Sbpf.storeAt f 62 2 2
+  f := code.copySlice 0 f 64 code.size
+  f := names.copySlice 0 f (64 + code.size) names.size
+  f := Sbpf.storeAt f (table + 64) 4 1          -- .text
+  f := Sbpf.storeAt f (table + 64 + 16) 8 64
+  f := Sbpf.storeAt f (table + 64 + 24) 8 64
+  f := Sbpf.storeAt f (table + 64 + 32) 8 code.size.toUInt64
+  f := Sbpf.storeAt f (table + 128) 4 7         -- .shstrtab
+  f := Sbpf.storeAt f (table + 128 + 24) 8 (64 + code.size).toUInt64
+  f := Sbpf.storeAt f (table + 128 + 32) 8 names.size.toUInt64
+  return f
 
-def systemProgram : ByteArray := Id.run do
-  let mut b := ByteArray.emptyWithCapacity 32
-  for _ in [0:32] do
-    b := b.push 0
-  return b
+/-- Writes 42 into the first data byte of its first account. -/
+def scribbler : ByteArray := wrap (Hex.decode (
+  "720160002a000000" ++      -- stb  [r1 + 96], 42
+  "b700000000000000" ++      -- mov  r0, 0
+  "9500000000000000"))       -- exit
+
+/-- Gives its first account one lamport out of thin air. -/
+def forger : ByteArray := wrap (Hex.decode (
+  "7912500000000000" ++      -- ldxdw r2, [r1 + 80]
+  "0702000001000000" ++      -- add   r2, 1
+  "7b21500000000000" ++      -- stxdw [r1 + 80], r2
+  "b700000000000000" ++
+  "9500000000000000"))
+
+/-- Moves one lamport from its first account (no data) to its second. -/
+def mover : ByteArray := wrap (Hex.decode (
+  "7912500000000000" ++      -- ldxdw r2, [r1 + 80]
+  "1702000001000000" ++      -- sub   r2, 1
+  "7b21500000000000" ++      -- stxdw [r1 + 80], r2
+  "7912b02800000000" ++      -- ldxdw r2, [r1 + 10416]
+  "0702000001000000" ++      -- add   r2, 1
+  "7b21b02800000000" ++      -- stxdw [r1 + 10416], r2
+  "b700000000000000" ++
+  "9500000000000000"))
+
+def key (name : String) : ByteArray := Sha256.hash name.toUTF8
 
 def clock : Sbpf.Clock := ⟨123456789, 0, 0, 0, 0⟩
 
 def le64 (v : UInt64) : ByteArray := Wire.putU64 (ByteArray.emptyWithCapacity 8) v
 
-def report (label : String) (o : Sbpf.Outcome) : IO Unit := do
-  IO.println s!"{label}: {Sbpf.statusName o.status}, {Sbpf.errorName o.r0}, {o.units} units"
-  for line in o.logs do
+def report (label : String) (st : Sbpf.State) : IO Unit := do
+  IO.println s!"{label}: {Sbpf.outcome st}, {st.units} units"
+  for line in st.logs do
     IO.println s!"  log: {line}"
 
 def main : IO Unit := do
   let programId := key "program"
+  let system := Sbpf.systemProgram
 
   -- Noop: no accounts, no data
   let noop := Sbpf.load noopProgram
   IO.println s!"noop: {noop.count} instructions, load error '{noop.error}'"
-  report "noop" (Sbpf.run noop (Sbpf.serialize #[] ByteArray.empty programId) clock 200000)
+  let m := (Sbpf.Machine.create clock 200000).add programId noop
+  report "noop" (Sbpf.process m #[] programId #[] ByteArray.empty)
 
   -- Counter: init, increment, add 41, overflow, unsigned reset, signed reset
-  let counter := Sbpf.load counterProgram
-  let mut acct : Sbpf.Account := ⟨key "counter", programId, 1000000, le64 999, false, true⟩
+  let m := (Sbpf.Machine.create clock 200000).add programId (Sbpf.load counterProgram)
+  let mut accounts : Array Sbpf.Account := #[⟨key "counter", programId, 1000000, le64 999, false⟩]
+  let writable : Array Sbpf.Meta := #[⟨0, false, true⟩]
   let steps : Array ByteArray := #[ByteArray.empty.push 0, ByteArray.empty.push 1,
     (ByteArray.empty.push 2) ++ le64 41, (ByteArray.empty.push 2) ++ le64 0xFFFFFFFFFFFFFFFF, ByteArray.empty.push 3]
   for ix in steps do
-    let o := Sbpf.run counter (Sbpf.serialize #[acct] ix programId) clock 200000
-    report s!"counter op {ix[0]!}" o
-    if o.status == 0 && o.r0 == 0 then
-      acct := (Sbpf.readBack #[acct] o.input)[0]!
-    IO.println s!"  count = {Wire.u64 acct.data 0}"
-  let signed := { acct with signer := true }
-  let o := Sbpf.run counter (Sbpf.serialize #[signed] (ByteArray.empty.push 3) programId) clock 200000
-  report "counter reset, signed" o
-  IO.println s!"  count = {Wire.u64 (Sbpf.readBack #[signed] o.input)[0]!.data 0}"
+    let st := Sbpf.process m accounts programId writable ix
+    report s!"counter op {ix[0]!}" st
+    accounts := st.accounts
+    IO.println s!"  count = {Wire.u64 accounts[0]!.data 0}"
+  let st := Sbpf.process m accounts programId #[⟨0, true, true⟩] (ByteArray.empty.push 3)
+  report "counter reset, signed" st
+  IO.println s!"  count = {Wire.u64 st.accounts[0]!.data 0}"
   -- an account the program does not own must be refused
-  let foreign := { acct with owner := systemProgram }
-  report "counter, wrong owner" (Sbpf.run counter (Sbpf.serialize #[foreign] (ByteArray.empty.push 1) programId) clock 200000)
+  let foreign : Array Sbpf.Account := #[⟨key "counter", system, 1000000, le64 999, false⟩]
+  report "counter, wrong owner" (Sbpf.process m foreign programId writable (ByteArray.empty.push 1))
   -- a budget that is too small stops the run
-  report "counter, 10-unit budget" (Sbpf.run counter (Sbpf.serialize #[acct] (ByteArray.empty.push 1) programId) clock 10)
+  let tight := (Sbpf.Machine.create clock 10).add programId (Sbpf.load counterProgram)
+  report "counter, 10-unit budget" (Sbpf.process tight accounts programId writable (ByteArray.empty.push 1))
 
   -- Vault: the authority signs, 3.5M lamports move from the vault to the destination
-  let vault := Sbpf.load vaultProgram
-  let authority : Sbpf.Account := ⟨key "authority", systemProgram, 0, ByteArray.empty, true, false⟩
-  let source : Sbpf.Account := ⟨key "vault", programId, 10000000, key "authority", false, true⟩
-  let dest : Sbpf.Account := ⟨key "dest", systemProgram, 2000000, ByteArray.empty, false, true⟩
-  let o := Sbpf.run vault (Sbpf.serialize #[authority, source, dest] (le64 3500000) programId) clock 200000
-  report "vault" o
-  let after := Sbpf.readBack #[authority, source, dest] o.input
-  IO.println s!"  vault {after[1]!.lamports}, destination {after[2]!.lamports}"
+  let m := (Sbpf.Machine.create clock 200000).add programId (Sbpf.load vaultProgram)
+  let vault : Array Sbpf.Account := #[⟨key "authority", system, 0, ByteArray.empty, false⟩,
+    ⟨key "vault", programId, 10000000, key "authority", false⟩, ⟨key "dest", system, 2000000, ByteArray.empty, false⟩]
+  let signed : Array Sbpf.Meta := #[⟨0, true, false⟩, ⟨1, false, true⟩, ⟨2, false, true⟩]
+  let st := Sbpf.process m vault programId signed (le64 3500000)
+  report "vault" st
+  IO.println s!"  vault {st.accounts[1]!.lamports}, destination {st.accounts[2]!.lamports}"
   -- without the signature nothing moves
-  let unsigned := { authority with signer := false }
-  report "vault, unsigned" (Sbpf.run vault (Sbpf.serialize #[unsigned, source, dest] (le64 3500000) programId) clock 200000)
+  report "vault, unsigned" (Sbpf.process m vault programId #[⟨0, false, false⟩, ⟨1, false, true⟩, ⟨2, false, true⟩] (le64 3500000))
   -- more than the vault holds
-  report "vault, overdraw" (Sbpf.run vault (Sbpf.serialize #[authority, source, dest] (le64 99000000) programId) clock 200000)
+  report "vault, overdraw" (Sbpf.process m vault programId signed (le64 99000000))
 
   -- HashCheck: sha256 of the instruction data and the clock's slot land in the account
-  let hashCheck := Sbpf.load hashCheckProgram
-  let state : Sbpf.Account := ⟨key "state", programId, 1000000, Sbpf.zeros ByteArray.empty 40, false, true⟩
+  let m := (Sbpf.Machine.create clock 200000).add programId (Sbpf.load hashCheckProgram)
+  let state : Array Sbpf.Account := #[⟨key "state", programId, 1000000, Sbpf.zeros ByteArray.empty 40, false⟩]
   let payload := "hello from formally verified Lean 4 on Solana SVM!".toUTF8
-  let o := Sbpf.run hashCheck (Sbpf.serialize #[state] payload programId) clock 200000
-  report "hashcheck" o
-  let data := (Sbpf.readBack #[state] o.input)[0]!.data
+  let st := Sbpf.process m state programId writable payload
+  report "hashcheck" st
+  let data := st.accounts[0]!.data
   IO.println s!"  stored hash matches sha256(payload): {data.extract 0 32 == Sha256.hash payload}, slot {Wire.u64 data 32}"
+
+  -- The runtime's own rules, tested with hand-assembled programs that ignore them.
+  -- A program may write the data of accounts it owns, when they are passed as writable...
+  let m := (Sbpf.Machine.create clock 200000).add programId (Sbpf.load scribbler)
+  let own : Array Sbpf.Account := #[⟨key "page", programId, 1000000, le64 0, false⟩]
+  let st := Sbpf.process m own programId writable ByteArray.empty
+  report "scribbler, own account" st
+  IO.println s!"  first byte {st.accounts[0]!.data[0]!}"
+  -- ...but not when they are read-only, and never someone else's
+  let st := Sbpf.process m own programId #[⟨0, false, false⟩] ByteArray.empty
+  report "scribbler, read-only account" st
+  IO.println s!"  first byte {st.accounts[0]!.data[0]!}"
+  let others : Array Sbpf.Account := #[⟨key "page", key "another program", 1000000, le64 0, false⟩]
+  report "scribbler, someone else's account" (Sbpf.process m others programId writable ByteArray.empty)
+  -- lamports cannot be created
+  let m := (Sbpf.Machine.create clock 200000).add programId (Sbpf.load forger)
+  report "forger" (Sbpf.process m own programId writable ByteArray.empty)
+  -- a program may spend from accounts it owns, and only from those
+  let m := (Sbpf.Machine.create clock 200000).add programId (Sbpf.load mover)
+  let both : Array Sbpf.Meta := #[⟨0, false, true⟩, ⟨1, false, true⟩]
+  let purse : Array Sbpf.Account := #[⟨key "purse", programId, 500, ByteArray.empty, false⟩, ⟨key "dest", system, 100, ByteArray.empty, false⟩]
+  let st := Sbpf.process m purse programId both ByteArray.empty
+  report "mover, own purse" st
+  IO.println s!"  purse {st.accounts[0]!.lamports}, destination {st.accounts[1]!.lamports}"
+  let wallet : Array Sbpf.Account := #[⟨key "wallet", system, 500, ByteArray.empty, false⟩, ⟨key "dest", system, 100, ByteArray.empty, false⟩]
+  let st := Sbpf.process m wallet programId both ByteArray.empty
+  report "mover, someone's wallet" st
+  IO.println s!"  wallet {st.accounts[0]!.lamports}, destination {st.accounts[1]!.lamports}"
 
   -- garbage is not a program
   let junk := Sbpf.load (Sbpf.zeros ByteArray.empty 100)

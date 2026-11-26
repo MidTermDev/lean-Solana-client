@@ -14,6 +14,8 @@ jobs:
       - name: build without a C compiler
         run: make CC=/bin/false
       - run: make test
+      - name: a Lean program calls the token programs, from the command line
+        run: examples/amm.sh | grep -q 'units     4,690 of 200,000'
       - name: the outputs are static and freestanding
         run: |
           file build/leanc build/leansol

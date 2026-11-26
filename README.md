@@ -30,7 +30,7 @@ Inspired by toly's remark that a Lean Solana client would be easy once you have 
 | its own dependency-free Lean → machine compiler | `leanc/` — **Lean 4 in, static x86-64 ELF out**. No LLVM, no C backend, no assembler, no linker, no libc |
 | a raw futex for IPC | `lib/Ipc.lean` — lock-free rings in shared memory; the only kernel object is **one futex word** |
 
-And since toly then published [lean-svm](https://github.com/aeyakovenko/lean-svm), which compiles Lean into on-chain programs, there is a fourth piece: an **sBPF virtual machine** (`lib/Solana/Sbpf.lean`), also in Lean, that runs those programs. Lean on both sides of the bytecode.
+And since toly then published [lean-svm](https://github.com/aeyakovenko/lean-svm), which compiles Lean into on-chain programs, there is a fourth piece: an **sBPF virtual machine** (`lib/Solana/Sbpf.lean`), also in Lean, that runs those programs, including the ones that call the real SPL token programs. Lean on both sides of the bytecode.
 
 <p align="center">
   <img src="docs/dashboard.svg" alt="The client's dashboard after 45 seconds on mainnet: 4,005 nodes discovered, 40,119 signatures verified, 0 bad" width="860">
@@ -57,7 +57,7 @@ It can also **run on-chain programs** locally, with `leansol run`: see [Run on-c
 
 ## Quick start
 
-**Just run it.** Every release ships the client as a single 234 KB static binary (Linux, x86-64):
+**Just run it.** Every release ships the client as a single 282 KB static binary (Linux, x86-64):
 
 ```sh
 curl -LO https://github.com/MidTermDev/lean-Solana-client/releases/latest/download/leansol-x86_64-linux
@@ -189,9 +189,9 @@ Like everything else here, the server is Lean: `socket`, `listen`, `accept` by s
 
 ## Run on-chain programs
 
-Solana programs are sBPF bytecode. `leansol run` loads one and executes it in a virtual machine written in Lean: the interpreter, the memory map, the system calls, and the compute-unit meter.
+Solana programs are sBPF bytecode. `leansol run` loads one and executes it in a virtual machine written in Lean: the loader, the interpreter, the memory map, the system calls, the compute-unit meter, and the runtime's rules for accounts and for programs calling other programs.
 
-The programs it is tested on are themselves written in Lean. toly's [lean-svm](https://github.com/aeyakovenko/lean-svm) compiles Lean 4 to sBPF; four of its example programs are checked in under [`tests/programs/`](tests/programs/), unmodified:
+The programs it is tested on are themselves written in Lean. toly's [lean-svm](https://github.com/aeyakovenko/lean-svm) compiles Lean 4 to sBPF; seven of its example programs are checked in under [`tests/programs/`](tests/programs/), unmodified:
 
 ```console
 $ ./build/leansol run tests/programs/counter.so --data 01 \
@@ -224,12 +224,61 @@ account   dest         lamports      5,500,000   data (no data)   (changed)
 | Counter | account checks, checked arithmetic | 45 / 50 / 52 (init / increment / add) |
 | Vault | three accounts, lamport transfer, `sol_log_` | 195 |
 | HashCheck | `sol_sha256`, the Clock sysvar, stack buffers | 413 |
+| Amm | calls Token and Token-2022; signs for its vaults | 292 / 4,690 / 4,690 / 4,708 (init / add / swap / remove) |
+| BondingCurve | mints and burns Token-2022 as the mint authority | 227 / 4,980 / 3,701 (init / buy / sell) |
+| DutchAuction | Token-2022 NFT escrow, the Clock, SOL through the system program | 3,296 / 4,672 (create / buy) |
 
 Getting there means matching the reference interpreter's quirks, such as 32-bit add, subtract and multiply sign-extending their results in sBPF v0 while the other 32-bit operations zero-extend. [`tests/sbpf.lean`](tests/sbpf.lean) also checks the failure paths: overflow, a missing signature, a foreign owner, an exhausted budget.
 
-`make programs` rebuilds the four programs from lean-svm at a pinned commit (it needs the official Lean toolchain) and compares them byte for byte with the checked-in files.
+`make programs` rebuilds the seven programs from lean-svm at a pinned commit (it needs the official Lean toolchain) and compares them byte for byte with the checked-in files.
 
-**Limits.** sBPF v0 only. No cross-program invocation, so programs that call the token or system programs cannot run yet. Execution is local: nothing is deployed or sent.
+### Programs calling programs
+
+Almost nothing useful on Solana is one program. Moving a token means calling the token program; paying someone means calling the system program. The virtual machine does this: **cross-program invocation**.
+
+The last three rows of the table are programs written in Lean that move real tokens. The token programs they call are not stand-ins: [`tests/programs/`](tests/programs/) holds the SPL **Token-2022** program (1.4 MB of Rust-compiled bytecode) and **p-token**, the program that serves the classic Token address, exactly as [LiteSVM](https://github.com/LiteSVM/litesvm) ships them. They run unmodified, called from Lean:
+
+```console
+$ ./build/tests/cpi          # tests/cpi.lean, lean-svm's own AMM scenario
+loaded: amm 1350 instructions, token 11805, token-2022 53702
+pool authority found with bump 255: on curve false
+user holds 2000000 A and 2000000 B
+init pool: success, 292 units
+add liquidity: success, 4690 units
+  vaults hold 1000000 A and 1000000 B
+swap: success, 4690 units
+  vaults hold 1100000 A and 909339 B; user holds 1090661 B
+remove liquidity: success, 4708 units
+  vaults hold 550000 A and 454670 B
+```
+
+One swap involves three programs: the AMM checks the trade, calls Token to take the user's token A, then calls Token-2022 to pay token B out of the pool's vault. The compute units of all of them add up to the number Agave reports, 4,690.
+
+What that takes:
+
+- **A real loader.** Programs from the Rust toolchain are not position-independent the way lean-svm's are: the loader applies their relocations (`R_BPF_64_RELATIVE`, `R_BPF_64_64`, `R_BPF_64_32`) and resolves calls by symbol, as the validator does when a program is deployed.
+- **The call itself** (`sol_invoke_signed_c`). The caller's memory holds its own view of each account. Before the callee runs, the caller's changes are copied into the account store; after it returns, the callee's changes are written back into the caller's memory, including resized data.
+- **Privileges.** A callee can be given only what the caller has: a signature the caller received, write access it received. Asking for more stops the transaction.
+- **Program-derived addresses.** The pool's vaults are owned by an address made by hashing seeds with the AMM's own address, and chosen *not* to be a point on the Ed25519 curve, so no private key exists for it. Only the AMM can sign for it, by presenting the seeds. This is where the Ed25519 code written for gossip gets a second job: deciding whether 32 bytes are a curve point.
+- **The account rules.** Only an account's owner may change its data or spend its lamports; read-only accounts stay unchanged; lamports are neither created nor destroyed. They are checked after every program returns and before every call. [`tests/sbpf.lean`](tests/sbpf.lean) includes three hand-assembled programs that break them, and must be stopped.
+- **The system program**, built in rather than bytecode: transfer, create account, assign, allocate.
+- **Agave's price list.** A call costs 946 units plus a unit per 250 bytes of instruction data and account data handed over; reading the Rent sysvar costs 124; deriving an address costs 1,500 per attempt. The totals only match if every one of these does.
+
+From the command line, `--program ADDRESS=FILE` loads a program for the main one to call, and `--full` prints account data in full so one run can feed the next. [`examples/amm.sh`](examples/amm.sh) builds two tokens, a pool and a deposit that way, from nothing but `leansol run`:
+
+```console
+$ examples/amm.sh
+$ leansol run amm.so --program Token=… --program Token-2022=… --data 01… (add 1,000,000 A + 1,000,000 B)
+program   tests/programs/amm.so · 11,728 bytes · 1,350 instructions
+result    success
+units     4,690 of 200,000
+log       Instruction: TransferChecked
+account   pool         lamports     10,000,000   data 01ff06091e000000…   (changed)
+account   vaultA       lamports     10,000,000   data 412d497fa453fec3…   (changed)
+…
+```
+
+**Limits.** sBPF v0 only. Programs call out with the C calling convention (`sol_invoke_signed_c`), which lean-svm and Pinocchio programs use; the Rust one (`sol_invoke_signed_rust`, used by Anchor and `solana-program`) is not implemented, so those programs can be called but cannot themselves call. The sysvars provided are Clock and Rent. A program may not yet call back into a program that is already running (Agave forbids most of that; here it is not checked). One instruction at a time: no transactions, fees or rent collection. Execution is local: nothing is deployed or sent.
 
 ### Compile your own Lean
 
@@ -409,13 +458,14 @@ make lean-check    # = lake build && tests/run.sh --oracle     (needs the offici
 ```
 
 - **`lake build`** makes the official Lean 4 toolchain type-check every Lean file here: runtime, libraries, client. The whole client is accepted by both compilers from the same source.
-- **Differential tests.** Each program in `tests/` is compiled by `leanc` and run; its output must equal `tests/expected/`, which was generated by running the same file under official Lean. They cover value semantics under aliasing, pattern matching, control flow, integer edge cases, SHA-2 at every message length from 0 to 300, Ed25519 signing and verification, lean-svm's programs in the sBPF virtual machine with Agave's compute-unit counts, and a fuzz run that throws 16,000 random and corrupted records at the wire parsers (which must neither crash nor disagree). Continuous integration runs both this and the plain build on every push.
+- **Differential tests.** Each program in `tests/` is compiled by `leanc` and run; its output must equal `tests/expected/`, which was generated by running the same file under official Lean. They cover value semantics under aliasing, pattern matching, control flow, integer edge cases, SHA-2 at every message length from 0 to 300, Ed25519 signing and verification, lean-svm's programs in the sBPF virtual machine with Agave's compute-unit counts, three of them calling the SPL token programs, and a fuzz run that throws 16,000 random and corrupted records at the wire parsers (which must neither crash nor disagree). Continuous integration runs both this and the plain build on every push.
 - **External references.** The crypto is additionally checked against Python's `hashlib` and `cryptography`, RFC 8032 vectors, and, continuously, mainnet itself.
 
 ```console
 $ make lean-check
 Build completed successfully (62 jobs).
 ok    basics (official Lean agrees)
+ok    cpi (official Lean agrees)
 ok    ed25519 (official Lean agrees)
 ok    fuzz_wire (official Lean agrees)
 ok    inplace (native only)
@@ -427,7 +477,7 @@ ok    sha (official Lean agrees)
 ok    sha_lengths (official Lean agrees)
 ok    tables (official Lean agrees)
 ok    text (official Lean agrees)
-12 passed, 0 failed
+13 passed, 0 failed
 ```
 
 The tests not marked "official Lean agrees" either use raw syscalls (`fork`, futexes), which exist only as machine code, or check behaviour specific to `leanc` (aborting on a bounds error, in-place updates).
@@ -440,9 +490,9 @@ Measured on one machine (Xeon Gold 5515+), single core unless noted. They are he
 |---|---|
 | `leanc` source | about 5,800 lines of C |
 | `leanc` binary | 143 KB, static, zero undefined symbols |
-| Lean in this repo | 5,000 lines: runtime 565, libraries 2,951, client 1,449 |
+| Lean in this repo | 5,650 lines: runtime 597, libraries 3,572, client 1,483 |
 | Compiling the whole client | **under 30 ms** |
-| `leansol` binary | **234 KB**, static |
+| `leansol` binary | **282 KB**, static |
 | Full build from a fresh clone | about 40 ms |
 | Ed25519 verification (Lean, compiled by `leanc`) | about 2,950 signatures/s per core |
 | SHA-256 (Lean, compiled by `leanc`) | about 72 MB/s |
@@ -474,7 +524,8 @@ client/           the tiles, the dashboard, the JSON/Prometheus export, main
 web/              the public site for a running node (static page + one proxy function)
 deploy/           a systemd unit for a long-running node
 tests/            programs + outputs produced by official Lean
-  programs/         on-chain programs compiled by lean-svm, as VM test inputs
+  programs/         on-chain programs as VM test inputs: lean-svm's, and the SPL token programs
+examples/         shell scripts that drive `leansol run`
 lakefile.toml     lets the official toolchain check all of the above
 ```
 
@@ -483,14 +534,14 @@ lakefile.toml     lets the official toolchain check all of the above
 Being straightforward about what this is:
 
 - **A gossip client, not a validator.** No blocks, no replay, no voting, no ledger verification. Getting from here to following the chain trustlessly means speaking the repair and turbine protocols, reassembling shreds (Reed–Solomon, Merkle proofs), and checking proof-of-history. None of that exists yet.
-- **The virtual machine runs single programs.** It executes sBPF v0 programs that do not call other programs. Replaying real transactions needs cross-program invocation, the full account model, and the built-in programs.
+- **The virtual machine runs instructions, not transactions.** Programs can call programs, with the token programs and the system program available. Replaying real transactions needs more: the Rust calling convention for calls, the remaining sysvars and built-in programs, sBPF v3, and transactions themselves (several instructions, fees, rent).
 - **Listen-only.** It answers pings but does not serve pull requests or push records to others.
 - **A simple store.** Records are remembered by hash, up to 400,000; when that fills (every several minutes on mainnet) the hash set is flushed and refilled rather than aged out record by record. The node table survives the flush.
 - **x86-64 Linux only.** The code generator and the syscall numbers are specific to it.
 - **The compiler is not self-hosted.** Its source is C. Nothing in the build uses a C toolchain, because a prebuilt compiler is checked in, but changing the compiler does.
 - **A subset of Lean.** No type classes or higher-order functions is a real restriction; the libraries here are written around it.
 - **`Nat` is 64 bits** (overflow traps rather than wraps; see above).
-- **Young code.** The compiler has been exercised by about 5,000 lines of Lean and the test suite, not by years of users. The Ed25519 implementation is variable-time, which is fine for verifying public data and not what you want around long-lived secret keys.
+- **Young code.** The compiler has been exercised by about 5,650 lines of Lean and the test suite, not by years of users. The Ed25519 implementation is variable-time, which is fine for verifying public data and not what you want around long-lived secret keys.
 - **The network moves.** Wire formats follow agave's current gossip code; when the protocol changes, this needs to follow.
 
 ## How this relates to lean-svm
@@ -504,10 +555,10 @@ They meet at the `.so` file: lean-svm writes it, the virtual machine here runs i
 ## FAQ
 
 **Can I write and deploy on-chain programs with this?**
-Write them with [lean-svm](https://github.com/aeyakovenko/lean-svm), and run them locally with `leansol run`. Deploying is not something this repository does: it does not build or send transactions, so use the standard Solana tools for that.
+Write them with [lean-svm](https://github.com/aeyakovenko/lean-svm), and run them locally with `leansol run`, including ones that use tokens. Deploying is not something this repository does: it does not build or send transactions, so use the standard Solana tools for that.
 
 **Is this the Lean theorem prover's language, or just "lean" as in small?**
-Both. The client is written in Lean 4, the language of the theorem prover, and the result is also small: a 234 KB static binary.
+Both. The client is written in Lean 4, the language of the theorem prover, and the result is also small: a 282 KB static binary.
 
 **Is there really no C toolchain involved?**
 Not in building or running anything here: `make` uses the checked-in `leanc` binary, which compiles Lean straight to an ELF. The compiler's *source* is C, so changing the compiler itself needs a C compiler (`make from-c`). The remaining step is for `leanc` to be written in Lean and compile itself; its subset is not there yet.

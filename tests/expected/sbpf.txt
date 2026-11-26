@@ -1,25 +1,35 @@
 noop: 2 instructions, load error ''
-noop: finished, success, 2 units
-counter op 0: finished, success, 45 units
+noop: success, 2 units
+counter op 0: success, 45 units
   count = 0
-counter op 1: finished, success, 50 units
+counter op 1: success, 50 units
   count = 1
-counter op 2: finished, success, 52 units
+counter op 2: success, 52 units
   count = 42
-counter op 2: finished, ArithmeticOverflow, 51 units
+counter op 2: ArithmeticOverflow, 51 units
   count = 42
-counter op 3: finished, MissingRequiredSignature, 49 units
+counter op 3: MissingRequiredSignature, 49 units
   count = 42
-counter reset, signed: finished, success, 50 units
+counter reset, signed: success, 50 units
   count = 0
-counter, wrong owner: finished, IllegalOwner, 28 units
-counter, 10-unit budget: compute budget exceeded, success, 10 units
-vault: finished, success, 195 units
+counter, wrong owner: IllegalOwner, 28 units
+counter, 10-unit budget: compute budget exceeded, 10 units
+vault: success, 195 units
   log: lean-svm: vault transfer ok
   vault 6500000, destination 5500000
-vault, unsigned: finished, MissingRequiredSignature, 30 units
-vault, overdraw: finished, InsufficientFunds, 86 units
-hashcheck: finished, success, 413 units
+vault, unsigned: MissingRequiredSignature, 30 units
+vault, overdraw: InsufficientFunds, 86 units
+hashcheck: success, 413 units
   log: lean-svm: sha256+clock ok
   stored hash matches sha256(payload): true, slot 123456789
+scribbler, own account: success, 3 units
+  first byte 42
+scribbler, read-only account: account rule violated: an account that was not passed as writable was modified, 3 units
+  first byte 0
+scribbler, someone else's account: account rule violated: the data of an account the program does not own was modified, 3 units
+forger: lamports were created or destroyed, 5 units
+mover, own purse: success, 8 units
+  purse 499, destination 101
+mover, someone's wallet: account rule violated: lamports were taken from an account the program does not own, 8 units
+  wallet 500, destination 100
 junk: 'not an ELF file'

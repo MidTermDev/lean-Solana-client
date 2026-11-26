@@ -1,0 +1,25 @@
+loaded: amm 1350 instructions, token 11805, token-2022 53702
+pool authority found with bump 255: on curve false
+user holds 2000000 A and 2000000 B
+init pool: success, 292 units
+add liquidity: success, 4690 units
+  vaults hold 1000000 A and 1000000 B
+swap: success, 4690 units
+  vaults hold 1100000 A and 909339 B; user holds 1090661 B
+remove liquidity: success, 4708 units
+  vaults hold 550000 A and 454670 B
+swap, user did not sign: MissingRequiredSignature, 307 units
+swap, slippage too tight: InvalidArgument, 577 units
+swap, vault A read-only: a call asked for a signature or write access the caller does not have: GCNBL12UtZ9firBnZNHUH8GZp99BrakM5pF38YzVBbhS, 1699 units
+swap, Token-2022 missing: call to a program that is not loaded
+  vault A still holds 550000
+swap, 2,000-unit budget: compute budget exceeded, 2000 units
+curve init: success, 227 units
+curve buy: success, 4980 units
+  bought 31945788964 tokens for 1 SOL; trader has 4000000000 lamports
+curve sell: success, 3701 units
+  sold half: 15972894482 tokens left, 498004574 lamports received
+auction create: success, 3296 units
+  escrow holds 1 NFT
+auction buy: success, 4672 units
+  buyer holds 1 NFT, escrow 0; seller received 600000000 lamports

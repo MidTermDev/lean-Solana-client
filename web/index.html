@@ -4,9 +4,9 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>leansol · a Solana client in Lean</title>
-<meta name="description" content="A Solana client written in Lean 4 and compiled by its own dependency-free compiler: a gossip node live on mainnet, and a virtual machine that runs on-chain programs compiled by lean-svm.">
+<meta name="description" content="A Solana client written in Lean 4 and compiled by its own dependency-free compiler: a gossip node live on mainnet, and a virtual machine where programs written in Lean call the real SPL token programs.">
 <meta property="og:title" content="leansol · a Solana client in Lean">
-<meta property="og:description" content="Written in Lean 4, compiled by its own dependency-free compiler, live on Solana mainnet. Runs on-chain programs compiled by lean-svm.">
+<meta property="og:description" content="Written in Lean 4, compiled by its own dependency-free compiler, live on Solana mainnet. Its virtual machine runs Lean programs that call the real SPL token programs.">
 <meta property="og:type" content="website">
 <meta property="og:url" content="https://leansvm.com/">
 <meta property="og:site_name" content="leansol">
@@ -16,7 +16,7 @@
 <meta property="og:image:alt" content="leansol: a Solana client written in Lean, compiled by its own compiler">
 <meta name="twitter:card" content="summary_large_image">
 <meta name="twitter:title" content="leansol · a Solana client in Lean">
-<meta name="twitter:description" content="Written in Lean 4, compiled by its own dependency-free compiler, live on Solana mainnet. Runs on-chain programs compiled by lean-svm.">
+<meta name="twitter:description" content="Written in Lean 4, compiled by its own dependency-free compiler, live on Solana mainnet. Its virtual machine runs Lean programs that call the real SPL token programs.">
 <meta name="twitter:image" content="https://leansvm.com/og.png">
 <link rel="canonical" href="https://leansvm.com/">
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' fill='%230f0e0c'/%3E%3Cpath d='M9 7v18h14' fill='none' stroke='%23ffb020' stroke-width='4'/%3E%3C/svg%3E">
@@ -216,7 +216,7 @@
         <p class="lede"><b>leansol</b> joins Solana's gossip network and checks the signature on every record it hears.
           It is written in Lean&nbsp;4 and turned into machine code by <b>leanc</b>, a compiler in the same repository
           that needs no libc, no LLVM and no linker. Its processes talk through shared memory and a single futex.
-          It also runs on-chain programs: its sBPF virtual machine executes what toly's lean-svm compiles.</p>
+          It also runs on-chain programs: its sBPF virtual machine executes what toly's lean-svm compiles, and lets those programs call the real SPL token programs.</p>
         <div class="cta">
           <a class="btn primary" href="https://github.com/MidTermDev/lean-Solana-client">Read the source</a>
           <a class="btn" href="https://github.com/MidTermDev/lean-Solana-client/releases/latest">Download the binary</a>
@@ -241,7 +241,7 @@
     </div>
 
     <div class="facts">
-      <div class="fact"><strong>234 KB</strong><span>the whole client, one static binary</span></div>
+      <div class="fact"><strong>282 KB</strong><span>the whole client, one static binary</span></div>
       <div class="fact"><strong>40 ms</strong><span>to build it from source</span></div>
       <div class="fact"><strong>0</strong><span>dependencies to build or run</span></div>
       <div class="fact"><strong id="f-uptime">—</strong><span>this node's uptime</span></div>
@@ -338,14 +338,17 @@ socket ◀─ net-tx ◀─── gossip
             </div>
             <div class="part">
               <h3>sBPF virtual machine</h3>
-              <p>Loads an on-chain program and executes it: interpreter, memory map, system calls and compute-unit
-                meter. Programs written in Lean and compiled by lean-svm run here with the same compute-unit counts
-                Agave reports.</p>
-<pre>$ leansol run counter.so --data 01 \
-    --account counter:program:1000000:e703000000000000:w
+              <p>Loads on-chain programs and executes them: loader, interpreter, system calls, compute-unit meter,
+                and one program calling another under the runtime's account rules. An AMM written in Lean swaps
+                through the unmodified SPL Token and Token-2022 programs, at the compute-unit count Agave reports.</p>
+<pre>$ leansol run amm.so --data 01… \
+    --program Token=p_token.so \
+    --program Token-2022=spl_token_2022.so …
 result    <b>success</b>
-units     <b>50</b> of 200,000
-account   counter   data e803000000000000   <i>(changed)</i></pre>
+units     <b>4,690</b> of 200,000
+log       Instruction: TransferChecked
+account   vaultA   data 412d497f…   <i>(changed)</i>
+account   vaultB   data 5a60e8a6…   <i>(changed)</i></pre>
             </div>
           </div>
         </div>
@@ -364,6 +367,8 @@ account   counter   data e803000000000000   <i>(changed)</i></pre>
             <div class="def"><h3>Reads every record type</h3><p>Knows the wire layout of all 14 gossip record types, so it can find where each record ends and who signed it.</p></div>
             <div class="def"><h3>Proves it owns its address</h3><p>Answers the ping challenges peers send with signed pongs, as the protocol requires before anyone replies.</p></div>
             <div class="def"><h3>Runs on-chain programs</h3><p>An sBPF virtual machine executes programs compiled by toly's lean-svm, locally, and meters them exactly as Agave does.</p></div>
+            <div class="def"><h3>Lets programs call programs</h3><p>Cross-program invocation with derived-address signing. The SPL Token and Token-2022 programs run unmodified; the system program is built in.</p></div>
+            <div class="def"><h3>Enforces the account rules</h3><p>Only an owner changes an account's data or spends its lamports, read-only stays read-only, and lamports are conserved.</p></div>
             <div class="def"><h3>Exports what it learns</h3><p>A JSON snapshot of every node, a JSON file that stays fresh, and Prometheus metrics over HTTP.</p></div>
             <div class="def"><h3>Keeps a stable identity</h3><p>An optional key file makes a long-running node the same node after a restart.</p></div>
             <div class="def"><h3>Compiles other programs</h3><p>leanc is a general compiler for its subset of Lean. Hello world is four system calls, start to finish.</p></div>
@@ -383,7 +388,7 @@ account   counter   data e803000000000000   <i>(changed)</i></pre>
           <div class="defs">
             <div class="def"><h3>Not a validator</h3><p>It does not download blocks, replay transactions or vote. It observes and verifies the gossip plane.</p></div>
             <div class="def"><h3>Listen-only</h3><p>It answers pings but does not yet serve or push records to other nodes.</p></div>
-            <div class="def"><h3>Programs run alone</h3><p>The virtual machine does not yet let one program call another, so programs that use tokens or the system program cannot run in it.</p></div>
+            <div class="def"><h3>Instructions, not transactions</h3><p>The virtual machine runs one instruction at a time, on sBPF v0. Programs built with Anchor can be called but cannot yet make calls of their own.</p></div>
             <div class="def"><h3>Nothing is sent on-chain</h3><p>Programs execute locally. The client does not build, sign or submit transactions.</p></div>
             <div class="def"><h3>x86-64 Linux</h3><p>The code generator and the system-call numbers are specific to it.</p></div>
             <div class="def"><h3>A subset of Lean</h3><p>No type classes, lambdas or polymorphism. The compiler does not check proofs; official Lean does that.</p></div>
@@ -411,12 +416,13 @@ account   counter   data e803000000000000   <i>(changed)</i></pre>
                 <li><b>JSON and Prometheus export</b>The cluster as data.</li>
                 <li><b>A public node</b>Running around the clock, feeding this page.</li>
                 <li><b>sBPF virtual machine</b>Runs lean-svm programs with Agave's compute-unit counts.</li>
+                <li><b>Programs calling programs</b>Lean programs moving tokens through the real SPL token programs.</li>
               </ul>
             </div>
             <div class="stage next">
               <h3><i></i>Next</h3>
               <ul>
-                <li><b>Programs calling programs</b>Cross-program invocation in the virtual machine.</li>
+                <li><b>Whole transactions</b>The Rust calling convention, more sysvars, several instructions with fees.</li>
                 <li><b>Full gossip participant</b>Serve pull requests and push records, not only listen.</li>
                 <li><b>Record ageing</b>Expire old records one by one instead of flushing the store.</li>
                 <li><b>Self-hosting</b>leanc rewritten in Lean, compiling itself.</li>

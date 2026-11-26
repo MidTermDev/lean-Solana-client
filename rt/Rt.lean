@@ -543,6 +543,38 @@ def randomBytes (n : UInt64) : IO UInt64 := do
   Mem.store64 (b + 8) n
   return b
 
+/-- `IO.FS.readBinFile`: the whole file as a fresh byte array. Exits with a
+message if the file cannot be opened (the official runtime raises an error). -/
+def readFile (path : UInt64) : IO UInt64 := do
+  let n ← Mem.load64 (path + 8)
+  let cpath ← alloc (n + 1)
+  Mem.copy cpath (path + 24) n
+  Mem.store8 (cpath + n) 0
+  let fd ← Sys.syscall 2 cpath 0 0 0 0 0
+  free cpath (n + 1)
+  if fd > errorFloor then
+    errStr "cannot read file: "
+    writeAll 2 (path + 24) n
+    errStr "\n"
+    exit 1
+  let mut buf ← baNew 65536
+  repeat
+    let size ← Mem.load64 (buf + 8)
+    let cap ← Mem.load64 (buf + 16)
+    if size == cap then
+      let bigger ← baNew (cap * 2)
+      Mem.copy (bigger + 24) (buf + 24) size
+      Mem.store64 (bigger + 8) size
+      free buf (24 + cap)
+      buf := bigger
+    else
+      let r ← Sys.syscall 0 fd (buf + 24 + size) (cap - size) 0 0 0
+      if r == 0 || r > errorFloor then
+        break
+      Mem.store64 (buf + 8) (size + r)
+  let _ ← Sys.syscall 3 fd 0 0 0 0 0
+  return buf
+
 def argc : IO UInt64 := do
   let sp ← Mem.load64 bss
   Mem.load64 sp
