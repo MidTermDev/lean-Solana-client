@@ -1,0 +1,17 @@
+alias: 1 99 1
+strings: abc abcdef 3 6
+bytes: 2 3 3 4
+grid: 100 4 8 3
+account: 10 0 22 2 7 ada
+nothing / a point / a red circle of radius 2 / a green shape of area 12
+tiny tiny two small large 0 1 42
+18 111 6765
+negative at 2
+true seven 7
+1 44 144 4294967295 0 0 17 2
+2 64 9223372036854775808 65535 44 48879 260
+3 7 true false true false true
+11 13 λ true false 43 true
+Lean true true
+3 2 1 2 3
+true x

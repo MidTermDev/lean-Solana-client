@@ -1,0 +1,254 @@
+import Rt
+
+/-!
+# Linux, directly
+
+Typed wrappers around the raw `syscall` instruction: files, sockets,
+processes, shared memory, futexes, clocks. There is no libc between this
+file and the kernel; the numbers below are the x86-64 Linux syscall table.
+
+Buffers handed to the kernel are ordinary `ByteArray`s. `Unsafe.addr` gives
+the address of the array object; its bytes start 24 bytes in (after the
+reference count, size and capacity words).
+-/
+
+namespace Unsafe
+
+/-- Address of the heap object behind `b`. Valid while `b` is alive. -/
+@[extern "leanc_ptr"] opaque addr (b : @& ByteArray) : UInt64
+
+/-- Reinterprets a runtime string object (as returned by `Rt.argv`) as a `String`. -/
+@[extern "leanc_ofptr"] opaque stringOfAddr (p : UInt64) : String
+
+end Unsafe
+
+namespace Sys
+
+/-- Linux reports errors as `-errno`, i.e. the top 4095 values of the word. -/
+def isErr (r : UInt64) : Bool := r > 0xFFFFFFFFFFFFF000
+
+def errno (r : UInt64) : UInt64 := 0 - r
+
+/-- A zero-filled scratch buffer with `n` bytes of capacity for the kernel to write into. -/
+def scratch (n : Nat) : ByteArray := ByteArray.emptyWithCapacity n
+
+/-- Sets the length of a buffer after the kernel filled `n` bytes of it. -/
+def setSize (buf : ByteArray) (n : UInt64) : IO ByteArray := do
+  let p := Unsafe.addr buf
+  Mem.store64 (p + 8) n
+  return buf
+
+-- -------------------------------------------------------------------- files
+
+def close (fd : UInt64) : IO Unit := do
+  let _ ← syscall 3 fd 0 0 0 0 0
+  pure ()
+
+def write (fd : UInt64) (data : ByteArray) : IO UInt64 := do
+  let p := Unsafe.addr data
+  syscall 1 fd (p + 24) data.size.toUInt64 0 0 0
+
+/-- Reads up to `max` bytes. Returns an empty array on error or end of file. -/
+def read (fd : UInt64) (max : Nat) : IO ByteArray := do
+  let buf := scratch max
+  let p := Unsafe.addr buf
+  let r ← syscall 0 fd (p + 24) max.toUInt64 0 0 0
+  if isErr r then
+    return ByteArray.empty
+  setSize buf r
+
+/-- Reads a whole (small) file. Returns an empty array if it cannot be opened. -/
+def readFile (path : String) (max : Nat) : IO ByteArray := do
+  let cpath := path.toUTF8.push 0
+  let p := Unsafe.addr cpath
+  let fd ← syscall 2 (p + 24) 0 0 0 0 0
+  if isErr fd then
+    return ByteArray.empty
+  let data ← read fd max
+  close fd
+  return data
+
+/-- True when `fd` is a terminal (TCGETS succeeds). -/
+def isTty (fd : UInt64) : IO Bool := do
+  let buf := scratch 64
+  let p := Unsafe.addr buf
+  let r ← syscall 16 fd 0x5401 (p + 24) 0 0 0
+  return !(isErr r)
+
+-- ------------------------------------------------------------------- clocks
+
+/-- Wall-clock time in milliseconds since the Unix epoch. -/
+def nowMs : IO UInt64 := do
+  let ts := scratch 16
+  let p := Unsafe.addr ts
+  let _ ← syscall 228 0 (p + 24) 0 0 0 0
+  let sec ← Mem.load64 (p + 24)
+  let nsec ← Mem.load64 (p + 32)
+  return sec * 1000 + nsec / 1000000
+
+-- ---------------------------------------------------------------- processes
+
+/-- `fork()`: returns 0 in the child and the child's pid in the parent. -/
+def fork : IO UInt64 := syscall 57 0 0 0 0 0 0
+
+def getpid : IO UInt64 := syscall 39 0 0 0 0 0 0
+
+def kill (pid sig : UInt64) : IO Unit := do
+  let _ ← syscall 62 pid sig 0 0 0 0
+  pure ()
+
+/-- Reaps one exited child without blocking. Returns its pid, or 0 if none has exited. -/
+def reapChild : IO UInt64 := do
+  let r ← syscall 61 0xFFFFFFFFFFFFFFFF 0 1 0 0 0
+  if isErr r then
+    return 0
+  return r
+
+/-- Asks the kernel to SIGKILL this process when its parent dies. -/
+def dieWithParent : IO Unit := do
+  let _ ← syscall 157 1 9 0 0 0 0
+  pure ()
+
+def exit (code : UInt64) : IO Unit := do
+  let _ ← syscall 231 code 0 0 0 0 0
+  pure ()
+
+def argc : IO Nat := do
+  let n ← Rt.argc
+  return n.toNat
+
+/-- Command-line argument `i` (0 is the program name). -/
+def arg (i : Nat) : IO String := do
+  let p ← Rt.argv i.toUInt64
+  return Unsafe.stringOfAddr p
+
+-- ------------------------------------------------------------ shared memory
+
+/-- Anonymous memory that stays shared across `fork`: the substrate for IPC. -/
+def mmapShared (len : UInt64) : IO UInt64 := do
+  let p ← syscall 9 0 len 3 0x21 0xFFFFFFFFFFFFFFFF 0
+  if isErr p then
+    IO.eprintln "mmap(MAP_SHARED) failed"
+    exit 1
+  return p
+
+-- ------------------------------------------------------------------ futexes
+--
+-- The futex syscall is the only kernel service the IPC layer uses. The
+-- operations are deliberately the cross-process ones (no FUTEX_PRIVATE_FLAG):
+-- the word lives in shared memory and the waiter and waker are different
+-- processes.
+
+/-- Sleeps while the 32-bit word at `addr` still equals `expected`, for at
+most `timeoutMs` milliseconds. Returns immediately if the word differs. -/
+def futexWait (addr expected timeoutMs : UInt64) : IO Unit := do
+  let ts := scratch 16
+  let p := Unsafe.addr ts
+  Mem.store64 (p + 24) (timeoutMs / 1000)
+  Mem.store64 (p + 32) ((timeoutMs % 1000) * 1000000)
+  let _ ← syscall 202 addr 0 expected (p + 24) 0 0
+  pure ()
+
+/-- Wakes up to `n` processes sleeping on the word at `addr`. -/
+def futexWake (addr n : UInt64) : IO Unit := do
+  let _ ← syscall 202 addr 1 n 0 0 0
+  pure ()
+
+-- ------------------------------------------------------------------ sockets
+
+/-- A `struct sockaddr_in` for an IPv4 address (host byte order) and port. -/
+def sockaddr (ip : UInt32) (port : UInt16) : ByteArray := Id.run do
+  let mut b := ByteArray.emptyWithCapacity 16
+  b := b.push 2
+  b := b.push 0
+  b := b.push (port >>> 8).toUInt8
+  b := b.push port.toUInt8
+  b := b.push (ip >>> 24).toUInt8
+  b := b.push (ip >>> 16).toUInt8
+  b := b.push (ip >>> 8).toUInt8
+  b := b.push ip.toUInt8
+  for _ in [0:8] do
+    b := b.push 0
+  return b
+
+/-- A 32-bit little-endian integer in memory (socket options, lengths). -/
+def int32 (v : UInt32) : ByteArray :=
+  (((ByteArray.emptyWithCapacity 8).push v.toUInt8).push (v >>> 8).toUInt8).push (v >>> 16).toUInt8 |>.push
+    (v >>> 24).toUInt8
+
+def udpSocket : IO UInt64 := syscall 41 2 2 0 0 0 0
+
+def tcpSocket : IO UInt64 := syscall 41 2 1 0 0 0 0
+
+def bind (fd : UInt64) (ip : UInt32) (port : UInt16) : IO UInt64 := do
+  let sa := sockaddr ip port
+  let p := Unsafe.addr sa
+  syscall 49 fd (p + 24) 16 0 0 0
+
+def connect (fd : UInt64) (ip : UInt32) (port : UInt16) : IO UInt64 := do
+  let sa := sockaddr ip port
+  let p := Unsafe.addr sa
+  syscall 42 fd (p + 24) 16 0 0 0
+
+/-- Sets a send or receive timeout (`SO_RCVTIMEO` = 20, `SO_SNDTIMEO` = 21). -/
+def setTimeout (fd opt ms : UInt64) : IO Unit := do
+  let tv := scratch 16
+  let p := Unsafe.addr tv
+  Mem.store64 (p + 24) (ms / 1000)
+  Mem.store64 (p + 32) ((ms % 1000) * 1000)
+  let _ ← syscall 54 fd 1 opt (p + 24) 16 0
+  pure ()
+
+/-- Asks for a larger kernel receive buffer (`SO_RCVBUF`). -/
+def setRecvBuffer (fd : UInt64) (bytes : UInt32) : IO Unit := do
+  let v := int32 bytes
+  let p := Unsafe.addr v
+  let _ ← syscall 54 fd 1 8 (p + 24) 4 0
+  pure ()
+
+/-- The local port a socket is bound to. -/
+def localPort (fd : UInt64) : IO UInt16 := do
+  let sa := sockaddr 0 0
+  let p := Unsafe.addr sa
+  let len := int32 16
+  let lp := Unsafe.addr len
+  let _ ← syscall 51 fd (p + 24) (lp + 24) 0 0 0
+  let hi ← Mem.load8 (p + 26)
+  let lo ← Mem.load8 (p + 27)
+  return ((hi <<< 8) ||| lo).toUInt16
+
+def sendTo (fd : UInt64) (ip : UInt32) (port : UInt16) (data : ByteArray) : IO UInt64 := do
+  let sa := sockaddr ip port
+  let sp := Unsafe.addr sa
+  let p := Unsafe.addr data
+  syscall 44 fd (p + 24) data.size.toUInt64 0 (sp + 24) 16
+
+/-- A received UDP datagram and where it came from. -/
+structure Datagram where
+  data : ByteArray
+  ip : UInt32
+  port : UInt16
+
+/-- Receives one datagram of at most `max` bytes. On timeout or error the
+returned datagram is empty. -/
+def recvFrom (fd : UInt64) (max : Nat) : IO Datagram := do
+  let buf := scratch max
+  let p := Unsafe.addr buf
+  let sa := sockaddr 0 0
+  let sp := Unsafe.addr sa
+  let len := int32 16
+  let lp := Unsafe.addr len
+  let r ← syscall 45 fd (p + 24) max.toUInt64 0 (sp + 24) (lp + 24)
+  if isErr r then
+    return ⟨ByteArray.empty, 0, 0⟩
+  let buf ← setSize buf r
+  let p0 ← Mem.load8 (sp + 26)
+  let p1 ← Mem.load8 (sp + 27)
+  let a0 ← Mem.load8 (sp + 28)
+  let a1 ← Mem.load8 (sp + 29)
+  let a2 ← Mem.load8 (sp + 30)
+  let a3 ← Mem.load8 (sp + 31)
+  let ip := (a0 <<< 24) ||| (a1 <<< 16) ||| (a2 <<< 8) ||| a3
+  return ⟨buf, ip.toUInt32, ((p0 <<< 8) ||| p1).toUInt16⟩
+
+end Sys

@@ -1,0 +1,1 @@
+sent 200000 messages, checksum match: true, order errors: 0, consumer done: true

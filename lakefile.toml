@@ -1,0 +1,24 @@
+# Optional: lets the official Lean toolchain type-check this repository.
+#
+#   lake build
+#
+# Nothing here is needed to build or run the client. `make` does that with
+# leanc alone. This exists so every line of Lean in the repo can be checked
+# by the reference implementation.
+name = "lean-solana-client"
+defaultTargets = ["Rt", "Lib", "Client"]
+
+[[lean_lib]]
+name = "Rt"
+srcDir = "rt"
+roots = ["Rt"]
+
+[[lean_lib]]
+name = "Lib"
+srcDir = "lib"
+globs = ["Crypto.+", "Encoding.+", "Net.+", "Solana.+", "Sys", "Ipc", "Fmt"]
+
+[[lean_lib]]
+name = "Client"
+srcDir = "client"
+globs = ["Layout", "NetTiles", "VerifyTile", "GossipTile", "Dashboard", "Main"]
