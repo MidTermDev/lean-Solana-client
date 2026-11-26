@@ -84,16 +84,21 @@ programs:
 	done
 	cd tests/programs && sha256sum -c SHA256SUMS
 
-# tests/anchor.lean runs an Anchor program through five programs' worth of
-# cross-program calls. tests/oracle runs the same scenario on Agave's own
-# program runtime (through LiteSVM) and prints the same report. This builds
-# it and requires the two to agree exactly: results, compute units, logs,
-# addresses, balances. Needs a Rust toolchain; not part of `make test`.
+# Several tests are checked against Agave itself. tests/oracle is a Rust
+# program that runs the same scenarios on Agave's own program runtime
+# (through LiteSVM) and prints the same report; the two must agree exactly:
+# signatures, results, fees, compute units, logs, addresses, balances.
+# It is built twice from one source: against Agave 3.1 (tests/oracle) and
+# against Agave 4.3 (tests/oracle-next), which also runs sBPF v3.
+# Needs a Rust toolchain; not part of `make test`.
+P = tests/programs
 oracle:
 	cargo build --release --quiet --manifest-path tests/oracle/Cargo.toml --target-dir build/oracle
-	build/oracle/release/oracle anchor tests/programs/anchor_vault.so | diff - tests/expected/anchor.txt
-	build/oracle/release/oracle transaction tests/programs/sysvar_probe.so tests/programs/counter.so | diff - tests/expected/transaction.txt
-	@echo "Agave's runtime and the Lean virtual machine agree on tests/anchor.lean and tests/transaction.lean"
+	cargo build --release --quiet --manifest-path tests/oracle-next/Cargo.toml --target-dir build/oracle-next
+	build/oracle/release/oracle transaction $(P)/sysvar_probe.so $(P)/counter.so | diff - tests/expected/transaction.txt
+	build/oracle-next/release/oracle-next anchor $(P)/anchor_vault.so $(P)/anchor_vault_v3.so | diff - tests/expected/anchor.txt
+	build/oracle-next/release/oracle-next versions $(P)/sysvar_probe.so $(P)/sysvar_probe_v1.so $(P)/sysvar_probe_v2.so $(P)/sysvar_probe_v3.so | diff - tests/expected/versions.txt
+	@echo "Agave's runtime and the Lean virtual machine agree on every scenario"
 
 # Optional: have the official Lean toolchain type-check every Lean file here
 # and re-run the tests under it. Needs `lake` (https://lean-lang.org).

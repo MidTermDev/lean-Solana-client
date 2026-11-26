@@ -1,0 +1,129 @@
+blockhash CmpNeggWJ4JaWJeJ8YKN1Zypmk7uvQq3PECGUCAEMbky
+sBPF v0, arithmetic: success, fee 5000, 12784 units
+  signature 51VQzmwsQwQv4fjDMRChycWnGkHHnt2WYfDJWxfEqvfszQMVZXWXhpK5FBB2vCXUXey4uWoPSsVfaLkAcw5gWHQS
+  log: u64: 2465395958572223728 18364703450382 713574 81621149086635842
+  log: i64: 2465395958572223728 -81985283260 -637116 -364380129851053
+  log: u32: 3848375536 1985 223373 1984229325 1986229331
+  log: i32: -446591760 1985 223373 1984229325 1986229331
+  log: u128: 1505638425649560904378842294897 664812
+  log: bits: 2295594818061633090 -10248191152060862 17790859839977656455 1167088121787636990 271733878
+  log: mixed: 81985529217486896 2309738045 -1985229328
+  payer 9999995000, alice 2000000000
+sBPF v0, reads its own transaction: success, fee 5000, 9050 units
+  signature 3yQFF4UvWYzMjEcRHWeTMRf8239zFuW3SXcKcy2PFGn8Cjr7328S7dLUbrjgWpXSHT2MV9787S3GEyfh6FDMP4Lb
+  log: this is instruction 1 of the transaction
+  log: instruction 0: 2 accounts, 12 bytes of data, hash of data below
+  log: 11111111111111111111111111111111
+  log: 5j3FoSpV3rr6FsJukuM2G5CsEWZAM4gqMNQ2iWLMVf48
+  log: ECbPvoRPTunYYuu6iCP8gK4GzGX4nc5rPsUpAKoT6vV4
+  log:   signer true writable true
+  log: FPP21sbqhr2LPjSnJkw5NBetPubeFG4PsQFBxHj8noTq
+  log:   signer false writable true
+  log: instruction 1: 1 accounts, 1 bytes of data, hash of data below
+  log: FKfsmf6C7D967SV2R5Lv5BgesnGr3VTd8dF1oqevyWy6
+  log: FnqbqF7YJekTNEMkZJMcujSouSfd4CzTacotg2LmSqeV
+  log: Sysvar1nstructions1111111111111111111111111
+  log:   signer false writable false
+  log: 1 back: 2 accounts, 12 bytes of data
+  log: 11111111111111111111111111111111
+  log: ECbPvoRPTunYYuu6iCP8gK4GzGX4nc5rPsUpAKoT6vV4
+  log:   signer true writable true
+  log: FPP21sbqhr2LPjSnJkw5NBetPubeFG4PsQFBxHj8noTq
+  log:   signer false writable true
+  payer 9999989000, alice 2000001000
+sBPF v1, arithmetic: success, fee 5000, 12771 units
+  signature 3jRYXGQ5jdaReLyCPwVgbFCXEFDE8nvqD52H6FQKSSWd9aGH5Qe4UqdqQTBfSYiyLK3S8RUsvz234oVeHJ6pCCLd
+  log: u64: 2465395958572223728 18364703450382 713574 81621149086635842
+  log: i64: 2465395958572223728 -81985283260 -637116 -364380129851053
+  log: u32: 3848375536 1985 223373 1984229325 1986229331
+  log: i32: -446591760 1985 223373 1984229325 1986229331
+  log: u128: 1505638425649560904378842294897 664812
+  log: bits: 2295594818061633090 -10248191152060862 17790859839977656455 1167088121787636990 271733878
+  log: mixed: 81985529217486896 2309738045 -1985229328
+  payer 9999984000, alice 2000001000
+sBPF v1, reads its own transaction: success, fee 5000, 9074 units
+  signature 2n55ezKmgddvGZFNygLACmN3ZWTE8P3ouTKPsxJVgnBgoFRjX9j69XzVoCirt5HeexH2b9jRSHMrGCFvebYjn5sa
+  log: this is instruction 1 of the transaction
+  log: instruction 0: 2 accounts, 12 bytes of data, hash of data below
+  log: 11111111111111111111111111111111
+  log: HAbpWkhZ8jF2v6mNoDQF1wCZS2MpTkqS2zSxNNTZiLrh
+  log: ECbPvoRPTunYYuu6iCP8gK4GzGX4nc5rPsUpAKoT6vV4
+  log:   signer true writable true
+  log: FPP21sbqhr2LPjSnJkw5NBetPubeFG4PsQFBxHj8noTq
+  log:   signer false writable true
+  log: instruction 1: 1 accounts, 1 bytes of data, hash of data below
+  log: DzWWaChpdSaGhJCWGyfJ3r82AxsatTXxMi4Avz6sxiYv
+  log: FnqbqF7YJekTNEMkZJMcujSouSfd4CzTacotg2LmSqeV
+  log: Sysvar1nstructions1111111111111111111111111
+  log:   signer false writable false
+  log: 1 back: 2 accounts, 12 bytes of data
+  log: 11111111111111111111111111111111
+  log: ECbPvoRPTunYYuu6iCP8gK4GzGX4nc5rPsUpAKoT6vV4
+  log:   signer true writable true
+  log: FPP21sbqhr2LPjSnJkw5NBetPubeFG4PsQFBxHj8noTq
+  log:   signer false writable true
+  payer 9999977999, alice 2000002001
+sBPF v2, arithmetic: success, fee 5000, 11597 units
+  signature 4Ngjxkk5FJRM5aqRSaQ4XbKBMo8TygiPdKUbYKxi7Fj59UbGRG2hKwwGLZVDNGFtJNRanXdkAa2UCbqWJUGEWTo3
+  log: u64: 2465395958572223728 18364703450382 713574 81621149086635842
+  log: i64: 2465395958572223728 -81985283260 -637116 -364380129851053
+  log: u32: 3848375536 1985 223373 1984229325 1986229331
+  log: i32: -446591760 1985 223373 1984229325 1986229331
+  log: u128: 1505638425649560904378842294897 664812
+  log: bits: 2295594818061633090 -10248191152060862 17790859839977656455 1167088121787636990 271733878
+  log: mixed: 81985529217486896 2309738045 -1985229328
+  payer 9999972999, alice 2000002001
+sBPF v2, reads its own transaction: success, fee 5000, 8978 units
+  signature SricCn72GcKctPTXMujRMBVuAtWZAJKf5gBV7Cg75WhYoJQ9q54pPfGfZBKJ6FkfXHSTWrmLDZoLqqpm1v27x69
+  log: this is instruction 1 of the transaction
+  log: instruction 0: 2 accounts, 12 bytes of data, hash of data below
+  log: 11111111111111111111111111111111
+  log: 2tanuNXyND9yTi9WXZEiHCTz5WGQft947uQmw9Tp7zP7
+  log: ECbPvoRPTunYYuu6iCP8gK4GzGX4nc5rPsUpAKoT6vV4
+  log:   signer true writable true
+  log: FPP21sbqhr2LPjSnJkw5NBetPubeFG4PsQFBxHj8noTq
+  log:   signer false writable true
+  log: instruction 1: 1 accounts, 1 bytes of data, hash of data below
+  log: 893cFnzxpxF3FTag781NbVf8mid1hz3trWpP4HwYJSDu
+  log: FnqbqF7YJekTNEMkZJMcujSouSfd4CzTacotg2LmSqeV
+  log: Sysvar1nstructions1111111111111111111111111
+  log:   signer false writable false
+  log: 1 back: 2 accounts, 12 bytes of data
+  log: 11111111111111111111111111111111
+  log: ECbPvoRPTunYYuu6iCP8gK4GzGX4nc5rPsUpAKoT6vV4
+  log:   signer true writable true
+  log: FPP21sbqhr2LPjSnJkw5NBetPubeFG4PsQFBxHj8noTq
+  log:   signer false writable true
+  payer 9999966997, alice 2000003003
+sBPF v3, arithmetic: success, fee 5000, 13712 units
+  signature 4eAMdKNrdS9gc46jfBYiahM3yqoEzGgyPM4uVZHfxgrx949cA6cvWohSGaSth1spKrxzRbYsk3SDPEopXdHwoR5o
+  log: u64: 2465395958572223728 18364703450382 713574 81621149086635842
+  log: i64: 2465395958572223728 -81985283260 -637116 -364380129851053
+  log: u32: 3848375536 1985 223373 1984229325 1986229331
+  log: i32: -446591760 1985 223373 1984229325 1986229331
+  log: u128: 1505638425649560904378842294897 664812
+  log: bits: 2295594818061633090 -10248191152060862 17790859839977656455 1167088121787636990 271733878
+  log: mixed: 81985529217486896 2309738045 -1985229328
+  payer 9999961997, alice 2000003003
+sBPF v3, reads its own transaction: success, fee 5000, 9908 units
+  signature 545SuAqk3J6JVRiTpoYiTbBgVNAkorUKJpxL4fH6imCaXHRjGG6rGCLpBwhDdxro32Wi7kjNLhoanviKEXLjhFUk
+  log: this is instruction 1 of the transaction
+  log: instruction 0: 2 accounts, 12 bytes of data, hash of data below
+  log: 11111111111111111111111111111111
+  log: 697S6pYfLvQwgWrbi3bQwxtct5MbABqETvVWVK53xkUq
+  log: ECbPvoRPTunYYuu6iCP8gK4GzGX4nc5rPsUpAKoT6vV4
+  log:   signer true writable true
+  log: FPP21sbqhr2LPjSnJkw5NBetPubeFG4PsQFBxHj8noTq
+  log:   signer false writable true
+  log: instruction 1: 1 accounts, 1 bytes of data, hash of data below
+  log: DtGF98hCB7BA7NY72QYnZXFXSg18FNc9KsRSKpuchcEc
+  log: FnqbqF7YJekTNEMkZJMcujSouSfd4CzTacotg2LmSqeV
+  log: Sysvar1nstructions1111111111111111111111111
+  log:   signer false writable false
+  log: 1 back: 2 accounts, 12 bytes of data
+  log: 11111111111111111111111111111111
+  log: ECbPvoRPTunYYuu6iCP8gK4GzGX4nc5rPsUpAKoT6vV4
+  log:   signer true writable true
+  log: FPP21sbqhr2LPjSnJkw5NBetPubeFG4PsQFBxHj8noTq
+  log:   signer false writable true
+  payer 9999955994, alice 2000004006

@@ -8,8 +8,8 @@ its state account (signing with the seeds of a derived address), then calls
 the Associated Token Account program, which is itself a Rust program and
 calls the token program three times and the system program once.
 
-The scenario below is run twice: here, and by `tests/oracle` on Agave's own
-program runtime. The two must print the same thing, line for line: results,
+The scenario below is run here and by `tests/oracle-next` on Agave's own
+program runtime, with the vault compiled for sBPF v0 and again for sBPF v3. The two must print the same thing, line for line: results,
 compute units, logs, addresses, balances. `make oracle` checks that. -/
 
 def key (name : String) : ByteArray := Sha256.hash name.toUTF8
@@ -32,13 +32,17 @@ def run (label : String) (m : Sbpf.Machine) (accounts : Array Sbpf.Account) (pro
 def balances (accounts : Array Sbpf.Account) : IO Unit :=
   IO.println s!"  vault holds {Wire.u64 accounts[3]!.data 64}, owner holds {Wire.u64 accounts[4]!.data 64}, recorded {Wire.u64 accounts[2]!.data 72}"
 
-def main : IO Unit := do
+/-- The whole scenario, with the vault program read from `file`. -/
+def scenario (file : String) : IO Unit := do
+  let vaultProgram ← IO.FS.readBinFile file
+  if vaultProgram[48]! != 0 then
+    IO.println s!"the same program compiled for sBPF v{vaultProgram[48]!}:"
   let tokenId := Base58.decode "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
   let associatedId := Base58.decode "ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL"
   let vaultId := Base58.decode "7Ygt9ghxooFNu4aH8TbsNpvXVTZUxQx45Dm6dvYQHKYJ"
   let system := Sbpf.systemProgram
   let m := (((Sbpf.Machine.create ⟨0, 0, 0, 0, 0⟩ 200000).add vaultId
-    (Sbpf.load (← IO.FS.readBinFile "tests/programs/anchor_vault.so"))).add tokenId
+    (Sbpf.load vaultProgram)).add tokenId
     (Sbpf.load (← IO.FS.readBinFile "tests/programs/pinocchio_token_program.so"))).add associatedId
     (Sbpf.load (← IO.FS.readBinFile "tests/programs/spl_associated_token_account-1.1.1.so"))
 
@@ -90,3 +94,8 @@ def main : IO Unit := do
   -- 5. somebody else: Anchor's account checks refuse
   accounts ← run "withdraw by a stranger" m accounts vaultId (move.set! 0 ⟨8, true, true⟩) (instruction "withdraw" ++ le64 1)
   balances accounts
+
+def main : IO Unit := do
+  scenario "tests/programs/anchor_vault.so"
+  -- the same source compiled for sBPF v3: a different encoding of the same program, calling version 0 programs
+  scenario "tests/programs/anchor_vault_v3.so"

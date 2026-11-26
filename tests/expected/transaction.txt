@@ -2,7 +2,7 @@ blockhash CmpNeggWJ4JaWJeJ8YKN1Zypmk7uvQq3PECGUCAEMbky
 transfer, with a priority fee: success, fee 5750, 450 units
   signature 37qPU2kaA9E8dP5fVeZQuXv9LZksKRLwSZ324RpQKvxWF2U74RQ8Qoh7iZ2E5hNinGbDJuqtS1Ura7eQDz5QrqoC
   payer 8999994250, alice 3000000000
-sysvars by system call: success, fee 5000, 7474 units
+sysvars by system call: success, fee 5000, 7476 units
   signature 2ikSY2msBDAw62E6uQdcZqZbGphpic4QBWEodNihoM4t7rqNRy3sD6nASd84xYQLZNGPHvYcf9KsAh7oZDTnxXcs
   log: clock: slot 0 epoch 0 leader epoch 0 time 0 epoch start 0
   log: epoch schedule: 432000 slots, offset 432000, warmup true, normal from epoch 14 slot 524256
@@ -145,7 +145,7 @@ the same budget instruction twice: DuplicateInstruction(1), fee 0, 0 units
 a heap size that is not allowed: InstructionError(0, InvalidInstructionData), fee 0, 0 units
   signature 4DQCRJmDLHsAnKATpFbtzJbpiLwyhrfQUtQ9NhNAEAxP9oXxHfeDUhne62TnYMz4hjjUWwaySiVEPBXw4mG8hbS2
   payer 8998982689, alice 3000005000
-a bigger heap costs units: success, fee 5000, 7632 units
+a bigger heap costs units: success, fee 5000, 7634 units
   signature 4ZdZBFu9UQwekMzRdj81tkx2EBxAvAvGTm6aBVpu3y4UwpoToU8YZQiXqEQpwW8j6Yb8Ed55gCbvAWrR2FZtEvFv
   log: clock: slot 0 epoch 0 leader epoch 0 time 0 epoch start 0
   log: epoch schedule: 432000 slots, offset 432000, warmup true, normal from epoch 14 slot 524256

@@ -10,6 +10,8 @@
 //!   2  the transaction's own instructions, through the Instructions sysvar,
 //!      and the instructions that ran before this one
 //!   3  parts of sysvars fetched by address with the generic system call
+//!   4  arithmetic on three numbers from the instruction data: the operations
+//!      whose encoding and rounding differ between versions of sBPF
 
 use solana_program::{
     account_info::AccountInfo,
@@ -28,9 +30,18 @@ use solana_program::{
 
 entrypoint!(process);
 
-extern "C" {
-    fn sol_get_sysvar(id: *const u8, out: *mut u8, offset: u64, length: u64) -> u64;
-    fn sol_get_epoch_stake(vote_address: *const u8) -> u64;
+// The SDK's own definitions, so that each version of sBPF calls them its own way
+// (by symbol up to version 2, by hash from version 3).
+#[cfg(target_os = "solana")]
+use solana_program::syscalls::{sol_get_epoch_stake, sol_get_sysvar};
+
+#[cfg(not(target_os = "solana"))]
+unsafe fn sol_get_sysvar(_id: *const u8, _out: *mut u8, _offset: u64, _length: u64) -> u64 {
+    2
+}
+#[cfg(not(target_os = "solana"))]
+unsafe fn sol_get_epoch_stake(_vote_address: *const u8) -> u64 {
+    0
 }
 
 /// Logs a hash as Base58, through the system call that logs addresses.
@@ -112,6 +123,21 @@ pub fn process(_program_id: &Pubkey, accounts: &[AccountInfo], data: &[u8]) -> P
             fetch("last restart slot", &sysvar::last_restart_slot::id(), 0, 8);
             fetch("recent blockhashes", &sysvar::recent_blockhashes::id(), 0, 8);
             fetch("slot history", &sysvar::slot_history::id(), 0, 8);
+        }
+        Some(4) if data.len() == 25 => {
+            // three numbers from the instruction data, so that nothing is worked out at compile time
+            let n = |i: usize| u64::from_le_bytes(data[1 + 8 * i..9 + 8 * i].try_into().unwrap());
+            let (a, b, c) = (n(0), n(1), n(2));
+            msg!("u64: {} {} {} {}", a.wrapping_mul(b), a / c, a % c, ((a as u128 * b as u128) >> 64) as u64);
+            let (x, y, z) = (a as i64, b as i64, c as i64);
+            msg!("i64: {} {} {} {}", x.wrapping_mul(y), x / z, x % z, ((x as i128 * y as i128) >> 64) as i64);
+            let (p, q) = (a as u32, c as u32);
+            msg!("u32: {} {} {} {} {}", p.wrapping_mul(b as u32), p / q, p % q, p.wrapping_sub(q), p.wrapping_add(q));
+            let (s, t) = (a as i32, c as i32);
+            msg!("i32: {} {} {} {} {}", s.wrapping_mul(b as i32), s / t, s % t, s.wrapping_sub(t), s.wrapping_add(t) as i64);
+            msg!("u128: {} {}", (a as u128 * b as u128) / (c as u128 + 1), (a as u128 * b as u128) % (c as u128 + 1));
+            msg!("bits: {} {} {} {} {}", a >> (c & 63), x >> (c & 63), a.rotate_left(c as u32 & 63), a.swap_bytes(), (a as u32).swap_bytes());
+            msg!("mixed: {} {} {}", 1_000_000u64.wrapping_sub(a), 77u32.wrapping_sub(p), (s as i64).wrapping_neg());
         }
         _ => return Err(ProgramError::InvalidInstructionData),
     }

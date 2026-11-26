@@ -1,0 +1,23 @@
+[package]
+name = "oracle-next"
+version = "0.1.0"
+edition = "2021"
+description = "The reference runner of tests/oracle, built against a newer Agave (4.3, through LiteSVM 0.17), which runs sBPF v3"
+license = "MIT"
+publish = false
+
+# The same source as tests/oracle: only the Agave underneath differs.
+[[bin]]
+name = "oracle-next"
+path = "../oracle/src/main.rs"
+
+[dependencies]
+litesvm = { version = "0.17.0", features = ["precompiles"] }
+sha2 = "0.10.9"
+solana-account = "4.3.0"
+solana-address = "2.7"
+solana-instruction = "3.5"
+solana-keypair = "3.1.2"
+solana-message = "4.2.4"
+solana-signer = "3.0.1"
+solana-transaction = "4.1.5"

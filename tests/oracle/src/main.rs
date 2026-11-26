@@ -1,4 +1,4 @@
-//! The reference for tests/anchor.lean and tests/transaction.lean.
+//! The reference for tests/anchor.lean, tests/transaction.lean and tests/versions.lean.
 //!
 //! Runs the same instructions and transactions, on the same accounts at the
 //! same addresses, on Agave's program runtime (through LiteSVM), and prints
@@ -7,8 +7,12 @@
 //! which the Lean virtual machine must reproduce: results, fees, compute
 //! units, logs and account contents.
 //!
-//!     oracle anchor anchor_vault.so
+//! This file is built twice: by tests/oracle against Agave 3.1 and by
+//! tests/oracle-next against Agave 4.3, which also runs sBPF v3.
+//!
+//!     oracle anchor anchor_vault.so anchor_vault_v3.so
 //!     oracle transaction sysvar_probe.so counter.so
+//!     oracle versions sysvar_probe_v1.so sysvar_probe_v2.so ...
 //!
 //! Set ORACLE_RAW=1 to also print Agave's complete log, which shows how many
 //! compute units each program consumed at each level of a call.
@@ -77,6 +81,10 @@ fn run(svm: &mut LiteSVM, label: &str, payer: &Keypair, signers: &[&Keypair], ix
 }
 
 fn anchor(program: &str) {
+    let bytes = std::fs::read(program).unwrap();
+    if bytes[48] != 0 {
+        println!("the same program compiled for sBPF v{}:", bytes[48]);
+    }
     let mut svm = LiteSVM::new();
     svm.add_program(VAULT_PROGRAM, &std::fs::read(program).unwrap()).unwrap();
 
@@ -344,13 +352,49 @@ fn transaction(probe_so: &str, counter_so: &str) {
     println!("  alice exists: {}", chain.svm.get_account(&alice).is_some());
 }
 
+/// The same program compiled for several versions of sBPF: each must load and
+/// behave the same, at its own cost in compute units.
+fn versions(files: &[String]) {
+    let mut svm = LiteSVM::new();
+    let wallet = |lamports| Account { lamports, owner: SYSTEM, ..Default::default() };
+    let payer = Keypair::new_from_array(hash("payer"));
+    let alice = Keypair::new_from_array(hash("alice"));
+    svm.set_account(payer.pubkey(), wallet(10_000_000_000)).unwrap();
+    svm.set_account(alice.pubkey(), wallet(2_000_000_000)).unwrap();
+    println!("blockhash {}", svm.latest_blockhash());
+    let mut loaded = vec![];
+    for file in files {
+        let bytes = std::fs::read(file).unwrap();
+        let version = bytes[48];
+        let program = Address::new_from_array(hash(&format!("probe for sBPF v{version}")));
+        match svm.add_program(program, &bytes) {
+            Ok(_) => loaded.push((version, program)),
+            Err(_) => println!("sBPF v{version}: this runtime does not accept the program"),
+        }
+    }
+    let mut chain = Chain { svm, payer, alice };
+    let payer = chain.payer.pubkey();
+    let alice = chain.alice.pubkey();
+    for (version, program) in loaded {
+        let mut numbers = vec![4u8];
+        for n in [0xFEDC_BA98_7654_3210u64, 0x0123_4567_89AB_CDEF, 1_000_003] {
+            numbers.extend_from_slice(&n.to_le_bytes());
+        }
+        chain.run(&format!("sBPF v{version}, arithmetic"), &[Instruction { program_id: program, accounts: vec![], data: numbers }]);
+        let sysvar = AccountMeta::new_readonly("Sysvar1nstructions1111111111111111111111111".parse::<Address>().unwrap(), false);
+        chain.run(&format!("sBPF v{version}, reads its own transaction"), &[transfer(&payer, &alice, 1_000 + version as u64),
+            Instruction { program_id: program, accounts: vec![sysvar], data: vec![2] }]);
+    }
+}
+
 fn main() {
     let args: Vec<String> = std::env::args().collect();
     match args.get(1).map(String::as_str) {
-        Some("anchor") if args.len() == 3 => anchor(&args[2]),
+        Some("versions") if args.len() >= 3 => versions(&args[2..]),
+        Some("anchor") if args.len() >= 3 => args[2..].iter().for_each(|file| anchor(file)),
         Some("transaction") if args.len() == 4 => transaction(&args[2], &args[3]),
         _ => {
-            eprintln!("usage: oracle anchor anchor_vault.so\n       oracle transaction sysvar_probe.so counter.so");
+            eprintln!("usage: oracle anchor anchor_vault.so\n       oracle transaction sysvar_probe.so counter.so\n       oracle versions probe.so...");
             std::process::exit(2);
         }
     }

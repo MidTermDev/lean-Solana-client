@@ -14,7 +14,8 @@ compute-unit meter, the account serialization programs expect, the system
 calls, and **cross-program invocation**: a program calling another program,
 with the runtime's rules about who may sign for and modify which account.
 
-It targets **sBPF v0**, the version Solana runs today. That covers programs
+It runs **sBPF versions 0 to 3**: v0, which nearly everything deployed today
+uses, and the newer encodings up to v3. That covers programs
 built by the standard Rust toolchain (the SPL Token programs run here
 unmodified) and the default output of
 [lean-svm](https://github.com/aeyakovenko/lean-svm), toly's Lean 4 → sBPF
@@ -31,7 +32,6 @@ Both calling conventions for cross-program calls are provided: the C one
 (`sol_invoke_signed_c`, used by lean-svm and Pinocchio programs) and the Rust
 one (`sol_invoke_signed_rust`, used by Anchor and `solana-program`).
 
-Not supported: sBPF v3.
 -/
 
 namespace Sbpf
@@ -179,10 +179,18 @@ structure Program where
   error : String
   /-- How many bytes of heap this run of the program has (a transaction can ask for more than the default). -/
   heap : Nat
+  /-- The sBPF version the program was compiled for, 0 to 3. -/
+  version : Nat
+  /-- The file offset that the read-only address `programStart + roLow` maps to. -/
+  roFile : Nat
+  /-- The address of the first instruction, for calls through a register. -/
+  textAddr : UInt64
+  /-- Which 4 GiB region of the address space the constants are in: 1, or 0 from sBPF v3. -/
+  roRegion : UInt64
   deriving Inhabited
 
 def Program.failed (elf : ByteArray) (why : String) : Program :=
-  ⟨elf, 0, 0, 0, 0, 0, Array.emptyWithCapacity 0, Array.emptyWithCapacity 0, why, 32768⟩
+  ⟨elf, 0, 0, 0, 0, 0, Array.emptyWithCapacity 0, Array.emptyWithCapacity 0, why, 32768, 0, 0, 0, 1⟩
 
 /-- Where a section sits in the file, and the address it asks for. Size 0 means "absent". -/
 structure Section where
@@ -203,7 +211,100 @@ def findSection (elf : ByteArray) (shoff shnum strOff : Nat) (name : String) : S
       return ⟨off.toNat, size.toNat, Wire.u64 elf (h + 16)⟩
   return ⟨0, 0, 0⟩
 
-/-- Parses and relocates an sBPF v0 ELF file as written by Solana toolchains. -/
+/-- The 32-bit MurmurHash3 of a name. From sBPF v3 a program names a system
+call by this hash, in the instruction itself, instead of by a symbol the
+loader has to look up. -/
+def murmur3 (b : ByteArray) : UInt64 := Id.run do
+  let mask : UInt64 := 0xFFFFFFFF
+  let mut h : UInt64 := 0
+  let blocks := b.size / 4
+  for i in [0:blocks] do
+    let mut k := (Wire.u32 b (4 * i) * 0xcc9e2d51) &&& mask
+    k := ((k <<< 15) ||| (k >>> 17)) &&& mask
+    k := (k * 0x1b873593) &&& mask
+    h := h ^^^ k
+    h := ((h <<< 13) ||| (h >>> 19)) &&& mask
+    h := (h * 5 + 0xe6546b64) &&& mask
+  let mut k : UInt64 := 0
+  let rest := b.size % 4
+  for i in [0:rest] do
+    k := k ||| (Wire.u8 b (4 * blocks + i) <<< (8 * i).toUInt64)
+  if rest != 0 then
+    k := (k * 0xcc9e2d51) &&& mask
+    k := ((k <<< 15) ||| (k >>> 17)) &&& mask
+    k := (k * 0x1b873593) &&& mask
+    h := h ^^^ k
+  h := h ^^^ b.size.toUInt64
+  h := h ^^^ (h >>> 16)
+  h := (h * 0x85ebca6b) &&& mask
+  h := h ^^^ (h >>> 13)
+  h := (h * 0xc2b2ae35) &&& mask
+  return h ^^^ (h >>> 16)
+
+def syscallNames : Array String := #["sol_log_", "sol_log_64_", "sol_log_pubkey", "sol_memcpy_", "sol_memmove_",
+  "sol_memset_", "sol_memcmp_", "sol_sha256", "sol_get_clock_sysvar", "abort", "sol_panic_", "sol_log_compute_units_",
+  "sol_invoke_signed_c", "sol_invoke_signed_rust", "sol_log_data", "sol_remaining_compute_units",
+  "sol_get_epoch_schedule_sysvar", "sol_get_epoch_rewards_sysvar", "sol_get_last_restart_slot", "sol_get_epoch_stake",
+  "sol_get_rent_sysvar", "sol_set_return_data", "sol_get_return_data", "sol_get_stack_height", "sol_get_sysvar",
+  "sol_try_find_program_address", "sol_create_program_address", "sol_get_processed_sibling_instruction"]
+
+/-- The system call a hash names, or `sysUnknown`. -/
+def syscallByHash (hash : UInt64) : UInt64 := Id.run do
+  for name in syscallNames do
+    let bytes := name.toUTF8
+    if murmur3 bytes == hash then
+      return syscallId (bytes.push 0) 0
+  return sysUnknown
+
+/-- Loads an sBPF v3 program. Version 3 files are stricter and simpler than
+the older ones. Program headers, in a fixed order and packed one after
+another, say where the constants (optional) and the code are; nothing is
+relocated; constants are addressed from 0 and code from `programStart`; and
+a call instruction says in its source field whether it calls a function
+(by relative offset) or a system call (by the hash of its name). -/
+def loadStrict (elf : ByteArray) : Program := Id.run do
+  let headers := (Wire.u16 elf 56).toNat
+  if elf.size < 64 + 56 || Wire.u64 elf 32 != 64 || Wire.u16 elf 54 != 56 || headers < 1 || 64 + 56 * headers >= elf.size
+      || (Wire.u16 elf 18 != 247 && Wire.u16 elf 18 != 263) || Wire.u8 elf 4 != 2 then
+    return Program.failed elf "malformed sBPF v3 file header"
+  -- the first header describes constants if it is marked read-only; otherwise there are none
+  let constants := Wire.u32 elf (64 + 4) == 4
+  if constants && headers < 2 then
+    return Program.failed elf "malformed sBPF v3 file header"
+  let mut expected := (64 + 56 * headers).toUInt64
+  for k in [0:(if constants then 2 else 1)] do
+    let h := 64 + 56 * k
+    let code := k == 1 || !constants
+    let offset := Wire.u64 elf (h + 8)
+    let size := Wire.u64 elf (h + 32)
+    let address := if code then programStart else 0
+    if Wire.u32 elf h != 1 || Wire.u32 elf (h + 4) != (if code then 1 else 4) || offset != expected
+        || offset >= elf.size.toUInt64 || offset % 8 != 0 || Wire.u64 elf (h + 16) != address
+        || Wire.u64 elf (h + 24) != address || size != Wire.u64 elf (h + 40)
+        || size > elf.size.toUInt64 - offset || size % 8 != 0 then
+      return Program.failed elf "malformed sBPF v3 program header"
+    expected := expected + size
+  let codeHeader := if constants then 64 + 56 else 64
+  let textOff := (Wire.u64 elf (codeHeader + 8)).toNat
+  let count := (Wire.u64 elf (codeHeader + 32)).toNat / 8
+  let roOff := if constants then (Wire.u64 elf (64 + 8)).toNat else 0
+  let roSize := if constants then (Wire.u64 elf (64 + 32)).toNat else 0
+  let entry := Wire.u64 elf 24
+  if entry < programStart || (entry - programStart) % 8 != 0 || (entry - programStart) / 8 >= count.toUInt64 then
+    return Program.failed elf "entry point is outside the code"
+  let mut syscalls : Array UInt64 := Array.replicate count 0
+  for pc in [0:count] do
+    let o := textOff + 8 * pc
+    if Wire.u8 elf o == 0x85 && Wire.u8 elf (o + 1) >>> 4 == 0 then
+      let id := syscallByHash (Wire.u32 elf (o + 4))
+      if id == sysUnknown then
+        return Program.failed elf "the program makes a system call this machine does not provide"
+      syscalls := syscalls.set! pc id
+  return ⟨elf, textOff, count, 0, roSize, ((entry - programStart) / 8).toNat, syscalls, Array.replicate count 0, "", 32768,
+    3, roOff, programStart, 0⟩
+
+/-- Parses and relocates an sBPF ELF file as written by Solana toolchains. Versions 0 to 2 share
+this loader; version 3 has its own. -/
 def load (image : ByteArray) : Program := Id.run do
   let mut elf := image
   if elf.size < 64 || Wire.u32 elf 0 != 0x464c457f then
@@ -211,8 +312,11 @@ def load (image : ByteArray) : Program := Id.run do
   let machine := Wire.u16 elf 18
   if Wire.u8 elf 4 != 2 || (machine != 247 && machine != 263) then
     return Program.failed elf "not a 64-bit sBPF program"
-  if Wire.u32 elf 48 != 0 then
-    return Program.failed elf "only sBPF v0 programs are supported (this one sets e_flags)"
+  let version := Wire.u32 elf 48
+  if version > 3 then
+    return Program.failed elf "unknown sBPF version (e_flags is more than 3)"
+  if version == 3 then
+    return loadStrict elf
   let shoff64 := Wire.u64 elf 40
   let shnum := (Wire.u16 elf 60).toNat
   let shstrndx := (Wire.u16 elf 62).toNat
@@ -281,7 +385,8 @@ def load (image : ByteArray) : Program := Id.run do
           calls := calls.set! pc ((symValue - text.addr) / 8 + 1)
         else if nameOff < names.size then
           syscalls := syscalls.set! pc (syscallId elf (names.off + nameOff))
-  return ⟨elf, text.off, count, roLow, roHigh, ((entryAddr - text.addr) / 8).toNat, syscalls, calls, "", 32768⟩
+  return ⟨elf, text.off, count, roLow, roHigh, ((entryAddr - text.addr) / 8).toNat, syscalls, calls, "", 32768,
+    version.toNat, roLow, programStart + text.off.toUInt64, 1⟩
 
 -- ------------------------------------------------------------------- memory
 --
@@ -298,8 +403,8 @@ def locate (p : Program) (inputLen : Nat) (addr : UInt64) (len : Nat) (write : B
   else if region == 2 then (if off + len <= stackBytes then off else Wire.bad)
   else if region == 3 then (if off + len <= p.heap then stackBytes + off else Wire.bad)
   else if region == 4 then (if off + len <= inputLen then stackBytes + p.heap + off else Wire.bad)
-  else if region == 1 && !write then
-    (if off >= p.roLow && off + len <= p.roHigh then progBase + off else Wire.bad)
+  else if region == p.roRegion && !write then
+    (if off >= p.roLow && off + len <= p.roHigh then progBase + (off - p.roLow + p.roFile) else Wire.bad)
   else Wire.bad
 
 def loadAt (p : Program) (mem : ByteArray) (idx size : Nat) : UInt64 :=
@@ -383,6 +488,30 @@ def alu32 (op a b : UInt64) : UInt64 :=
   else if op == 0xa0 then x ^^^ y
   else if op == 0xb0 then y
   else arsh (sext32 x) (y &&& 31) &&& 0xFFFFFFFF
+
+/-- The high 64 bits of the unsigned 128-bit product. -/
+def umulh (a b : UInt64) : UInt64 :=
+  let al := a &&& 0xFFFFFFFF
+  let ah := a >>> 32
+  let bl := b &&& 0xFFFFFFFF
+  let bh := b >>> 32
+  let mid := ((al * bl) >>> 32) + ((al * bh) &&& 0xFFFFFFFF) + ((ah * bl) &&& 0xFFFFFFFF)
+  ah * bh + ((al * bh) >>> 32) + ((ah * bl) >>> 32) + (mid >>> 32)
+
+def negative (a : UInt64) : Bool := a &&& 0x8000000000000000 != 0
+
+/-- The high 64 bits of the signed 128-bit product. -/
+def smulh (a b : UInt64) : UInt64 :=
+  umulh a b - (if negative a then b else 0) - (if negative b then a else 0)
+
+/-- Signed division and remainder, rounding toward zero. The caller rules out zero and overflow. -/
+def sdiv (a b : UInt64) : UInt64 :=
+  let q := (if negative a then 0 - a else a) / (if negative b then 0 - b else b)
+  if negative a != negative b then 0 - q else q
+
+def srem (a b : UInt64) : UInt64 :=
+  let r := (if negative a then 0 - a else a) % (if negative b then 0 - b else b)
+  if negative a then 0 - r else r
 
 /-- Whether a conditional jump is taken. `op` is the high nibble of the opcode. -/
 def jumpTaken (op a b : UInt64) : Bool :=
@@ -1062,7 +1191,13 @@ partial def execute (m : Machine) (st0 : State) (programId : ByteArray) (metas :
   mem := mem ++ input
   let mut regs : Array UInt64 := Array.replicate 11 0
   regs := regs.set! 1 inputStart
-  regs := regs.set! 10 (stackStart + frameBytes.toUInt64)
+  -- What the versions of sBPF change. In 1 and 2 a function moves the stack pointer itself. 2 re-encodes
+  -- arithmetic and memory instructions. 3 goes back to version 0's instructions and adds 32-bit conditional
+  -- jumps, calls that are either relative or name a system call by hash, and the stricter file format.
+  let ownStack := p.version == 1 || p.version == 2
+  let v2 := p.version == 2
+  let v3 := p.version >= 3
+  regs := regs.set! 10 (stackStart + (if ownStack then stackBytes else frameBytes).toUInt64)
   -- saved r6..r9, frame pointer and return address of every active call
   let mut frames : Array UInt64 := Array.replicate (maxDepth * 6) 0
   let mut calls := 0
@@ -1091,11 +1226,70 @@ partial def execute (m : Machine) (st0 : State) (programId : ByteArray) (metas :
     let cls := opc &&& 7
     let op := opc &&& 0xf0
     let mut next := pc + 1
-    if cls == 7 || cls == 4 then
+    if v2 && (cls == 4 || cls == 7) && (op == 0x20 || op == 0x30 || op == 0x80 || op == 0x90) then
+      -- from v2 the memory instructions use the encodings multiply, divide, negate and modulo had:
+      -- loads in the 32-bit class, stores in the 64-bit class, 1, 2, 4 or 8 bytes
+      let size := if op == 0x20 then 1 else if op == 0x30 then 2 else if op == 0x80 then 4 else 8
+      if cls == 4 && opc &&& 8 == 0 then
+        status := unsupportedInstruction
+        break
+      let addr := (if cls == 4 then regs[src]! else regs[dst]!) + off
+      let idx := locate p inputLen addr size (cls == 7)
+      if !(Wire.ok idx) then
+        status := accessViolation
+        detail := s!"at address {hex64 addr}, instruction {pc}"
+        break
+      if cls == 4 then
+        regs := regs.set! dst (loadAt p mem idx size)
+      else
+        mem := storeAt mem idx size (if opc &&& 8 == 0 then imm else regs[src]!)
+    else if v2 && opc == 0xf7 then
+      -- sets the upper half of a register: with a 32-bit move, this replaces the two-slot constant load
+      regs := regs.set! dst (regs[dst]! ||| (imm32 <<< 32))
+    else if v3 && cls == 6 then
+      -- conditional jumps comparing the low 32 bits
+      let signed := op == 0x60 || op == 0x70 || op == 0xc0 || op == 0xd0
+      if op == 0 || op == 0x80 || op == 0x90 || op > 0xd0 then
+        status := unsupportedInstruction
+        break
+      let b := if opc &&& 8 != 0 then regs[src]! else imm
+      let x := if signed then sext32 regs[dst]! else regs[dst]! &&& 0xFFFFFFFF
+      let y := if signed then sext32 b else b &&& 0xFFFFFFFF
+      if jumpTaken op x y then
+        next := (next.toUInt64 + off).toNat
+    else if v2 && cls == 6 then
+      -- products, quotients and remainders, signed and unsigned, 32 and 64 bits
+      let wide := opc &&& 0x10 != 0
+      let kind := opc &&& 0xe0
+      let signed := kind == 0xa0 || kind == 0xc0 || kind == 0xe0
+      let a := regs[dst]!
+      let b := if opc &&& 8 != 0 then regs[src]! else if signed || kind == 0x80 then imm else imm32
+      if kind == 0x00 || ((kind == 0x20 || kind == 0xa0) && !wide) then
+        status := unsupportedInstruction
+        break
+      else if kind == 0x80 then
+        regs := regs.set! dst (if wide then a * b else (a * b) &&& 0xFFFFFFFF)
+      else if kind == 0x20 then
+        regs := regs.set! dst (umulh a b)
+      else if kind == 0xa0 then
+        regs := regs.set! dst (smulh a b)
+      else
+        let x := if wide then a else if signed then sext32 a else a &&& 0xFFFFFFFF
+        let y := if wide then b else if signed then sext32 b else b &&& 0xFFFFFFFF
+        if y == 0 then
+          status := divideByZero
+          break
+        if signed && y == 0xFFFFFFFFFFFFFFFF && x == (if wide then 0x8000000000000000 else 0xFFFFFFFF80000000) then
+          status := divideByZero
+          detail := "the quotient does not fit"
+          break
+        let r := if kind == 0x40 then x / y else if kind == 0x60 then x % y else if kind == 0xc0 then sdiv x y else srem x y
+        regs := regs.set! dst (if wide then r else r &&& 0xFFFFFFFF)
+    else if cls == 7 || cls == 4 then
       -- arithmetic: 64-bit (class 7) and 32-bit (class 4), operand from a register or the immediate
       let b := if opc &&& 8 != 0 then regs[src]! else imm
       let a := regs[dst]!
-      if opc == 0xd4 || opc == 0xdc then
+      if opc == 0xdc || (opc == 0xd4 && !v2) then
         -- byte order: `le` truncates, `be` also swaps
         let bytes := if imm32 == 16 then 2 else if imm32 == 32 then 4 else if imm32 == 64 then 8 else 0
         if bytes == 0 then
@@ -1109,6 +1303,14 @@ partial def execute (m : Machine) (st0 : State) (programId : ByteArray) (metas :
       else if (op == 0x30 || op == 0x90) && (if cls == 7 then b == 0 else b &&& 0xFFFFFFFF == 0) then
         status := divideByZero
         break
+      else if v2 then
+        -- from v2: subtracting from an immediate computes immediate − register; 32-bit add and subtract
+        -- zero-extend their result; a 32-bit move between registers sign-extends
+        let swap := op == 0x10 && opc &&& 8 == 0
+        let r := if cls == 7 then alu64 op (if swap then b else a) (if swap then a else b)
+          else alu32 op (if swap then b else a) (if swap then a else b)
+        regs := regs.set! dst (if cls == 4 && (op == 0x00 || op == 0x10) then r &&& 0xFFFFFFFF
+          else if opc == 0xbc then sext32 r else r)
       else
         regs := regs.set! dst (if cls == 7 then alu64 op a b else alu32 op a b)
     else if cls == 5 then
@@ -1124,9 +1326,14 @@ partial def execute (m : Machine) (st0 : State) (programId : ByteArray) (metas :
         regs := regs.set! 10 frames[calls * 6 + 4]!
         next := frames[calls * 6 + 5]!.toNat
       else if opc == 0x8d || (opc == 0x85 && p.syscalls[pc]! == 0) then
-        -- call a function of the program: by symbol, by relative offset, or (callx) through a register
-        let target := if opc == 0x8d then (regs[(imm32 &&& 15).toNat]! - programStart - p.textOff.toUInt64) / 8
-          else if p.calls[pc]! != 0 then p.calls[pc]! - 1
+        -- call a function of the program: by symbol, by relative offset, or (callx) through a register,
+        -- which the instruction names in a different field in each version
+        let through := if v2 then src else if v3 then dst else (imm32 &&& 15).toNat
+        if (opc == 0x8d && through > 10) || (v3 && opc == 0x85 && src != 1) then
+          status := unsupportedInstruction
+          break
+        let target := if opc == 0x8d then (regs[through]! - p.textAddr) / 8
+          else if !v3 && p.calls[pc]! != 0 then p.calls[pc]! - 1
           else next.toUInt64 + imm
         for k in [0:4] do
           frames := frames.set! (calls * 6 + k) regs[6 + k]!
@@ -1136,7 +1343,8 @@ partial def execute (m : Machine) (st0 : State) (programId : ByteArray) (metas :
         if calls == maxDepth then
           status := callDepthExceeded
           break
-        regs := regs.set! 10 (regs[10]! + frameBytes.toUInt64)
+        if !ownStack then
+          regs := regs.set! 10 (regs[10]! + frameBytes.toUInt64)
         if target >= p.count.toUInt64 then
           status := executionOverrun
           break
@@ -1402,11 +1610,11 @@ partial def execute (m : Machine) (st0 : State) (programId : ByteArray) (metas :
         let b := if opc &&& 8 != 0 then regs[src]! else imm
         if jumpTaken op regs[dst]! b then
           next := (next.toUInt64 + off).toNat
-    else if opc == 0x18 then
+    else if opc == 0x18 && !v2 then
       -- load a 64-bit constant: two instruction slots
       regs := regs.set! dst (imm32 ||| (Wire.u32 p.elf (o + 12) <<< 32))
       next := pc + 2
-    else if cls == 1 || cls == 2 || cls == 3 then
+    else if !v2 && (cls == 1 || cls == 2 || cls == 3) then
       -- memory: load (1), store immediate (2), store register (3); width in bits 3-4
       let width := opc &&& 0x18
       let size := if width == 0x00 then 4 else if width == 0x08 then 2 else if width == 0x10 then 1 else 8
