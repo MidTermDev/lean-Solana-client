@@ -7,7 +7,7 @@ license = "MIT"
 publish = false
 
 [dependencies]
-litesvm = "0.11.0"
+litesvm = { version = "0.11.0", features = ["precompiles"] }
 sha2 = "0.10.9"
 solana-account = "3.4.0"
 solana-address = "2.9.0"

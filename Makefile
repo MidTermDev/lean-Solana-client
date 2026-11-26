@@ -91,8 +91,9 @@ programs:
 # addresses, balances. Needs a Rust toolchain; not part of `make test`.
 oracle:
 	cargo build --release --quiet --manifest-path tests/oracle/Cargo.toml --target-dir build/oracle
-	build/oracle/release/oracle tests/programs/anchor_vault.so | diff - tests/expected/anchor.txt
-	@echo "Agave's runtime and the Lean virtual machine agree on tests/anchor.lean"
+	build/oracle/release/oracle anchor tests/programs/anchor_vault.so | diff - tests/expected/anchor.txt
+	build/oracle/release/oracle transaction tests/programs/sysvar_probe.so tests/programs/counter.so | diff - tests/expected/transaction.txt
+	@echo "Agave's runtime and the Lean virtual machine agree on tests/anchor.lean and tests/transaction.lean"
 
 # Optional: have the official Lean toolchain type-check every Lean file here
 # and re-run the tests under it. Needs `lake` (https://lean-lang.org).

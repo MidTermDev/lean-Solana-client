@@ -1,10 +1,14 @@
-//! The reference for tests/anchor.lean.
+//! The reference for tests/anchor.lean and tests/transaction.lean.
 //!
-//! Runs the same instructions, on the same accounts at the same addresses,
-//! on Agave's program runtime (through LiteSVM), and prints the same report.
-//! `make oracle` builds this, runs it, and compares its output with
-//! tests/expected/anchor.txt, which the Lean virtual machine must reproduce:
-//! results, compute units, logs and account contents.
+//! Runs the same instructions and transactions, on the same accounts at the
+//! same addresses, on Agave's program runtime (through LiteSVM), and prints
+//! the same report. `make oracle` builds this, runs it, and compares its
+//! output with tests/expected/anchor.txt and tests/expected/transaction.txt,
+//! which the Lean virtual machine must reproduce: results, fees, compute
+//! units, logs and account contents.
+//!
+//!     oracle anchor anchor_vault.so
+//!     oracle transaction sysvar_probe.so counter.so
 //!
 //! Set ORACLE_RAW=1 to also print Agave's complete log, which shows how many
 //! compute units each program consumed at each level of a call.
@@ -72,8 +76,7 @@ fn run(svm: &mut LiteSVM, label: &str, payer: &Keypair, signers: &[&Keypair], ix
     svm.expire_blockhash();
 }
 
-fn main() {
-    let program = std::env::args().nth(1).expect("usage: oracle anchor_vault.so");
+fn anchor(program: &str) {
     let mut svm = LiteSVM::new();
     svm.add_program(VAULT_PROGRAM, &std::fs::read(program).unwrap()).unwrap();
 
@@ -157,4 +160,198 @@ fn main() {
     // 5. somebody else: Anchor's account checks refuse
     run(&mut svm, "withdraw by a stranger", &stranger, &[&stranger], transfer("withdraw", 1, &stranger));
     report(&svm);
+}
+
+// ------------------------------------------------------------ transactions
+
+const COMPUTE_BUDGET: Address = address!("ComputeBudget111111111111111111111111111111");
+const ED25519: Address = address!("Ed25519SigVerify111111111111111111111111111");
+
+fn budget(tag: u8, value: u64, width: usize) -> Instruction {
+    let mut data = vec![tag];
+    data.extend_from_slice(&value.to_le_bytes()[..width]);
+    Instruction { program_id: COMPUTE_BUDGET, accounts: vec![], data }
+}
+fn unit_limit(units: u32) -> Instruction { budget(2, units as u64, 4) }
+fn unit_price(micro_lamports: u64) -> Instruction { budget(3, micro_lamports, 8) }
+fn heap_frame(bytes: u32) -> Instruction { budget(1, bytes as u64, 4) }
+
+fn transfer(from: &Address, to: &Address, lamports: u64) -> Instruction {
+    let mut data = 2u32.to_le_bytes().to_vec();
+    data.extend_from_slice(&lamports.to_le_bytes());
+    Instruction { program_id: SYSTEM, accounts: vec![AccountMeta::new(*from, true), AccountMeta::new(*to, false)], data }
+}
+
+fn create_account(from: &Address, new: &Address, lamports: u64, space: u64, owner: &Address) -> Instruction {
+    let mut data = 0u32.to_le_bytes().to_vec();
+    data.extend_from_slice(&lamports.to_le_bytes());
+    data.extend_from_slice(&space.to_le_bytes());
+    data.extend_from_slice(owner.as_ref());
+    Instruction { program_id: SYSTEM, accounts: vec![AccountMeta::new(*from, true), AccountMeta::new(*new, true)], data }
+}
+
+/// An instruction for the Ed25519 program: check `signer`'s signature of `message`.
+/// `claimed` is the message the instruction says was signed.
+fn ed25519(signer: &Keypair, message: &[u8], claimed: &[u8]) -> Instruction {
+    let mut data = vec![1u8, 0];
+    for field in [48u16, u16::MAX, 16, u16::MAX, 112, claimed.len() as u16, u16::MAX] {
+        data.extend_from_slice(&field.to_le_bytes());
+    }
+    data.extend_from_slice(signer.pubkey().as_ref());
+    data.extend_from_slice(signer.sign_message(message).as_ref());
+    data.extend_from_slice(claimed);
+    Instruction { program_id: ED25519, accounts: vec![], data }
+}
+
+struct Chain {
+    svm: LiteSVM,
+    payer: Keypair,
+    alice: Keypair,
+}
+
+impl Chain {
+    /// Sends a transaction and prints what happened, the way tests/transaction.lean does.
+    fn send(&mut self, label: &str, tx: Transaction) {
+        let signature = tx.signatures[0];
+        let (outcome, fee, units, logs) = match self.svm.send_transaction(tx) {
+            Ok(meta) => ("success".to_string(), meta.fee, meta.compute_units_consumed, meta.logs),
+            Err(failed) => (format!("{:?}", failed.err), failed.meta.fee, failed.meta.compute_units_consumed, failed.meta.logs),
+        };
+        println!("{label}: {outcome}, fee {fee}, {units} units");
+        println!("  signature {signature}");
+        for line in logs {
+            if std::env::var_os("ORACLE_RAW").is_some() {
+                println!("  raw: {line}");
+            }
+            if let Some(text) = line.strip_prefix("Program log: ") {
+                println!("  log: {text}");
+            } else if let Some(data) = line.strip_prefix("Program data: ") {
+                println!("  log: data: {data}");
+            }
+        }
+        println!("  payer {}, alice {}", self.balance(&self.payer.pubkey()), self.balance(&self.alice.pubkey()));
+    }
+
+    fn balance(&self, address: &Address) -> u64 {
+        self.svm.get_balance(address).unwrap_or(0)
+    }
+
+    fn build(&self, payer: &Keypair, signers: &[&Keypair], instructions: &[Instruction]) -> Transaction {
+        Transaction::new(signers, Message::new(instructions, Some(&payer.pubkey())), self.svm.latest_blockhash())
+    }
+
+    /// A transaction paid for and signed by the usual payer alone.
+    fn run(&mut self, label: &str, instructions: &[Instruction]) {
+        let tx = self.build(&self.payer, &[&self.payer], instructions);
+        self.send(label, tx);
+    }
+}
+
+fn transaction(probe_so: &str, counter_so: &str) {
+    let probe = Address::new_from_array(hash("sysvar probe"));
+    let counter = Address::new_from_array(hash("counter program"));
+    let mut svm = LiteSVM::new().with_precompiles();
+    svm.add_program(probe, &std::fs::read(probe_so).unwrap()).unwrap();
+    svm.add_program(counter, &std::fs::read(counter_so).unwrap()).unwrap();
+    let wallet = |lamports| Account { lamports, owner: SYSTEM, ..Default::default() };
+    let payer = Keypair::new_from_array(hash("payer"));
+    let alice = Keypair::new_from_array(hash("alice"));
+    let bob = Keypair::new_from_array(hash("bob"));
+    let poor = Keypair::new_from_array(hash("poor"));
+    let nobody = Keypair::new_from_array(hash("nobody"));
+    svm.set_account(payer.pubkey(), wallet(10_000_000_000)).unwrap();
+    svm.set_account(alice.pubkey(), wallet(2_000_000_000)).unwrap();
+    svm.set_account(poor.pubkey(), wallet(3_000)).unwrap();
+    println!("blockhash {}", svm.latest_blockhash());
+    let mut chain = Chain { svm, payer, alice };
+    let payer = chain.payer.pubkey();
+    let alice = chain.alice.pubkey();
+    let probe_ix = |mode: u8, accounts: Vec<AccountMeta>| Instruction { program_id: probe, accounts, data: vec![mode] };
+    let counter_ix = |data: Vec<u8>| Instruction { program_id: counter, accounts: vec![AccountMeta::new(bob.pubkey(), false)], data };
+    let sysvar = |name: &str| AccountMeta::new_readonly(name.parse::<Address>().unwrap(), false);
+    let instructions_sysvar = "Sysvar1nstructions1111111111111111111111111";
+
+    // fees: 5,000 lamports per signature, plus the price offered per compute unit of the limit
+    chain.run("transfer, with a priority fee", &[unit_limit(300_000), unit_price(2_500), transfer(&payer, &alice, 1_000_000_000)]);
+
+    // the sysvars, as a program sees them
+    chain.run("sysvars by system call", &[probe_ix(0, vec![])]);
+    chain.run("sysvars by address", &[probe_ix(3, vec![])]);
+    chain.run("sysvar accounts", &[unit_limit(1_400_000), probe_ix(1, vec![
+        sysvar("SysvarC1ock11111111111111111111111111111111"),
+        sysvar("SysvarEpochSchedu1e111111111111111111111111"),
+        sysvar("SysvarEpochRewards1111111111111111111111111"),
+        sysvar("SysvarFees111111111111111111111111111111111"),
+        sysvar("SysvarLastRestartS1ot1111111111111111111111"),
+        sysvar("SysvarRecentB1ockHashes11111111111111111111"),
+        sysvar("SysvarRent111111111111111111111111111111111"),
+        sysvar("SysvarS1otHashes111111111111111111111111111"),
+        sysvar("SysvarS1otHistory11111111111111111111111111"),
+        sysvar("SysvarStakeHistory1111111111111111111111111"),
+        sysvar(instructions_sysvar),
+    ])]);
+    chain.run("a program reads its own transaction", &[unit_price(1), transfer(&payer, &alice, 5_000),
+        probe_ix(2, vec![sysvar(instructions_sysvar)])]);
+
+    // several instructions, two signers: create an account, hand it to the counter program, count twice
+    let count = |chain: &Chain| match chain.svm.get_account(&bob.pubkey()) {
+        Some(account) => println!("  count {}", u64::from_le_bytes(account.data[..8].try_into().unwrap())),
+        None => println!("  the counter account does not exist"),
+    };
+    let tx = chain.build(&chain.payer, &[&chain.payer, &bob], &[create_account(&payer, &bob.pubkey(), 946_560, 8, &counter),
+        counter_ix(vec![0]), counter_ix(vec![1]), counter_ix(vec![1])]);
+    chain.send("create an account and count twice", tx);
+    count(&chain);
+
+    // all or nothing: the third instruction overflows, so the transfer and the first count are undone. The fee is not.
+    let mut overflow = vec![2u8];
+    overflow.extend_from_slice(&u64::MAX.to_le_bytes());
+    chain.run("the last instruction fails", &[transfer(&payer, &alice, 7), counter_ix(vec![1]), counter_ix(overflow)]);
+    count(&chain);
+
+    // rent: an account may not be left with a balance too small to keep it alive
+    chain.run("leaves an account below the rent minimum", &[transfer(&payer, &Address::new_from_array(hash("pauper")), 1_000)]);
+
+    // the Ed25519 program: signatures checked by the runtime, visible to programs through the Instructions sysvar
+    let signed = ed25519(&chain.alice, b"hello", b"hello");
+    chain.run("a signature checked by the runtime", &[signed, probe_ix(2, vec![sysvar(instructions_sysvar)])]);
+    let forged = ed25519(&chain.alice, b"hello", b"jello");
+    chain.run("a signature that does not match", &[forged, transfer(&payer, &alice, 9)]);
+
+    // the compute budget
+    chain.run("the same budget instruction twice", &[unit_limit(1_000), unit_limit(2_000), transfer(&payer, &alice, 11)]);
+    chain.run("a heap size that is not allowed", &[heap_frame(1_000), probe_ix(0, vec![])]);
+    chain.run("a bigger heap costs units", &[heap_frame(65_536), probe_ix(0, vec![])]);
+    chain.run("a budget the program exceeds", &[unit_limit(2_000), probe_ix(0, vec![])]);
+    chain.run("a budget too small for a transfer", &[unit_limit(200), transfer(&payer, &alice, 13)]);
+    chain.run("a budget of nothing", &[unit_limit(0), transfer(&payer, &alice, 15)]);
+
+    // who pays
+    let tx = chain.build(&nobody, &[&nobody], &[transfer(&nobody.pubkey(), &alice, 1)]);
+    chain.send("a payer that does not exist", tx);
+    let tx = chain.build(&poor, &[&poor], &[transfer(&poor.pubkey(), &alice, 1)]);
+    chain.send("a payer that cannot afford the fee", tx);
+    let mut tx = chain.build(&chain.payer, &[&chain.payer], &[transfer(&payer, &alice, 17)]);
+    let mut bytes: [u8; 64] = tx.signatures[0].into();
+    bytes[0] ^= 1;
+    tx.signatures[0] = bytes.into();
+    chain.send("a signature that was tampered with", tx);
+
+    // an account emptied by a transaction ceases to exist
+    let all = chain.balance(&alice);
+    let tx = chain.build(&chain.payer, &[&chain.payer, &chain.alice], &[transfer(&alice, &payer, all)]);
+    chain.send("alice sends everything she has", tx);
+    println!("  alice exists: {}", chain.svm.get_account(&alice).is_some());
+}
+
+fn main() {
+    let args: Vec<String> = std::env::args().collect();
+    match args.get(1).map(String::as_str) {
+        Some("anchor") if args.len() == 3 => anchor(&args[2]),
+        Some("transaction") if args.len() == 4 => transaction(&args[2], &args[3]),
+        _ => {
+            eprintln!("usage: oracle anchor anchor_vault.so\n       oracle transaction sysvar_probe.so counter.so");
+            std::process::exit(2);
+        }
+    }
 }

@@ -19,4 +19,31 @@ def encode (b : ByteArray) : String := Id.run do
     i := i + 3
   return String.fromUTF8! out
 
+def value (c : UInt8) : Nat :=
+  if c >= 65 && c <= 90 then c.toNat - 65
+  else if c >= 97 && c <= 122 then c.toNat - 71
+  else if c >= 48 && c <= 57 then c.toNat + 4
+  else if c == 43 || c == 45 then 62
+  else if c == 47 || c == 95 then 63
+  else 64
+
+/-- Decodes Base64 (either alphabet, padding optional, whitespace ignored).
+Returns an empty array if the text contains anything else. -/
+def decode (text : String) : ByteArray := Id.run do
+  let raw := text.toUTF8
+  let mut out := ByteArray.emptyWithCapacity (raw.size / 4 * 3 + 3)
+  let mut acc := 0
+  let mut bits := 0
+  for c in raw do
+    if !(c == 61 || c == 10 || c == 13 || c == 32) then
+      let v := value c
+      if v == 64 then
+        return ByteArray.empty
+      acc := (acc * 64 + v) % 16777216
+      bits := bits + 6
+      if bits >= 8 then
+        bits := bits - 8
+        out := out.push ((acc / (if bits == 0 then 1 else if bits == 2 then 4 else 16)) % 256).toUInt8
+  return out
+
 end Base64

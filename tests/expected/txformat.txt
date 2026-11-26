@@ -1,0 +1,16 @@
+legacy: 4 keys, 1 signer, 0 read-only signer, 1 read-only other
+  writable keys in address order: true; the program is last: true
+  264 bytes; parses: true; same bytes again: true; verifies: true
+  signed by someone else verifies: false
+  applied: success, fee 5000, charged true
+  alice 1000000000, carol 2000000000, payer 1999995000
+  with a stale blockhash: BlockhashNotFound, fee 0, charged false
+version 0: 221 bytes; parses: true; versioned: true; lookups: 1; same bytes again: true
+  transfer to a table account: success, fee 5000, charged true
+  alice 1500000000
+  transfer to a read-only table account: InstructionError(0, ReadonlyLamportChange), fee 5000, charged true
+  carol 0, payer 4999995000
+  missing table: AddressLookupTableNotFound, fee 0, charged false
+  entry beyond the table: InvalidAddressLookupTableIndex, fee 0, charged false
+  the same account twice: AccountLoadedTwice, fee 0, charged false
+fuzz: 600 inputs, 151 parsed, 3 with valid signatures, 3 applied

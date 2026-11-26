@@ -67,6 +67,7 @@ def unbalanced : UInt64 := 13
 def missingAccount : UInt64 := 14
 def invalidRealloc : UInt64 := 15
 def invalidSeeds : UInt64 := 16
+def meterExceeded : UInt64 := 17
 
 def statusName (s : UInt64) : String :=
   if s == 0 then "finished"
@@ -85,6 +86,7 @@ def statusName (s : UInt64) : String :=
   else if s == 13 then "lamports were created or destroyed"
   else if s == 14 then "an account the call refers to was not passed in"
   else if s == 15 then "an account grew by more than 10240 bytes"
+  else if s == 17 then "compute budget exceeded"
   else "the seeds do not derive a valid program address"
 
 -- System calls, numbered here; programs name them and the loader resolves the names.
@@ -112,6 +114,10 @@ def sysPanic : UInt64 := 21
 def sysInvokeRust : UInt64 := 22
 def sysLogData : UInt64 := 23
 def sysRemaining : UInt64 := 24
+def sysEpochSchedule : UInt64 := 25
+def sysEpochRewards : UInt64 := 26
+def sysLastRestart : UInt64 := 27
+def sysEpochStake : UInt64 := 28
 def sysUnknown : UInt64 := 255
 
 /-- True when the NUL-terminated string at `b[o ..]` equals `name`. -/
@@ -136,6 +142,10 @@ def syscallId (b : ByteArray) (o : Nat) : UInt64 :=
   else if cstrIs b o "sol_invoke_signed_rust" then sysInvokeRust
   else if cstrIs b o "sol_log_data" then sysLogData
   else if cstrIs b o "sol_remaining_compute_units" then sysRemaining
+  else if cstrIs b o "sol_get_epoch_schedule_sysvar" then sysEpochSchedule
+  else if cstrIs b o "sol_get_epoch_rewards_sysvar" then sysEpochRewards
+  else if cstrIs b o "sol_get_last_restart_slot" then sysLastRestart
+  else if cstrIs b o "sol_get_epoch_stake" then sysEpochStake
   else if cstrIs b o "sol_get_rent_sysvar" then sysRent
   else if cstrIs b o "sol_set_return_data" then sysSetReturn
   else if cstrIs b o "sol_get_return_data" then sysGetReturn
@@ -167,10 +177,12 @@ structure Program where
   syscalls : Array UInt64
   calls : Array UInt64
   error : String
+  /-- How many bytes of heap this run of the program has (a transaction can ask for more than the default). -/
+  heap : Nat
   deriving Inhabited
 
 def Program.failed (elf : ByteArray) (why : String) : Program :=
-  ⟨elf, 0, 0, 0, 0, 0, Array.emptyWithCapacity 0, Array.emptyWithCapacity 0, why⟩
+  ⟨elf, 0, 0, 0, 0, 0, Array.emptyWithCapacity 0, Array.emptyWithCapacity 0, why, 32768⟩
 
 /-- Where a section sits in the file, and the address it asks for. Size 0 means "absent". -/
 structure Section where
@@ -269,7 +281,7 @@ def load (image : ByteArray) : Program := Id.run do
           calls := calls.set! pc ((symValue - text.addr) / 8 + 1)
         else if nameOff < names.size then
           syscalls := syscalls.set! pc (syscallId elf (names.off + nameOff))
-  return ⟨elf, text.off, count, roLow, roHigh, ((entryAddr - text.addr) / 8).toNat, syscalls, calls, ""⟩
+  return ⟨elf, text.off, count, roLow, roHigh, ((entryAddr - text.addr) / 8).toNat, syscalls, calls, "", 32768⟩
 
 -- ------------------------------------------------------------------- memory
 --
@@ -284,8 +296,8 @@ def locate (p : Program) (inputLen : Nat) (addr : UInt64) (len : Nat) (write : B
   let off := (addr &&& 0xFFFFFFFF).toNat
   if len > 0x10000000 then Wire.bad
   else if region == 2 then (if off + len <= stackBytes then off else Wire.bad)
-  else if region == 3 then (if off + len <= heapBytes then stackBytes + off else Wire.bad)
-  else if region == 4 then (if off + len <= inputLen then stackBytes + heapBytes + off else Wire.bad)
+  else if region == 3 then (if off + len <= p.heap then stackBytes + off else Wire.bad)
+  else if region == 4 then (if off + len <= inputLen then stackBytes + p.heap + off else Wire.bad)
   else if region == 1 && !write then
     (if off >= p.roLow && off + len <= p.roHigh then progBase + off else Wire.bad)
   else Wire.bad
@@ -301,6 +313,7 @@ def loadAt (p : Program) (mem : ByteArray) (idx size : Nat) : UInt64 :=
 /-- The bytes at `[addr, addr + len)`, wherever they live; `none` if any are unmapped. -/
 def readBytes (p : Program) (mem : ByteArray) (inputLen : Nat) (addr len : UInt64) : Option ByteArray :=
   if len > 0x10000000 then none
+  else if len == 0 then some ByteArray.empty   -- nothing is read, so any address will do (Rust's empty slices point nowhere)
   else
     let idx := locate p inputLen addr len.toNat false
     if !(Wire.ok idx) then none
@@ -309,7 +322,9 @@ def readBytes (p : Program) (mem : ByteArray) (inputLen : Nat) (addr len : UInt6
 
 /-- Where `len` writable bytes at `addr` live, or `Wire.bad`. Lengths beyond any region are refused first. -/
 def writable (p : Program) (inputLen : Nat) (addr len : UInt64) : Nat :=
-  if len > 0x10000000 then Wire.bad else locate p inputLen addr len.toNat true
+  if len > 0x10000000 then Wire.bad
+  else if len == 0 then 0   -- nothing is written, so any address will do
+  else locate p inputLen addr len.toNat true
 
 -- --------------------------------------------------------------- arithmetic
 
@@ -410,16 +425,45 @@ structure Clock where
   unixTimestamp : UInt64
   deriving Inhabited
 
+/-- The other sysvars: cluster state a program can ask about, each in its
+serialized form, exactly as its sysvar account stores it. -/
+structure Sysvars where
+  /-- lamports per byte (u64), exemption threshold (f64), burn percentage (u8) -/
+  rent : ByteArray
+  /-- slots per epoch, leader schedule offset, warmup flag, first normal epoch and slot -/
+  epochSchedule : ByteArray
+  /-- the state of the current epoch's reward distribution (81 bytes) -/
+  epochRewards : ByteArray
+  /-- a vector of (slot, hash) for recent slots, newest first -/
+  slotHashes : ByteArray
+  /-- a vector of (epoch, effective, activating, deactivating) stake -/
+  stakeHistory : ByteArray
+  lastRestartSlot : UInt64
+  deriving Inhabited
+
+/-- One instruction that has been processed, or is being processed: how deep
+in the chain of calls it ran (1 = named by the transaction), and what it was. -/
+structure Frame where
+  depth : Nat
+  program : ByteArray
+  metas : Array Meta
+  data : ByteArray
+  deriving Inhabited
+
 /-- The programs that exist, and the world they run in. -/
 structure Machine where
   ids : Array ByteArray
   programs : Array Program
   clock : Clock
   budget : UInt64
+  sysvars : Sysvars
+  /-- bytes of heap each program gets -/
+  heap : Nat
   deriving Inhabited
 
 /-- Everything an instruction can change. `status` is `finished` (0) while
-all is well; `r0` carries a failing program's error code. -/
+all is well; `r0` carries a failing program's error code. `trace` lists
+every instruction processed so far in the transaction, calls included. -/
 structure State where
   accounts : Array Account
   units : UInt64
@@ -428,6 +472,7 @@ structure State where
   status : UInt64
   r0 : UInt64
   detail : String
+  trace : Array Frame
   deriving Inhabited
 
 def notFound : Nat := 0xFFFFFFFF
@@ -442,16 +487,33 @@ def zeros (b : ByteArray) (n : Nat) : ByteArray := Id.run do
 def systemProgram : ByteArray := zeros ByteArray.empty 32
 
 def loaderId : ByteArray := Base58.decode "BPFLoaderUpgradeab1e11111111111111111111111"
-def rentSysvar : ByteArray := Base58.decode "SysvarRent111111111111111111111111111111111"
+def nativeLoader : ByteArray := Base58.decode "NativeLoader1111111111111111111111111111111"
+def computeBudgetProgram : ByteArray := Base58.decode "ComputeBudget111111111111111111111111111111"
+def sysvarOwner : ByteArray := Base58.decode "Sysvar1111111111111111111111111111111111111"
 def clockSysvar : ByteArray := Base58.decode "SysvarC1ock11111111111111111111111111111111"
+def rentSysvar : ByteArray := Base58.decode "SysvarRent111111111111111111111111111111111"
+def epochScheduleSysvar : ByteArray := Base58.decode "SysvarEpochSchedu1e111111111111111111111111"
+def epochRewardsSysvar : ByteArray := Base58.decode "SysvarEpochRewards1111111111111111111111111"
+def slotHashesSysvar : ByteArray := Base58.decode "SysvarS1otHashes111111111111111111111111111"
+def stakeHistorySysvar : ByteArray := Base58.decode "SysvarStakeHistory1111111111111111111111111"
+def lastRestartSlotSysvar : ByteArray := Base58.decode "SysvarLastRestartS1ot1111111111111111111111"
+
+/-- The sysvars of a quiet cluster. Rent is what Agave serves today: 6,960
+lamports per byte with a threshold of 1.0 (older descriptions give 3,480 per
+byte-year and 2.0, the same minimum balance; programs can tell the two apart,
+so it matters for compute units). The epoch schedule is mainnet's: 432,000
+slots per epoch after a warmup that ends at epoch 14, slot 524,256. -/
+def Sysvars.standard : Sysvars :=
+  let rent := (Wire.putU64 (Wire.putU64 (ByteArray.emptyWithCapacity 17) 6960) 0x3FF0000000000000).push 50
+  let schedule := Wire.putU64 (Wire.putU64 ((Wire.putU64 (Wire.putU64 (ByteArray.emptyWithCapacity 33) 432000) 432000).push 1) 14) 524256
+  ⟨rent, schedule, zeros ByteArray.empty 81, zeros ByteArray.empty 8, zeros ByteArray.empty 8, 0⟩
 
 def Machine.create (clock : Clock) (budget : UInt64) : Machine :=
-  ⟨Array.emptyWithCapacity 4, Array.emptyWithCapacity 4, clock, budget⟩
+  ⟨Array.emptyWithCapacity 4, Array.emptyWithCapacity 4, clock, budget, Sysvars.standard, 32768⟩
 
 /-- Registers a program under an address. -/
 def Machine.add (m : Machine) (id : ByteArray) (p : Program) : Machine :=
-  let ⟨ids, programs, clock, budget⟩ := m
-  ⟨ids.push id, programs.push p, clock, budget⟩
+  { m with ids := m.ids.push id, programs := m.programs.push p }
 
 /-- The account that stands for a deployed program when it is passed to another program. -/
 def programAccount (id : ByteArray) : Account :=
@@ -484,19 +546,28 @@ def State.stop (st : State) (status : UInt64) (detail : String) : State :=
 def State.charge (st : State) (units : UInt64) : State :=
   { st with units := st.units + units }
 
+def ruleExecutable : String := "an executable account was modified"
+def ruleSpend : String := "lamports were taken from an account the program does not own"
+def ruleReadOnlyBalance : String := "the balance of an account that was not passed as writable was changed"
+def ruleReadOnly : String := "an account that was not passed as writable was modified"
+def ruleData : String := "the data of an account the program does not own was modified"
+def ruleOwner : String := "the owner of an account was changed by a program that may not reassign it"
+
 /-- Why `program` may not turn `old` into the given balance, owner and data,
-or `""` if it may. These are the runtime's ownership rules. -/
+or `""` if it may. These are the runtime's ownership rules, checked in the
+order Agave checks them: balance, then data, then owner. -/
 def changeError (program : ByteArray) (mayWrite : Bool) (old : Account) (lamports : UInt64)
     (owner data : ByteArray) : String :=
   let dataChanged := data != old.data
   let ownerChanged := owner != old.owner
+  let owns := old.owner == program
   if lamports == old.lamports && !dataChanged && !ownerChanged then ""
-  else if old.executable then "an executable account was modified"
-  else if !mayWrite then "an account that was not passed as writable was modified"
-  else if lamports < old.lamports && old.owner != program then
-    "lamports were taken from an account the program does not own"
-  else if dataChanged && old.owner != program then "the data of an account the program does not own was modified"
-  else if ownerChanged && old.owner != program then "the owner of an account the program does not own was changed"
+  else if old.executable then ruleExecutable
+  else if lamports < old.lamports && !owns then ruleSpend
+  else if lamports != old.lamports && !mayWrite then ruleReadOnlyBalance
+  else if dataChanged && !mayWrite then ruleReadOnly
+  else if dataChanged && !owns then ruleData
+  else if ownerChanged && (!owns || !mayWrite) then ruleOwner
   else ""
 
 -- ----------------------------------------------- program-derived addresses
@@ -800,18 +871,32 @@ def hex64 (v : UInt64) : String := Id.run do
 /-- Cost of a memory operation over `n` bytes: Solana charges per 250 bytes, at least 10. -/
 def memCost (n : UInt64) : UInt64 := if n / 250 > 10 then n / 250 else 10
 
-/-- The `Rent` sysvar as programs see it in memory: lamports per byte, the
-exemption threshold (the double 1.0) and the burn percentage. These are the
-values Agave serves today; older descriptions give 3,480 lamports per
-byte-year and a threshold of 2.0, which is the same minimum balance. Programs
-can tell the difference (p-token takes a different path), so it matters for
-compute units. -/
-def rentBytes : ByteArray :=
-  zeros ((Wire.putU64 (Wire.putU64 (ByteArray.emptyWithCapacity 24) 6960) 0x3FF0000000000000).push 50) 7
-
 def clockBytes (c : Clock) : ByteArray :=
   Wire.putU64 (Wire.putU64 (Wire.putU64 (Wire.putU64 (Wire.putU64 (ByteArray.emptyWithCapacity 40) c.slot)
     c.epochStartTimestamp) c.epoch) c.leaderScheduleEpoch) c.unixTimestamp
+
+/-- A sysvar's serialized form, by its address; empty if it is not one a program can ask for by address. -/
+def sysvarBytes (m : Machine) (name : ByteArray) : ByteArray :=
+  if name == clockSysvar then clockBytes m.clock
+  else if name == rentSysvar then m.sysvars.rent
+  else if name == epochScheduleSysvar then m.sysvars.epochSchedule
+  else if name == epochRewardsSysvar then m.sysvars.epochRewards
+  else if name == slotHashesSysvar then m.sysvars.slotHashes
+  else if name == stakeHistorySysvar then m.sysvars.stakeHistory
+  else if name == lastRestartSlotSysvar then Wire.putU64 (ByteArray.emptyWithCapacity 8) m.sysvars.lastRestartSlot
+  else ByteArray.empty
+
+/-- A sysvar as a Rust program holds it in memory, which is what the
+dedicated system calls copy out. It differs from the serialized form only by
+alignment padding. -/
+def sysvarInMemory (m : Machine) (id : UInt64) : ByteArray :=
+  if id == sysClock then clockBytes m.clock
+  else if id == sysRent then zeros m.sysvars.rent 7
+  else if id == sysEpochSchedule then
+    let s := m.sysvars.epochSchedule
+    zeros (s.extract 0 17) 7 ++ s.extract 17 33
+  else if id == sysEpochRewards then zeros m.sysvars.epochRewards 15
+  else Wire.putU64 (ByteArray.emptyWithCapacity 8) m.sysvars.lastRestartSlot
 
 mutual
 
@@ -895,7 +980,7 @@ partial def invoke (m : Machine) (st0 : State) (callerId : ByteArray) (callerMet
             st := { st with accounts := st.accounts.set! index { account with lamports := lamports, owner := owner, data := data } }
           | _, _, _ => return (st.stop accessViolation "an account view points outside the caller's memory", mem)
     if st.units > m.budget then
-      return (st.stop budgetExceeded "", mem)
+      return ({ st with units := m.budget, status := meterExceeded }, mem)
     -- run the callee
     st := execute m st call.programId metas call.data (depth + 1)
     if st.status != finished then
@@ -938,33 +1023,41 @@ partial def execute (m : Machine) (st0 : State) (programId : ByteArray) (metas :
     (data : ByteArray) (depth : Nat) : State := Id.run do
   if depth > maxInstructionDepth then
     return st0.stop callDepthExceeded "programs called one another more than 4 levels deep"
+  let st0 := { st0 with trace := st0.trace.push ⟨depth, programId, metas, data⟩ }
   let entry := st0.accounts
   let mut entrySum : UInt64 := 0
   for i in [0:metas.size] do
     if !(isRepeat metas i) then
       entrySum := entrySum + entry[metas[i]!.index]!.lamports
-  if programId == systemProgram then
-    return systemInstruction st0 metas data
+  if programId == systemProgram || programId == computeBudgetProgram then
+    -- built into the runtime; the compute budget program's work is done before the transaction runs
+    let after := if programId == systemProgram then systemInstruction st0 metas data else st0.charge 150
+    if after.units > m.budget then
+      return { after with units := m.budget, status := meterExceeded }
+    return after
   let mut which := notFound
   for i in [0:m.ids.size] do
     if m.ids[i]! == programId then
       which := i
   if which == notFound then
     return st0.stop unknownProgram (Base58.encode programId)
-  let p := m.programs[which]!
-  if p.error != "" then
-    return st0.stop unsupportedInstruction p.error
-  let ⟨accounts0, units0, logs0, returnData0, _, _, _⟩ := st0
+  if m.programs[which]!.error != "" then
+    return st0.stop unsupportedInstruction m.programs[which]!.error
+  let loaded : Program := m.programs[which]!
+  let p : Program := { loaded with heap := m.heap }
+  let ⟨accounts0, units0, logs0, returnData0, _, _, _, trace0⟩ := st0
   let mut accounts := accounts0
-  let mut units := units0
+  -- a heap beyond the first 32 KiB costs 8 units per further 32 KiB
+  let mut units := units0 + ((p.heap + 32767) / 32768 - 1).toUInt64 * 8
   let mut logs := logs0
   let mut returnData := returnData0
+  let mut trace := trace0
   let budget := m.budget
 
   let input := serialize accounts metas data programId
   let inputLen := input.size
-  let mut mem := ByteArray.emptyWithCapacity (stackBytes + heapBytes + inputLen)
-  for _ in [0:stackBytes + heapBytes] do
+  let mut mem := ByteArray.emptyWithCapacity (stackBytes + p.heap + inputLen)
+  for _ in [0:stackBytes + p.heap] do
     mem := mem.push 0
   mem := mem ++ input
   let mut regs : Array UInt64 := Array.replicate 11 0
@@ -1126,9 +1219,9 @@ partial def execute (m : Machine) (st0 : State) (programId : ByteArray) (metas :
               mem := (Sha256.hash message).copySlice 0 mem dest 32
             else
               status := accessViolation
-        else if id == sysClock || id == sysRent then
-          -- a sysvar, copied out in its in-memory layout
-          let bytes := if id == sysClock then clockBytes m.clock else rentBytes
+        else if id == sysClock || id == sysRent || id == sysEpochSchedule || id == sysEpochRewards || id == sysLastRestart then
+          -- a sysvar, copied out the way a Rust program holds it in memory
+          let bytes := sysvarInMemory m id
           units := units + 100 + bytes.size.toUInt64
           let dest := writable p inputLen a1 bytes.size.toUInt64
           if Wire.ok dest then
@@ -1136,22 +1229,29 @@ partial def execute (m : Machine) (st0 : State) (programId : ByteArray) (metas :
           else
             status := accessViolation
         else if id == sysGetSysvar then
-          -- part of a sysvar's serialized form: a1 names it, a3 and r4 give offset and length
+          -- part of a sysvar's serialized form: a1 names it, a2 is where to put it, a3 and r4 give offset and length
           let length := regs[4]!
           units := units + 100 + (if length / 250 > 10 then length / 250 else 10)
+          let dest := writable p inputLen a2 length
           match readBytes p mem inputLen a1 32 with
           | none => status := accessViolation
           | some name =>
-            let whole := if name == rentSysvar then rentBytes.extract 0 17
-              else if name == clockSysvar then clockBytes m.clock else ByteArray.empty
-            let dest := writable p inputLen a2 length
-            if whole.size == 0 then
+            let whole := sysvarBytes m name
+            if !(Wire.ok dest) || a3 + length < a3 then
+              status := accessViolation
+            else if whole.size == 0 then
               result := 2
-            else if a3 > whole.size.toUInt64 || length > whole.size.toUInt64 || a3 + length > whole.size.toUInt64 then
+            else if a3 + length > whole.size.toUInt64 then
               result := 1
-            else if Wire.ok dest then
-              mem := (whole.extract a3.toNat (a3 + length).toNat).copySlice 0 mem dest length.toNat
             else
+              mem := (whole.extract a3.toNat (a3 + length).toNat).copySlice 0 mem dest length.toNat
+        else if id == sysEpochStake then
+          -- stake of the whole cluster (a1 = 0) or delegated to one vote account; nothing is staked here
+          if a1 == 0 then
+            units := units + 100
+          else
+            units := units + 110
+            if (readBytes p mem inputLen a1 32).isNone then
               status := accessViolation
         else if id == sysSetReturn then
           units := units + 100 + a2 / 250
@@ -1195,7 +1295,45 @@ partial def execute (m : Machine) (st0 : State) (programId : ByteArray) (metas :
           units := units + 100
           result := depth.toUInt64
         else if id == sysSibling then
+          -- an earlier instruction at this depth: a1 = how far back (0 = the one before this). A program
+          -- calls this twice: first to learn the sizes (written to the header at a2), then with buffers.
           units := units + 100
+          let mut found := notFound
+          let mut seen : UInt64 := 0
+          let mut k := trace.size
+          while k > 0 do
+            k := k - 1
+            if trace[k]!.depth < depth then
+              k := 0
+            else if trace[k]!.depth == depth then
+              if a1 + 1 == seen then
+                found := k
+                k := 0
+              else
+                seen := seen + 1
+          if found != notFound then
+            let frame := trace[found]!
+            let header := writable p inputLen a2 16
+            if !(Wire.ok header) then
+              status := accessViolation
+            else if Wire.u64 mem header == frame.data.size.toUInt64 && Wire.u64 mem (header + 8) == frame.metas.size.toUInt64 then
+              let idAt := writable p inputLen a3 32
+              let dataAt := writable p inputLen regs[4]! frame.data.size.toUInt64
+              let metasAt := writable p inputLen regs[5]! (34 * frame.metas.size).toUInt64
+              if Wire.ok idAt && Wire.ok dataAt && Wire.ok metasAt then
+                mem := frame.program.copySlice 0 mem idAt 32
+                mem := frame.data.copySlice 0 mem dataAt frame.data.size
+                for j in [0:frame.metas.size] do
+                  let mt := frame.metas[j]!
+                  mem := accounts[mt.index]!.key.copySlice 0 mem (metasAt + 34 * j) 32
+                  mem := mem.set! (metasAt + 34 * j + 32) (if mt.signer then 1 else 0)
+                  mem := mem.set! (metasAt + 34 * j + 33) (if mt.writable then 1 else 0)
+              else
+                status := accessViolation
+            else
+              mem := storeAt mem header 8 frame.data.size.toUInt64
+              mem := storeAt mem (header + 8) 8 frame.metas.size.toUInt64
+            result := 1
         else if id == sysFindAddress || id == sysCreateAddress then
           -- seeds at a1 (a2 of them), program address at a3; results to r4 (and the bump to r5)
           units := units + 1500
@@ -1228,10 +1366,11 @@ partial def execute (m : Machine) (st0 : State) (programId : ByteArray) (metas :
                 status := accessViolation
           | _, _ => status := accessViolation
         else if id == sysInvoke || id == sysInvokeRust then
-          let (after, memAfter) := invoke m ⟨accounts, units, logs, returnData, finished, 0, ""⟩ programId metas entry
+          let (after, memAfter) := invoke m ⟨accounts, units, logs, returnData, finished, 0, "", trace⟩ programId metas entry
             p mem inputLen a1 a2 a3 regs[4]! regs[5]! depth (id == sysInvokeRust)
           mem := memAfter
-          let ⟨accounts1, units1, logs1, returnData1, status1, r01, detail1⟩ := after
+          let ⟨accounts1, units1, logs1, returnData1, status1, r01, detail1, trace1⟩ := after
+          trace := trace1
           accounts := accounts1
           units := units1
           logs := logs1
@@ -1251,7 +1390,9 @@ partial def execute (m : Machine) (st0 : State) (programId : ByteArray) (metas :
         if status != finished then
           break
         if units > budget then
-          status := budgetExceeded
+          -- a system call that the budget cannot pay for uses up whatever was left
+          units := budget
+          status := meterExceeded
           break
         regs := regs.set! 0 result
       else if op == 0 || op == 0x80 || op == 0x90 || op > 0xd0 then
@@ -1293,7 +1434,7 @@ partial def execute (m : Machine) (st0 : State) (programId : ByteArray) (metas :
     r0 := regs[0]!
   if status == finished then
     -- the program is done: take its changes to the accounts, if the rules allow them
-    let mut o := stackBytes + heapBytes + 8
+    let mut o := stackBytes + p.heap + 8
     let mut sum : UInt64 := 0
     for i in [0:metas.size] do
       if status == finished then
@@ -1320,14 +1461,14 @@ partial def execute (m : Machine) (st0 : State) (programId : ByteArray) (metas :
           o := o + accountSpan was
     if status == finished && sum != entrySum then
       status := unbalanced
-  return ⟨accounts, units, logs, returnData, status, r0, detail⟩
+  return ⟨accounts, units, logs, returnData, status, r0, detail, trace⟩
 
 end
 
 /-- Processes a top-level instruction. A failed instruction leaves the accounts as they were. -/
 def process (m : Machine) (accounts : Array Account) (programId : ByteArray) (metas : Array Meta)
     (data : ByteArray) : State :=
-  let st := execute m ⟨accounts, 0, Array.emptyWithCapacity 4, ByteArray.empty, finished, 0, ""⟩ programId metas data 1
+  let st := execute m ⟨accounts, 0, Array.emptyWithCapacity 4, ByteArray.empty, finished, 0, "", Array.emptyWithCapacity 4⟩ programId metas data 1
   if st.status == finished then st else { st with accounts := accounts }
 
 /-- Names for the standard program errors a program returns in `r0`. -/

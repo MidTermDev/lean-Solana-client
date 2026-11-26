@@ -16,6 +16,8 @@ jobs:
       - run: make test
       - name: a Lean program calls the token programs, from the command line
         run: examples/amm.sh | grep -q 'units     4,690 of 200,000'
+      - name: a signed transaction is applied, from the command line
+        run: examples/transaction.sh | grep -q 'fee          5,120 lamports'
       - name: the outputs are static and freestanding
         run: |
           file build/leanc build/leansol
@@ -44,5 +46,5 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
-      - name: run the Anchor scenario on Agave's runtime and compare with the Lean virtual machine's output
+      - name: run the Anchor and transaction scenarios on Agave's runtime and compare with the Lean virtual machine's output
         run: make oracle

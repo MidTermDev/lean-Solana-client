@@ -2,7 +2,7 @@
 
 Everything here is sBPF v0 bytecode that this repository's virtual machine
 (`lib/Solana/Sbpf.lean`) loads and runs in its tests. Apart from the Anchor
-program, none of it was built here, and none of it is modified. `SHA256SUMS` lists the hashes.
+program and the sysvar probe, none of it was built here, and none of it is modified. `SHA256SUMS` lists the hashes.
 
 ## Written in Lean, compiled by lean-svm
 
@@ -50,6 +50,16 @@ using Solana 3.1 tools (platform-tools v1.52). The checked-in file is what
 the tests and `tests/oracle` use; a rebuild with other tool versions will
 differ in bytes and possibly in compute units.
 
+## A sysvar probe, with its source
+
+`sysvar_probe.so`, built from [`sysvar-probe/`](sysvar-probe/src/lib.rs)
+
+A Rust program written for this repository (MIT) that asks for every sysvar
+in every way a program can (dedicated system calls, the generic one, and
+accounts), reads the transaction it is part of, and logs what it finds.
+Two runtimes that produce the same logs agree on the sysvars. Built like
+the Anchor program, with `solana-program` 2.3.
+
 ## What the tests do with them
 
 `tests/sbpf.lean` runs the four self-contained programs. `tests/cpi.lean`
@@ -59,7 +69,9 @@ one another. Both use lean-svm's own scenarios and require the
 compute-unit counts its runner reports from Agave. `tests/anchor.lean` runs
 the Anchor vault, which calls the Associated Token Account program, which
 calls the token program; `make oracle` runs the same scenario on Agave's
-runtime and requires identical output.
+runtime and requires identical output. `tests/transaction.lean` applies
+whole signed transactions, using the counter and the sysvar probe, and is
+compared with Agave the same way.
 
 Try one:
 

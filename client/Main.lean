@@ -5,6 +5,7 @@ import GossipTile
 import Dashboard
 import HttpTile
 import RunProgram
+import RunTx
 import Net.Dns
 
 /-!
@@ -36,7 +37,9 @@ def usage : String :=
   "  --help              this text\n" ++
   "\n" ++
   "       leansol run PROGRAM.so [options]   execute an on-chain program locally\n" ++
-  "                                          (see `leansol run --help`)\n"
+  "                                          (see `leansol run --help`)\n" ++
+  "       leansol tx TRANSACTION [options]   apply a signed transaction to accounts, locally\n" ++
+  "                                          (see `leansol tx --help`)\n"
 
 def die (msg : String) : IO Unit := do
   IO.eprintln s!"leansol: {msg}"
@@ -120,6 +123,9 @@ def main : IO Unit := do
   let argc ← Sys.argc
   if argc >= 2 && (← Sys.arg 1) == "run" then
     RunProgram.main
+    return
+  if argc >= 2 && (← Sys.arg 1) == "tx" then
+    RunTx.main
     return
   let mut cluster := "mainnet"
   let mut hosts : Array String := #[]

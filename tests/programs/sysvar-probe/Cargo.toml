@@ -1,0 +1,18 @@
+[package]
+name = "sysvar-probe"
+version = "0.1.0"
+edition = "2021"
+description = "Logs what a program can learn from the sysvars, so two runtimes can be compared by their logs"
+license = "MIT"
+
+[lib]
+crate-type = ["cdylib", "lib"]
+name = "sysvar_probe"
+
+[dependencies]
+solana-program = "2.3.0"
+
+[profile.release]
+overflow-checks = true
+lto = "fat"
+codegen-units = 1
