@@ -11,7 +11,9 @@ typedef unsigned short u16;
 typedef unsigned int u32;
 typedef unsigned long long u64;
 typedef long long i64;
-typedef int bool;
+// Macros rather than a typedef: C23 made bool, true and false keywords, and
+// this file has to compile the same way under every C standard.
+#define bool int
 #define true 1
 #define false 0
 #define NULL ((void *)0)

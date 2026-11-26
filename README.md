@@ -122,11 +122,11 @@ Four syscalls, start to finish. There is no dynamic loader, no libc initialisati
 
 ```mermaid
 flowchart LR
-    A[".lean files"] --> B["lexer + parser<br/><sub>Lean's position-sensitive grammar</sub>"]
-    B --> C["elaborator<br/><sub>bidirectional type checker</sub>"]
-    C --> D["optimiser<br/><sub>inlining, constant folding</sub>"]
-    D --> E["ownership analysis<br/><sub>last-use moves</sub>"]
-    E --> F["code generator<br/><sub>x86-64 bytes, emitted directly</sub>"]
+    A[".lean files"] --> B["lexer + parser"]
+    B --> C["elaborator<br/>(type checker)"]
+    C --> D["inlining +<br/>constant folding"]
+    D --> E["ownership analysis<br/>(last-use moves)"]
+    E --> F["x86-64 encoder"]
     F --> G["ELF writer"]
     G --> H["static executable"]
 ```
@@ -138,7 +138,7 @@ The official Lean compiler turns Lean into C and hands it to a C toolchain, whic
 - The compiler binary itself is **freestanding**: built with `-nostdlib -ffreestanding -static`, it has zero undefined symbols and reaches the kernel through five raw syscalls (`read`, `write`, `open`, `close`, `mmap`).
 - Its output is **freestanding** too. There is no C runtime underneath compiled programs.
 - The runtime is **written in Lean** ([`rt/Rt.lean`](rt/Rt.lean)) and compiled along with your program: the allocator, growable arrays, strings, printing, panics.
-- A C compiler is needed once, to bootstrap `leanc`. Any will do: the client binary is byte-for-byte identical whether `leanc` was built with gcc or clang.
+- A C compiler is needed once, to bootstrap `leanc`. Any will do: the client binary is byte-for-byte identical whether `leanc` was built with gcc or clang, as C99, C11 or C23.
 
 Under the runtime sit a handful of **intrinsics** that `leanc` turns straight into instructions. In Lean they are ordinary `opaque` declarations:
 
@@ -199,7 +199,7 @@ Borrowing Firedancer's vocabulary, each job is a *tile*: one process, one respon
 
 ```mermaid
 flowchart LR
-    NET(("UDP<br/>socket")) --> RX["net-rx"]
+    NET(("UDP socket")) --> RX["net-rx"]
     RX -- ring --> V1["verify"]
     RX -- ring --> V2["verify"]
     RX -- ring --> V3["verify × N"]
@@ -208,7 +208,7 @@ flowchart LR
     V3 -- ring --> G
     G -- ring --> TX["net-tx"]
     TX --> NET
-    G -. "counters (shared page)" .-> S["supervisor<br/>+ dashboard"]
+    G -. "counters in a shared page" .-> S["supervisor + dashboard"]
 ```
 
 | tile | what it does | file |

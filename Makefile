@@ -29,13 +29,13 @@ lean-check:
 # No libc, no dynamic linker: leanc itself is a static, freestanding binary.
 $(LEANC): $(SRC)
 	@mkdir -p build
-	$(CC) $(CFLAGS) -ffreestanding -fno-stack-protector -fno-builtin -nostdlib -static \
+	$(CC) -std=gnu11 $(CFLAGS) -ffreestanding -fno-stack-protector -fno-builtin -nostdlib -static \
 		-o $@ leanc/*.c
 
 # Hosted build with sanitizers, for working on the compiler itself.
 build/leanc-debug: $(SRC)
 	@mkdir -p build
-	$(CC) -g -O0 -Wall -Wextra -Wno-unused-parameter -DLEANC_HOSTED -fsanitize=address,undefined \
+	$(CC) -std=gnu11 -g -O0 -Wall -Wextra -Wno-unused-parameter -DLEANC_HOSTED -fsanitize=address,undefined \
 		-fno-builtin -o $@ leanc/*.c
 
 clean:
