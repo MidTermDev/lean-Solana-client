@@ -6,6 +6,8 @@ import Dashboard
 import HttpTile
 import RunProgram
 import RunTx
+import RunBlock
+import BlockTile
 import Net.Dns
 
 /-!
@@ -25,6 +27,8 @@ def usage : String :=
   "  --port N            UDP port to bind (default: chosen by the kernel)\n" ++
   "  --tiles N           number of signature-verification processes (default 4, max 16)\n" ++
   "  --fanout N          peers pulled from every 200 ms, besides entrypoints (default 12)\n" ++
+  "  --block-interval S  fetch a recent block from validators and verify it every S seconds\n" ++
+  "                      (default 5; 0 = never)\n" ++
   "  --duration SECONDS  exit after this long (default: run until interrupted)\n" ++
   "  --plain             one status line per second instead of the dashboard\n" ++
   "  --identity FILE     keep the node's key in FILE so its identity survives restarts\n" ++
@@ -39,7 +43,9 @@ def usage : String :=
   "       leansol run PROGRAM.so [options]   execute an on-chain program locally\n" ++
   "                                          (see `leansol run --help`)\n" ++
   "       leansol tx TRANSACTION [options]   apply a signed transaction to accounts, locally\n" ++
-  "                                          (see `leansol tx --help`)\n"
+  "                                          (see `leansol tx --help`)\n" ++
+  "       leansol block [SLOT] [options]     fetch a block from the cluster and verify it\n" ++
+  "                                          (see `leansol block --help`)\n"
 
 def die (msg : String) : IO Unit := do
   IO.eprintln s!"leansol: {msg}"
@@ -127,11 +133,15 @@ def main : IO Unit := do
   if argc >= 2 && (← Sys.arg 1) == "tx" then
     RunTx.main
     return
+  if argc >= 2 && (← Sys.arg 1) == "block" then
+    RunBlock.main
+    return
   let mut cluster := "mainnet"
   let mut hosts : Array String := #[]
   let mut port : UInt16 := 0
   let mut tiles := 4
   let mut fanout := 12
+  let mut blockInterval : UInt64 := 5
   let mut duration := 0
   let mut plain := !(← Sys.isTty 1)
   let mut jsonOut := false
@@ -167,6 +177,8 @@ def main : IO Unit := do
         tiles := ← numberArg a v
       else if a == "--fanout" then
         fanout := ← numberArg a v
+      else if a == "--block-interval" then
+        blockInterval := (← numberArg a v).toUInt64
       else if a == "--duration" then
         duration := ← numberArg a v
       else if a == "--json-file" then
@@ -243,7 +255,7 @@ def main : IO Unit := do
   let cfg : Config :=
     { seed := seed, pubkey := pubkey, publicIp := publicIp, port := boundPort,
       shredVersion := shredVersion, entrypoints := entrypoints, outsetUs := outsetUs, fanout := fanout,
-      cluster := cluster, httpAddr := listen }
+      cluster := cluster, httpAddr := listen, blockInterval := blockInterval }
   -- the HTTP endpoint is opened here, before forking, so that a port that
   -- is already taken is reported instead of silently missing
   let mut httpFd := noFd
@@ -293,6 +305,12 @@ def main : IO Unit := do
   if child3 then
     gossipTile sh cfg
     return
+  if cfg.blockInterval != 0 then
+    let (p5, child5) ← spawn pids
+    pids := p5
+    if child5 then
+      blockTile sh cfg
+      return
   if httpFd != noFd then
     let (p4, child4) ← spawn pids
     pids := p4

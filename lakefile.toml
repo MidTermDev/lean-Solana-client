@@ -21,4 +21,4 @@ globs = ["Crypto.+", "Encoding.+", "Net.+", "Solana.+", "Sys", "Ipc", "Fmt", "Ta
 [[lean_lib]]
 name = "Client"
 srcDir = "client"
-globs = ["Layout", "Directory", "NetTiles", "VerifyTile", "GossipTile", "Export", "HttpTile", "RunProgram", "RunTx", "Dashboard", "Main"]
+globs = ["Layout", "Directory", "NetTiles", "VerifyTile", "GossipTile", "Export", "HttpTile", "RunProgram", "RunTx", "RunBlock", "BlockTile", "Dashboard", "Main"]

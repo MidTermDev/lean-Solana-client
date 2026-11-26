@@ -84,6 +84,8 @@ def ingest (st : State) (v : ByteArray) : State := Id.run do
         nodes := nodes.set row Nodes.fClient (c.client + 1)
         nodes := nodes.set row Nodes.fAddr ((c.gossipIp.toUInt64 <<< 16) ||| c.gossipPort.toUInt64)
         nodes := nodes.set row Nodes.fShred c.shredVersion
+        nodes := nodes.set row Nodes.fRepair c.repair
+        nodes := nodes.set row Nodes.fTvu c.tvu
   else if info.kind == Crds.kindSnapshotHashes then
     let slot := Crds.snapshotSlot v info.body
     let (ns, row) := rowFor nodes v info.origin

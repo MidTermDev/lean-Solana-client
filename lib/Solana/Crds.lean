@@ -86,6 +86,10 @@ structure Contact where
   client : UInt64
   gossipIp : UInt32
   gossipPort : UInt16
+  /-- where it answers requests for shreds it has (`ip <<< 16 ||| port`, or 0) -/
+  repair : UInt64
+  /-- where it receives shreds (`ip <<< 16 ||| port`, or 0) -/
+  tvu : UInt64
   deriving Inhabited
 
 /-- Decodes the `ContactInfo` whose public key starts at `p`. `stop` is
@@ -131,6 +135,8 @@ def parseContact (b : ByteArray) (p : Nat) : Contact := Id.run do
   let mut port : UInt64 := 0
   let mut gossipIp : UInt32 := 0
   let mut gossipPort : UInt16 := 0
+  let mut repair : UInt64 := 0
+  let mut tvu : UInt64 := 0
   for _ in [0:nsock.toNat] do
     let key := u8 b q
     let idx := (u8 b (q + 1)).toNat
@@ -140,6 +146,11 @@ def parseContact (b : ByteArray) (p : Nat) : Contact := Id.run do
     if key == 0 && idx < ips.size && ok q then
       gossipIp := ips[idx]!
       gossipPort := port.toUInt16
+    -- socket 4 serves repair requests, socket 10 receives shreds (both UDP)
+    if key == 4 && idx < ips.size && ok q then
+      repair := (ips[idx]!.toUInt64 <<< 16) ||| port
+    if key == 10 && idx < ips.size && ok q then
+      tvu := (ips[idx]!.toUInt64 <<< 16) ||| port
   -- extensions: (type, length, bytes)
   let next := varint b q
   q := skipVarint b q
@@ -150,7 +161,7 @@ def parseContact (b : ByteArray) (p : Nat) : Contact := Id.run do
     let len := varint b q
     q := skipVarint b q
     q := skipN b q len 1
-  return ⟨q, wallclock, shred, major, minor, patch, client, gossipIp, gossipPort⟩
+  return ⟨q, wallclock, shred, major, minor, patch, client, gossipIp, gossipPort, repair, tvu⟩
 
 /-- Offset one past the record of the given kind whose body starts at `p`. -/
 def stopOf (b : ByteArray) (kind p : Nat) : Nat := Id.run do

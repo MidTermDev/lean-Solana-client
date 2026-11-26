@@ -15,6 +15,9 @@ created by the supervisor before it forks:
                                                                   | net-tx |
                                                                   +--------+
 
+A `block` tile, with a socket of its own, asks validators for the shreds of
+recent blocks and checks them (see `BlockTile`).
+
 An optional `http` tile serves the same state to the outside (Prometheus
 metrics and JSON) from the shared pages, without involving the other tiles.
 
@@ -59,6 +62,25 @@ def versions : Nat := 96
 def tileSigs : Nat := 128
 /-- Per verify tile: microseconds spent verifying. -/
 def tileBusyUs : Nat := 160
+-- The block tile: blocks fetched from validators and checked.
+def blocksOk : Nat := 192
+def blocksBad : Nat := 193
+/-- Slots for which no complete block arrived (skipped by their leader, or the fetch timed out). -/
+def blocksMissed : Nat := 194
+def blockSlot : Nat := 195
+def blockTxs : Nat := 196
+def blockShreds : Nat := 197
+def blockVerifyMs : Nat := 198
+def blockFetchMs : Nat := 199
+def blockTxTotal : Nat := 200
+def blockSigTotal : Nat := 201
+def blockShredTotal : Nat := 202
+def blockEntryTotal : Nat := 203
+/-- 4 words: the leader of the last verified block. -/
+def blockLeader : Nat := 204
+/-- 4 words: its blockhash. -/
+def blockHash : Nat := 208
+def blockRequests : Nat := 212
 
 end M
 
@@ -76,6 +98,8 @@ structure Config where
   cluster : String
   /-- Where the HTTP endpoint listens (packed address), or 0 when it is off. -/
   httpAddr : UInt64
+  /-- Seconds between the blocks the block tile fetches and checks; 0 turns it off. -/
+  blockInterval : UInt64
 
 /-- The shared mappings and the socket, inherited by every tile across `fork`. -/
 structure Shared where

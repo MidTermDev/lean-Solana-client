@@ -61,6 +61,25 @@ def json (sh : Shared) (cfg : Config) (withNodes : Bool) : IO String := do
   s := s ++ s!"  \"tipSlot\": {← m.get M.tipSlot},\n"
   s := s ++ s!"  \"tipReporters\": {← m.get M.tipReporters},\n"
   s := s ++ s!"  \"nodeCount\": {← m.get M.nodes},\n"
+  -- blocks fetched from validators and checked by the block tile
+  let mut leader := ByteArray.emptyWithCapacity 32
+  let mut blockhash := ByteArray.emptyWithCapacity 32
+  for i in [0:4] do
+    leader := Wire.putU64 leader (← m.get (M.blockLeader + i))
+    blockhash := Wire.putU64 blockhash (← m.get (M.blockHash + i))
+  let checked ← m.get M.blocksOk
+  s := s ++ "  \"blocks\": {"
+  s := s ++ s!"\"verified\": {checked}, \"invalid\": {← m.get M.blocksBad}, \"unavailable\": {← m.get M.blocksMissed}, "
+  s := s ++ s!"\"transactions\": {← m.get M.blockTxTotal}, \"signatures\": {← m.get M.blockSigTotal}, "
+  s := s ++ s!"\"shreds\": {← m.get M.blockShredTotal}, \"entries\": {← m.get M.blockEntryTotal}, "
+  s := s ++ s!"\"repairRequests\": {← m.get M.blockRequests}, "
+  if checked == 0 then
+    s := s ++ "\"last\": null},\n"
+  else
+    s := s ++ s!"\"last\": \{\"slot\": {← m.get M.blockSlot}, \"leader\": \"{Base58.encode leader}\", "
+    s := s ++ s!"\"blockhash\": \"{Base58.encode blockhash}\", \"transactions\": {← m.get M.blockTxs}, "
+    s := s ++ s!"\"shreds\": {← m.get M.blockShreds}, \"fetchMs\": {← m.get M.blockFetchMs}, "
+    s := s ++ s!"\"verifyMs\": {← m.get M.blockVerifyMs}}},\n"
   s := s ++ s!"  \"signaturesVerified\": {← m.get M.sigOk},\n"
   s := s ++ s!"  \"signaturesBad\": {← m.get M.sigBad},\n"
   s := s ++ s!"  \"recordsMalformed\": {← m.get M.malformed},\n"
@@ -109,6 +128,9 @@ def json (sh : Shared) (cfg : Config) (withNodes : Bool) : IO String := do
       s := s ++ s!"\"identity\": \"{Base58.encode (snap.keys.extract (row * 32) (row * 32 + 32))}\", "
       s := s ++ (if addr == 0 then "\"gossip\": null, "
         else s!"\"gossip\": \"{Ip.toString (addrIp addr)}:{addrPort addr}\", ")
+      let repair := snap.field row Nodes.fRepair
+      s := s ++ (if repair == 0 then "\"repair\": null, "
+        else s!"\"repair\": \"{Ip.toString (addrIp repair)}:{addrPort repair}\", ")
       s := s ++ s!"\"client\": \"{clientLabel client}\", \"clientId\": {client - 1}, "
       s := s ++ s!"\"version\": \"{versionString (snap.field row Nodes.fVersion)}\", "
       s := s ++ s!"\"shredVersion\": {snap.field row Nodes.fShred}, "
@@ -138,6 +160,17 @@ def prometheus (sh : Shared) (cfg : Config) : IO String := do
   s := s ++ sample "leansol_tip_reporters" "gauge" "Nodes that have announced a snapshot slot."
     (← m.get M.tipReporters)
   s := s ++ sample "leansol_records_stored" "gauge" "Distinct records currently remembered." (← m.get M.stored)
+  s := s ++ sample "leansol_blocks_verified_total" "counter"
+    "Blocks fetched from validators whose shreds, leader signature, proof of history and transaction signatures all verified."
+    (← m.get M.blocksOk)
+  s := s ++ sample "leansol_blocks_invalid_total" "counter" "Blocks fetched that failed a check." (← m.get M.blocksBad)
+  s := s ++ sample "leansol_blocks_unavailable_total" "counter"
+    "Slots for which no complete block could be fetched (skipped by the leader, or timed out)." (← m.get M.blocksMissed)
+  s := s ++ sample "leansol_block_slot" "gauge" "Slot of the last block verified." (← m.get M.blockSlot)
+  s := s ++ sample "leansol_block_transactions_total" "counter" "Transactions in verified blocks." (← m.get M.blockTxTotal)
+  s := s ++ sample "leansol_block_signatures_total" "counter" "Transaction signatures verified in blocks."
+    (← m.get M.blockSigTotal)
+  s := s ++ sample "leansol_block_shreds_total" "counter" "Data shreds of verified blocks." (← m.get M.blockShredTotal)
   s := s ++ sample "leansol_signatures_verified_total" "counter" "Records whose Ed25519 signature verified."
     (← m.get M.sigOk)
   s := s ++ sample "leansol_signatures_bad_total" "counter" "Records or pings whose signature did not verify."

@@ -57,6 +57,11 @@ structure Message where
   blockhash : ByteArray
   instructions : Array Compiled
   lookups : Array Lookup
+  /-- The newer "v1" layout: header first, signatures last, no lookup tables, and the compute budget
+  given in the message itself (`config`) instead of by instructions. -/
+  v1 : Bool
+  /-- For v1: a mask saying which settings follow (priority fee, unit limit, loaded data limit, heap size), then the settings. -/
+  config : ByteArray
   deriving Inhabited
 
 /-- A transaction. `signed` is the serialized message, the bytes the
@@ -133,7 +138,7 @@ def compile (payer : ByteArray) (instructions : Array Instruction) (blockhash : 
     for a in ix.accounts do
       indexes := indexes.push (position order a.key).toUInt8
     compiled := compiled.push ⟨position order ix.program, indexes, ix.data⟩
-  return ⟨false, counts[0]! + counts[1]!, counts[1]!, counts[3]!, order, blockhash, compiled, Array.emptyWithCapacity 0⟩
+  return ⟨false, counts[0]! + counts[1]!, counts[1]!, counts[3]!, order, blockhash, compiled, Array.emptyWithCapacity 0, false, ByteArray.empty⟩
 
 -- --------------------------------------------------------------- wire format
 
@@ -160,6 +165,12 @@ def Message.serialize (m : Message) : ByteArray := Id.run do
   return b
 
 def Transaction.serialize (tx : Transaction) : ByteArray := Id.run do
+  if tx.message.v1 then
+    -- the newer layout: the message, then the signatures with no count
+    let mut b := tx.signed
+    for sig in tx.signatures do
+      b := b ++ sig
+    return b
   let mut b := Wire.putVarint (ByteArray.emptyWithCapacity (tx.signed.size + 200)) tx.signatures.size.toUInt64
   for sig in tx.signatures do
     b := b ++ sig
@@ -195,7 +206,7 @@ def Transaction.verify (tx : Transaction) : Bool := Id.run do
 
 def failed (why : String) : Transaction :=
   ⟨Array.emptyWithCapacity 0, ⟨false, 0, 0, 0, Array.emptyWithCapacity 0, ByteArray.empty, Array.emptyWithCapacity 0,
-    Array.emptyWithCapacity 0⟩, ByteArray.empty, why⟩
+    Array.emptyWithCapacity 0, false, ByteArray.empty⟩, ByteArray.empty, why⟩
 
 /-- Reads a short vector of bytes at `o`: a length, then that many bytes.
 Returns the offset after it, or `Wire.bad`. -/
@@ -207,25 +218,72 @@ def bytesAt (b : ByteArray) (o : Nat) : ByteArray :=
   let stop := afterBytes b o
   if Wire.ok stop then b.extract start stop else ByteArray.empty
 
-/-- Parses a serialized transaction. Every length comes from the input and is checked against it. -/
-def parse (b : ByteArray) : Transaction := Id.run do
-  let count := Wire.varint b 0
-  let mut o := Wire.skipN b (Wire.skipVarint b 0) count 64
+/-- Parses a "v1" transaction (the first byte is 0x81). Unlike the older
+layouts it starts with the message and ends with the signatures, uses
+fixed-width counts, and carries its compute budget in the message:
+
+    0x81 · header (3) · settings mask (4) · blockhash (32) · instruction count (1) · address count (1)
+    · addresses · settings · per instruction: program, account count, data length (4)
+    · per instruction: account indexes, data · signatures -/
+def parseV1 (b : ByteArray) (at_ : Nat) : Transaction × Nat := Id.run do
+  if !(Wire.ok (Wire.adv b at_ 42)) then
+    return (failed "the message header is truncated", Wire.bad)
+  let signers := (Wire.u8 b (at_ + 1)).toNat
+  let mask := Wire.u32 b (at_ + 4)
+  let ixCount := (Wire.u8 b (at_ + 40)).toNat
+  let keyCount := (Wire.u8 b (at_ + 41)).toNat
+  -- the settings present: a priority fee is two words, the others one each
+  let settings := (if mask &&& 3 != 0 then 8 else 0) + (if mask &&& 4 != 0 then 4 else 0)
+    + (if mask &&& 8 != 0 then 4 else 0) + (if mask &&& 16 != 0 then 4 else 0)
+  let keysAt := at_ + 42
+  let headersAt := keysAt + 32 * keyCount + settings
+  let mut o := headersAt + 4 * ixCount
+  if mask >= 32 || (mask &&& 3 != 0 && mask &&& 3 != 3) || signers == 0 || signers > keyCount || o > b.size then
+    return (failed "the message is malformed", Wire.bad)
+  let mut keys : Array ByteArray := Array.emptyWithCapacity keyCount
+  for i in [0:keyCount] do
+    keys := keys.push (b.extract (keysAt + 32 * i) (keysAt + 32 * i + 32))
+  let mut instructions : Array Compiled := Array.emptyWithCapacity ixCount
+  for i in [0:ixCount] do
+    let h := headersAt + 4 * i
+    let accounts := (Wire.u8 b (h + 1)).toNat
+    let dataLen := (Wire.u16 b (h + 2)).toNat
+    if o + accounts + dataLen > b.size then
+      return (failed "an instruction is truncated", Wire.bad)
+    instructions := instructions.push ⟨(Wire.u8 b h).toNat, b.extract o (o + accounts), b.extract (o + accounts) (o + accounts + dataLen)⟩
+    o := o + accounts + dataLen
+  if o + 64 * signers > b.size then
+    return (failed "the signatures are truncated", Wire.bad)
+  let mut signatures : Array ByteArray := Array.emptyWithCapacity signers
+  for i in [0:signers] do
+    signatures := signatures.push (b.extract (o + 64 * i) (o + 64 * i + 64))
+  let config := b.extract (at_ + 4) (at_ + 8) ++ b.extract (keysAt + 32 * keyCount) headersAt
+  return (⟨signatures, ⟨false, signers, (Wire.u8 b (at_ + 2)).toNat, (Wire.u8 b (at_ + 3)).toNat, keys,
+    b.extract (at_ + 8) (at_ + 40), instructions, Array.emptyWithCapacity 0, true, config⟩, b.extract at_ o, ""⟩,
+    o + 64 * signers)
+
+/-- Parses the transaction that starts at offset `at_` of `b`. Returns it and the offset just past it
+(`Wire.bad` if it is malformed). Every length comes from the input and is checked against it. -/
+def parseAt (b : ByteArray) (at_ : Nat) : Transaction × Nat := Id.run do
+  if Wire.u8 b at_ == 0x81 then
+    return parseV1 b at_
+  let count := Wire.varint b at_
+  let mut o := Wire.skipN b (Wire.skipVarint b at_) count 64
   if !(Wire.ok o) || count == 0 then
-    return failed "the signatures are truncated"
+    return (failed "the signatures are truncated", Wire.bad)
   let mut signatures : Array ByteArray := Array.emptyWithCapacity count.toNat
-  let first := Wire.skipVarint b 0
+  let first := Wire.skipVarint b at_
   for i in [0:count.toNat] do
     signatures := signatures.push (b.extract (first + 64 * i) (first + 64 * i + 64))
   let start := o
   let mut versioned := false
   if Wire.u8 b o >= 0x80 then
     if Wire.u8 b o != 0x80 then
-      return failed "unknown message version"
+      return (failed "unknown message version", Wire.bad)
     versioned := true
     o := o + 1
   if !(Wire.ok (Wire.adv b o 3)) then
-    return failed "the message header is truncated"
+    return (failed "the message header is truncated", Wire.bad)
   let signers := (Wire.u8 b o).toNat
   let readonlySigned := (Wire.u8 b (o + 1)).toNat
   let readonlyUnsigned := (Wire.u8 b (o + 2)).toNat
@@ -234,7 +292,7 @@ def parse (b : ByteArray) : Transaction := Id.run do
   let keysAt := Wire.skipVarint b o
   o := Wire.adv b (Wire.skipN b keysAt keyCount 32) 32
   if !(Wire.ok o) then
-    return failed "the account keys are truncated"
+    return (failed "the account keys are truncated", Wire.bad)
   let mut keys : Array ByteArray := Array.emptyWithCapacity keyCount.toNat
   for i in [0:keyCount.toNat] do
     keys := keys.push (b.extract (keysAt + 32 * i) (keysAt + 32 * i + 32))
@@ -242,7 +300,7 @@ def parse (b : ByteArray) : Transaction := Id.run do
   let ixCount := Wire.varint b o
   o := Wire.skipVarint b o
   if !(Wire.ok o) || ixCount > b.size.toUInt64 then
-    return failed "the instructions are truncated"
+    return (failed "the instructions are truncated", Wire.bad)
   let mut instructions : Array Compiled := Array.emptyWithCapacity ixCount.toNat
   for _ in [0:ixCount.toNat] do
     let program := (Wire.u8 b o).toNat
@@ -250,7 +308,7 @@ def parse (b : ByteArray) : Transaction := Id.run do
     let dataAt := afterBytes b accountsAt
     let next := afterBytes b dataAt
     if !(Wire.ok next) then
-      return failed "an instruction is truncated"
+      return (failed "an instruction is truncated", Wire.bad)
     instructions := instructions.push ⟨program, bytesAt b accountsAt, bytesAt b dataAt⟩
     o := next
   let mut lookups : Array Lookup := Array.emptyWithCapacity 0
@@ -258,18 +316,24 @@ def parse (b : ByteArray) : Transaction := Id.run do
     let tableCount := Wire.varint b o
     o := Wire.skipVarint b o
     if !(Wire.ok o) || tableCount > b.size.toUInt64 then
-      return failed "the address table lookups are truncated"
+      return (failed "the address table lookups are truncated", Wire.bad)
     for _ in [0:tableCount.toNat] do
       let writableAt := Wire.adv b o 32
       let readonlyAt := afterBytes b writableAt
       let next := afterBytes b readonlyAt
       if !(Wire.ok next) then
-        return failed "an address table lookup is truncated"
+        return (failed "an address table lookup is truncated", Wire.bad)
       lookups := lookups.push ⟨b.extract o (o + 32), bytesAt b writableAt, bytesAt b readonlyAt⟩
       o := next
-  if o != b.size then
-    return failed "bytes are left over after the message"
-  return ⟨signatures, ⟨versioned, signers, readonlySigned, readonlyUnsigned, keys, blockhash, instructions, lookups⟩,
-    b.extract start b.size, ""⟩
+  return (⟨signatures, ⟨versioned, signers, readonlySigned, readonlyUnsigned, keys, blockhash, instructions, lookups, false,
+    ByteArray.empty⟩, b.extract start o, ""⟩, o)
+
+/-- Parses a serialized transaction, which must be all of `b`. -/
+def parse (b : ByteArray) : Transaction :=
+  let (tx, stop) := parseAt b 0
+  if tx.error != "" then tx
+  else if stop != b.size then failed "bytes are left over after the message"
+  else tx
+
 
 end Tx

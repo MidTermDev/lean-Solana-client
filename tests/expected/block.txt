@@ -1,0 +1,21 @@
+the block: valid
+  slot 474319150, parent 474319149, leader 9AW87WqARQonyJYhx1G25fKfvjURFYVmHs79z1NUXDPD
+  320 shreds in 10 sets, 188936 bytes
+  180 entries, 1 tick, 180 hashes recomputed, linked to its parent: true
+  183 transactions, 203 signatures
+  blockhash 5U3rLHoYgCru8XfDw8zbNqih2ykDodxkUtKaxc5q6PWb
+  bank hash 8VBHBUos2k3Q9kF9egFKPyFNsZvma32Dq9b9TJSUZbag, parent id HG6zd4aEfFSDYNjtMd3zkaWkWk2RAEXTBqvStZi5JYbW
+  produced by agave/4.4.1 (src:123361cd; feat:9fd5a0b5, client:JitoLabs)
+  79 transactions in the v1 layout, 104 in the older ones
+a byte of shred 7 changed: shred 7 does not belong to its set
+the signature on shred 64 changed: the set starting at shred 64 is not signed by the leader
+shreds 3 and 4 swapped: shred 3 is malformed or out of place
+the last shred missing: the last shred does not end the slot
+the leader unknown: the set starting at shred 0 is not signed by any known node
+another block's hash as parent: proof of history breaks at entry 0
+another block's last set as parent: the block's first set does not follow the last set of its parent block
+with no parent known: valid
+  linked to its parent: false, hashes recomputed: 179
+a tick of 1 hash: true; of 3: true
+one signature mixed in: true
+three signatures: the odd one pairs with itself: true

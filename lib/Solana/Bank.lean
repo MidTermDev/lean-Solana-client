@@ -323,6 +323,9 @@ def Bank.process (bank : Bank) (tx : Tx.Transaction) (verify : Bool) : Receipt :
     return refuse bank "SanitizeFailure"
   if verify && !tx.verify then
     return refuse bank "SignatureFailure"
+  if msg.v1 then
+    -- parsed and verified, but applying the newer layout's inline compute budget is not implemented
+    return refuse bank "UnsupportedVersion"
   -- the accounts of the message: its own keys, then those it takes from address tables
   let mut keys := msg.keys
   let mut writable : Array Bool := Array.emptyWithCapacity (keys.size + 8)

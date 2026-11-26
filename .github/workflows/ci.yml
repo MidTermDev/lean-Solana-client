@@ -16,6 +16,8 @@ jobs:
       - run: make test
       - name: a Lean program calls the token programs, from the command line
         run: examples/amm.sh | grep -q 'units     4,690 of 200,000'
+      - name: a block of mainnet verifies offline
+        run: ./build/leansol block --file tests/blocks/mainnet-474319150.block | grep -q '203 signatures, all valid'
       - name: a signed transaction is applied, from the command line
         run: examples/transaction.sh | grep -q 'fee          5,120 lamports'
       - name: the outputs are static and freestanding

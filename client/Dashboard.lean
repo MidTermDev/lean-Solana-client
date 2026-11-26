@@ -167,6 +167,8 @@ def logLine (sh : Shared) (startMs : Nat) (prev cur : Sample) : IO String := do
   return s!"[{Fmt.clock up}] nodes={← m.get M.nodes} tip={← m.get M.tipSlot} verified={← m.get M.sigOk}" ++
     s!" bad={← m.get M.sigBad} malformed={← m.get M.malformed} stored={← m.get M.stored}" ++
     s!" sig/s={perSec (cur.sigs - prev.sigs) dt} rx={perSec (cur.rxBytes - prev.rxBytes) dt}B/s" ++
-    s!" pulls={← m.get M.pullsTx} pongs={← m.get M.pongsTx}"
+    s!" pulls={← m.get M.pullsTx} pongs={← m.get M.pongsTx}" ++
+    s!" blocks={← m.get M.blocksOk} block={← m.get M.blockSlot} txs={← m.get M.blockTxTotal}" ++
+    s!" invalid={← m.get M.blocksBad} unavailable={← m.get M.blocksMissed}"
 
 end Dash

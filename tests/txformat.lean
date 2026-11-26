@@ -43,7 +43,7 @@ def main : IO Unit := do
   -- keys: payer, system program; from the table: entry 1 (alice) writable, entry 0 (carol) read-only
   let lookup : Tx.Lookup := ⟨table, ByteArray.empty.push 1, ByteArray.empty.push 0⟩
   let toAlice : Tx.Compiled := ⟨1, (ByteArray.empty.push 0).push 2, data⟩
-  let v0 : Tx.Message := ⟨true, 1, 0, 1, #[payer, Sbpf.systemProgram], blockhash, #[toAlice], #[lookup]⟩
+  let v0 : Tx.Message := ⟨true, 1, 0, 1, #[payer, Sbpf.systemProgram], blockhash, #[toAlice], #[lookup], false, ByteArray.empty⟩
   let tx0 := Tx.sign v0 #[key "payer"]
   let back0 := Tx.parse tx0.serialize
   IO.println s!"version 0: {tx0.serialize.size} bytes; parses: {back0.error == ""}; versioned: {back0.message.versioned}; lookups: {back0.message.lookups.size}; same bytes again: {back0.serialize == tx0.serialize}"
@@ -52,7 +52,7 @@ def main : IO Unit := do
   IO.println s!"  alice {(r.bank.get alice).lamports}"
   -- the read-only table entry cannot be paid into
   let toCarol : Tx.Compiled := ⟨1, (ByteArray.empty.push 0).push 3, data⟩
-  let v0ro : Tx.Message := ⟨true, 1, 0, 1, #[payer, Sbpf.systemProgram], blockhash, #[toCarol], #[lookup]⟩
+  let v0ro : Tx.Message := ⟨true, 1, 0, 1, #[payer, Sbpf.systemProgram], blockhash, #[toCarol], #[lookup], false, ByteArray.empty⟩
   let r := bank.process (Tx.sign v0ro #[key "payer"]) true
   report "  transfer to a read-only table account" r
   IO.println s!"  carol {(r.bank.get carol).lamports}, payer {(r.bank.get payer).lamports}"

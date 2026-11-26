@@ -169,10 +169,10 @@ def main : IO Unit := do
   let lookup : Tx.Lookup := ⟨table, ByteArray.empty.push 1, ByteArray.empty⟩
   let pay : Tx.Compiled := ⟨1, (ByteArray.empty.push 0).push 2, u32le 2 ++ u64le 1000000000⟩
   bank ← send "pay an address through the table in the slot it was added" bank
-    (Tx.sign ⟨true, 1, 0, 1, #[payer, system], blockhash, #[pay], #[lookup]⟩ #[key "payer"])
+    (Tx.sign ⟨true, 1, 0, 1, #[payer, system], blockhash, #[pay], #[lookup], false, ByteArray.empty⟩ #[key "payer"])
   bank := bank.withClock ⟨1, 0, 0, 0, 0⟩
   bank ← send "pay it through the table one slot later" bank
-    (Tx.sign ⟨true, 1, 0, 1, #[payer, system], blockhash, #[{ pay with data := u32le 2 ++ u64le 1000000001 }], #[lookup]⟩ #[key "payer"])
+    (Tx.sign ⟨true, 1, 0, 1, #[payer, system], blockhash, #[{ pay with data := u32le 2 ++ u64le 1000000001 }], #[lookup], false, ByteArray.empty⟩ #[key "payer"])
   showAccount bank "dave" dave
   bank ← signed "freeze the table" bank nobody #[tagged lookupTable 1 ByteArray.empty #[w table, rs payer]]
   bank ← signed "add to the frozen table" bank nobody #[tagged lookupTable 2 (u64le 1 ++ alice) #[w table, rs payer, ws payer, r system]]

@@ -60,13 +60,17 @@ structure Nodes where
 
 namespace Nodes
 
-def fields : Nat := 6
+def fields : Nat := 8
 def fWallclock : Nat := 0
 def fVersion : Nat := 1
 def fClient : Nat := 2
 def fAddr : Nat := 3
 def fShred : Nat := 4
 def fSnapshot : Nat := 5
+/-- where the node serves repair requests, packed as `ip <<< 16 ||| port` (0 = not known) -/
+def fRepair : Nat := 6
+/-- where the node receives shreds, packed the same way -/
+def fTvu : Nat := 7
 
 def notFound : Nat := 0xFFFFFFFF
 
