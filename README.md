@@ -438,7 +438,16 @@ Being straightforward about what this is:
 - **Young code.** The compiler has been exercised by about 4,100 lines of Lean and the test suite, not by years of users. The Ed25519 implementation is variable-time, which is fine for verifying public data and not what you want around long-lived secret keys.
 - **The network moves.** Wire formats follow agave's current gossip code; when the protocol changes, this needs to follow.
 
+## Related: on-chain programs in Lean
+
+`leanc` produces x86-64 executables, so it cannot build on-chain programs. For that there is toly's [lean-svm](https://github.com/aeyakovenko/lean-svm), which compiles Lean 4 to Solana sBPF bytecode and comes with machine-checked proofs about its example programs and compiler passes.
+
+The two cover different halves and take different routes. lean-svm runs inside the official Lean toolchain and starts from Lean's own intermediate representation, which gives it all of Lean, proofs included. `leanc` has its own front end and needs no Lean installation, which is what lets the node build from nothing, at the price of supporting only a subset. Lean for the programs, Lean for the node.
+
 ## FAQ
+
+**Can I write and deploy on-chain programs with this?**
+No. See [lean-svm](https://github.com/aeyakovenko/lean-svm) above. This repository is the node side: it observes and verifies the network, and does not build or send transactions.
 
 **Is this the Lean theorem prover's language, or just "lean" as in small?**
 Both. The client is written in Lean 4, the language of the theorem prover, and the result is also small: a 188 KB static binary.
@@ -457,7 +466,7 @@ It opens one UDP socket, makes outbound connections to public Solana nodes, and 
 
 ## Acknowledgements
 
-- toly, for the idea.
+- toly, for the idea, and for [lean-svm](https://github.com/aeyakovenko/lean-svm), the on-chain counterpart.
 - [Firedancer](https://github.com/firedancer-io/firedancer), for the tile architecture this borrows its vocabulary from.
 - [Agave](https://github.com/anza-xyz/agave), whose gossip implementation is the reference for the wire formats.
 - [Lean 4](https://lean-lang.org), for a language worth writing a second compiler for.

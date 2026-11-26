@@ -371,7 +371,9 @@ socket ◀─ net-tx ◀─── gossip
       <div class="rail">Roadmap<small>intentions, not dates</small></div>
       <div>
         <h2>From observing the network to following the chain</h2>
-        <p class="intro">Each step moves the client closer to checking the ledger itself instead of listening to what other nodes say about it.</p>
+        <p class="intro">Each step moves the client closer to checking the ledger itself instead of listening to what other nodes say about it.
+          For writing on-chain programs in Lean, see toly's <a href="https://github.com/aeyakovenko/lean-svm">lean-svm</a>, which compiles Lean 4 to sBPF.
+          This project is the other side: the node.</p>
         <div class="stack">
           <div class="road">
             <div class="stage done">
@@ -398,7 +400,7 @@ socket ◀─ net-tx ◀─── gossip
               <ul>
                 <li><b>Repair and Turbine</b>Receive shreds and rebuild blocks.</li>
                 <li><b>Ledger verification</b>Check proof of history and block signatures.</li>
-                <li><b>On-chain programs in Lean</b>An SBF backend for leanc.</li>
+                <li><b>Run on-chain programs</b>An sBPF virtual machine in the client, to replay transactions.</li>
                 <li><b>Machine-checked proofs</b>Prove the wire parsers never read out of bounds.</li>
               </ul>
             </div>
