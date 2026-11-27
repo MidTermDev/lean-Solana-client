@@ -402,9 +402,13 @@ def output (f0 : ByteArray) (n : Node) (base : UInt64) : ByteArray := Id.run do
   f := Fast.xor f 15 15 39
   return transpose f 0 40 56
 
-/-- The values of `count` whole chunks of `b` (2 to 16 of them, 1024 bytes each, chunk numbers from
-`first`), hashed side by side: afterwards word `i` of chunk `first + j` is number `j` of register `32 + i`. -/
-def chunks (f0 : ByteArray) (b : ByteArray) (first count : Nat) : ByteArray := Id.run do
+/-- The first `blocks` blocks (1 to 16) of up to sixteen chunks, hashed side by side. Chunk `j` is the
+1024 bytes (or fewer blocks' worth) of `inputs[which[first + j]]` at `offs[first + j]`, and is chunk
+number `counters[first + j]` of its input. With sixteen blocks the chunks are whole, and afterwards word
+`i` of chunk `j`'s value is number `j` of register `32 + i`; with fewer, what is left there is the
+chaining value before the blocks that were not done (the chunk's last). -/
+def chunksOf (f0 : ByteArray) (inputs : Array ByteArray) (which offs : Array Nat) (counters : Array UInt64)
+    (first count blocks : Nat) : ByteArray := Id.run do
   let mut f := f0
   f := Fast.set32 f 32 iv[0]!.toUInt64
   f := Fast.set32 f 33 iv[1]!.toUInt64
@@ -414,10 +418,10 @@ def chunks (f0 : ByteArray) (b : ByteArray) (first count : Nat) : ByteArray := I
   f := Fast.set32 f 37 iv[5]!.toUInt64
   f := Fast.set32 f 38 iv[6]!.toUInt64
   f := Fast.set32 f 39 iv[7]!.toUInt64
-  for k in [0:16] do
+  for k in [0:blocks] do
     -- block `k` of every chunk, one to a register, then turned into sixteen registers of message words
     for j in [0:count] do
-      f := b.copySlice ((first + j) * 1024 + 64 * k) f (64 * (40 + j)) 64
+      f := inputs[which[first + j]!]!.copySlice (offs[first + j]! + 64 * k) f (64 * (40 + j)) 64
     f := transpose f 40 16 56
     f := Fast.move f 0 32
     f := Fast.move f 1 33
@@ -431,9 +435,9 @@ def chunks (f0 : ByteArray) (b : ByteArray) (first count : Nat) : ByteArray := I
     f := Fast.set32 f 9 iv[1]!.toUInt64
     f := Fast.set32 f 10 iv[2]!.toUInt64
     f := Fast.set32 f 11 iv[3]!.toUInt64
-    f := Fast.set32 f 12 first.toUInt64
-    f := Fast.add32 f 12 12 72
-    f := Fast.set32 f 13 0
+    for j in [0:count] do
+      f := Fast.put32 f (64 * 12 + 4 * j) counters[first + j]!
+      f := Fast.put32 f (64 * 13 + 4 * j) (counters[first + j]! >>> 32)
     f := Fast.set32 f 14 64
     f := Fast.set32 f 15 ((if k == 0 then chunkStart else 0) ||| (if k == 15 then chunkEnd else 0)).toUInt64
     f := rounds f
@@ -468,7 +472,14 @@ def rootNodeBy (b : ByteArray) (wide : Bool) : Node := Id.run do
     -- every chunk but the last is whole; two or more of them are done together
     let together := if wide && chunks - 1 - i >= 2 && chunks < 0xFFFFFFF0 then min 16 (chunks - 1 - i) else 1
     if together != 1 then
-      f := Wide.chunks f b i together
+      let mut which : Array Nat := Array.emptyWithCapacity 16
+      let mut offs : Array Nat := Array.emptyWithCapacity 16
+      let mut counters : Array UInt64 := Array.emptyWithCapacity 16
+      for j in [0:together] do
+        which := which.push 0
+        offs := offs.push ((i + j) * 1024)
+        counters := counters.push (i + j).toUInt64
+      f := Wide.chunksOf f #[b] which offs counters 0 together 16
     for j in [0:together] do
       let mut value := if together != 1 then Wide.value f j
         else (chunk b ((i + j) * 1024) ((i + j) * 1024 + 1024) (i + j).toUInt64).value
@@ -486,6 +497,87 @@ def rootNodeBy (b : ByteArray) (wide : Bool) : Node := Id.run do
   return node
 
 def rootNode (b : ByteArray) : Node := rootNodeBy b Fast.quick
+
+/-- The roots of several inputs, with the vector instructions: the chunks of all of them are hashed
+sixteen at a time, whichever input each belongs to, and so are the leading blocks of their last chunks
+(those of the same length together). The same roots as `rootNodeBy` gives one by one. -/
+def rootNodesWide (inputs : Array ByteArray) : Array Node := Id.run do
+  let mut f := Wide.template
+  -- 1. every whole chunk (all of an input's chunks but its last) of every input
+  let mut which : Array Nat := Array.emptyWithCapacity 64
+  let mut offs : Array Nat := Array.emptyWithCapacity 64
+  let mut counters : Array UInt64 := Array.emptyWithCapacity 64
+  for n in [0:inputs.size] do
+    let size := inputs[n]!.size
+    let chunks := if size == 0 then 1 else (size + 1023) / 1024
+    for c in [0:chunks - 1] do
+      which := which.push n
+      offs := offs.push (c * 1024)
+      counters := counters.push c.toUInt64
+  let mut values : Array (Array UInt32) := Array.emptyWithCapacity which.size
+  let mut done := 0
+  while done < which.size do
+    let together := min 16 (which.size - done)
+    f := Wide.chunksOf f inputs which offs counters done together 16
+    for j in [0:together] do
+      values := values.push (Wide.value f j)
+    done := done + together
+  -- 2. the last chunk of every input: its blocks but the last, those with the same number of them together
+  let mut before : Array (Array UInt32) := Array.replicate inputs.size iv
+  for blocks in [1:16] do
+    let mut lastWhich : Array Nat := Array.emptyWithCapacity 16
+    let mut lastOffs : Array Nat := Array.emptyWithCapacity 16
+    let mut lastCounters : Array UInt64 := Array.emptyWithCapacity 16
+    for n in [0:inputs.size] do
+      let size := inputs[n]!.size
+      let chunks := if size == 0 then 1 else (size + 1023) / 1024
+      let tail := size - (chunks - 1) * 1024
+      if tail != 0 && (tail + 63) / 64 - 1 == blocks then
+        lastWhich := lastWhich.push n
+        lastOffs := lastOffs.push ((chunks - 1) * 1024)
+        lastCounters := lastCounters.push (chunks - 1).toUInt64
+    let mut at_ := 0
+    while at_ < lastWhich.size do
+      let together := min 16 (lastWhich.size - at_)
+      f := Wide.chunksOf f inputs lastWhich lastOffs lastCounters at_ together blocks
+      for j in [0:together] do
+        before := before.set! lastWhich[at_ + j]! (Wide.value f j)
+      at_ := at_ + together
+  -- 3. each input's tree, from its chunks' values
+  let mut roots : Array Node := Array.emptyWithCapacity inputs.size
+  let mut next := 0
+  for n in [0:inputs.size] do
+    let b := inputs[n]!
+    let chunks := if b.size == 0 then 1 else (b.size + 1023) / 1024
+    let mut stack : Array (Array UInt32) := Array.emptyWithCapacity 54
+    for c in [0:chunks - 1] do
+      let mut value := values[next + c]!
+      let mut finished := c + 1
+      while finished % 2 == 0 do
+        value := (join stack[stack.size - 1]! value).value
+        stack := stack.pop
+        finished := finished / 2
+      stack := stack.push value
+    next := next + (chunks - 1)
+    let start := (chunks - 1) * 1024
+    let tail := b.size - start
+    let led := if tail == 0 then 0 else (tail + 63) / 64 - 1
+    let mut node : Node := ⟨before[n]!, lastBlock b (start + 64 * led) b.size, (chunks - 1).toUInt64,
+      (b.size - (start + 64 * led)).toUInt32, (if led == 0 then chunkStart else 0) ||| chunkEnd⟩
+    while stack.size > 0 do
+      node := join stack[stack.size - 1]! node.value
+      stack := stack.pop
+    roots := roots.push node
+  return roots
+
+/-- The roots of several inputs. -/
+def rootNodes (inputs : Array ByteArray) (wide : Bool) : Array Node := Id.run do
+  if wide then
+    return rootNodesWide inputs
+  let mut roots : Array Node := Array.emptyWithCapacity inputs.size
+  for b in inputs do
+    roots := roots.push (rootNodeBy b false)
+  return roots
 
 /-- The 16 words of output block number `k` of a root node. -/
 @[inline] def Node.output (n : Node) (k : UInt64) : Array UInt32 :=

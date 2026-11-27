@@ -473,6 +473,7 @@ static Builtin builtins[] = {
     {"Fast.unpackHigh64", "YNNN>Y", B_OP, OP_VEC, NULL, NULL, V_UNPCKHQDQ, true},
     {"Fast.shuffle128", "YNNNN>Y", B_OP, OP_VEC, NULL, NULL, V_SHUF128, true},
     {"Fast.compiled", "", B_SPECIAL, SP_TRUE, NULL, NULL, 0, true},
+    {"Fast.bit", "B>q", B_CAST, 0, NULL, NULL, 0, true},
     {"Fast.hot", "q>q", B_OP, OP_HOT, NULL, NULL, 0, true},
     {"Fast.hotNat", "N>N", B_OP, OP_HOT, NULL, NULL, 0, true},
     {"String.append", "SS&>S", B_RT, 0, "Rt.baAppend"},

@@ -1,3 +1,4 @@
+import Fast
 import Sys
 import Solana.Wire
 
@@ -61,9 +62,18 @@ def packZeros (b : ByteArray) (o len : Nat) (out0 : ByteArray) : ByteArray := Id
   let mut kept := o
   while i < stop do
     if b[i]! != 0 then
-      i := i + 1
+      -- (eight bytes with no zero among them are passed over at once: a word minus 0x0101..., and not
+      -- the word, has a top bit set exactly where a byte was zero, or was reached by a borrow from one)
+      let word := Fast.le64 b i
+      if i + 8 <= stop && (word - 0x0101010101010101) &&& (~~~word) &&& 0x8080808080808080 == 0 then
+        i := i + 8
+      else
+        i := i + 1
     else
       let mut j := i + 1
+      -- (and eight zero bytes at once)
+      while j + 8 <= stop && Fast.le64 b j == 0 do
+        j := j + 8
       while j < stop && b[j]! == 0 do
         j := j + 1
       -- a run of one or two zeros costs less left among its neighbours

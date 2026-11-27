@@ -1,3 +1,5 @@
+import Crypto.Mont
+
 /-!
 # secp256k1: recovering a public key from a signature
 
@@ -7,8 +9,7 @@ a system call: given a message hash and a signature, find the public key
 that made it (which is how an Ethereum address is checked).
 
 Numbers are eight 32-bit digits, least significant first, each in a 64-bit
-word. Nothing here is fast, and nothing needs to be secret: every input is
-public.
+word. Nothing needs to be secret: every input is public.
 -/
 
 namespace Secp256k1
@@ -17,12 +18,10 @@ abbrev Num := Array UInt64
 
 def ofDigits (digits : Array UInt64) : Num := digits
 
-/-- The field's modulus `p`, and `2²⁵⁶ − p`. -/
+/-- The field's modulus `p`. -/
 def p : Num := #[0xFFFFFC2F, 0xFFFFFFFE, 0xFFFFFFFF, 0xFFFFFFFF, 0xFFFFFFFF, 0xFFFFFFFF, 0xFFFFFFFF, 0xFFFFFFFF]
-def pGap : Num := #[0x3D1, 1]
-/-- The number of points `n`, and `2²⁵⁶ − n`. -/
+/-- The number of points `n`. -/
 def n : Num := #[0xD0364141, 0xBFD25E8C, 0xAF48A03B, 0xBAAEDCE6, 0xFFFFFFFE, 0xFFFFFFFF, 0xFFFFFFFF, 0xFFFFFFFF]
-def nGap : Num := #[0x2FC9BEBF, 0x402DA173, 0x50B75FC4, 0x45512319, 1]
 
 def zero : Num := Array.replicate 8 0
 def one : Num := #[1, 0, 0, 0, 0, 0, 0, 0]
@@ -58,101 +57,27 @@ def subRaw (a b : Num) : Num := Id.run do
     borrow := if d < 0x100000000 then 1 else 0
   return out
 
-/-- The product of two numbers, digit by digit: as many digits as both together. -/
-def mulRaw (a b : Num) : Num := Id.run do
-  let mut out : Num := Array.replicate (a.size + b.size) 0
-  for i in [0:a.size] do
-    let mut carry : UInt64 := 0
-    for j in [0:b.size] do
-      let t := out[i + j]! + a[i]! * b[j]! + carry
-      out := out.set! (i + j) (t &&& 0xFFFFFFFF)
-      carry := t >>> 32
-    out := out.set! (i + b.size) carry
-  return out
+-- Arithmetic modulo `p` (coordinates) and modulo `n` (scalars) is Montgomery's: see `Crypto.Mont`.
+def fp : Mont.Field := Mont.Field.make p
+def fq : Mont.Field := Mont.Field.make n
 
-/-- Reduces a number of any length modulo `m = 2²⁵⁶ − gap`: what lies above
-256 bits is worth `gap` times as much below, so it is multiplied by `gap`
-and added in, until nothing is above; then `m` is subtracted while it fits. -/
-def reduce (x : Num) (m gap : Num) : Num := Id.run do
-  let mut v := x
-  while v.size > 8 do
-    -- low eight digits, plus the rest times the gap
-    let mut high : Num := Array.emptyWithCapacity (v.size - 8)
-    for i in [8:v.size] do
-      high := high.push v[i]!
-    let mut any := false
-    for d in high do
-      if d != 0 then
-        any := true
-    let mut sum : Num := Array.emptyWithCapacity (high.size + gap.size + 1)
-    if any then
-      let folded := mulRaw high gap
-      let mut carry : UInt64 := 0
-      for i in [0:(if folded.size > 8 then folded.size else 8)] do
-        let t := (if i < 8 then v[i]! else 0) + (if i < folded.size then folded[i]! else 0) + carry
-        sum := sum.push (t &&& 0xFFFFFFFF)
-        carry := t >>> 32
-      sum := sum.push carry
-      -- drop leading zeros beyond eight digits
-      while sum.size > 8 && sum[sum.size - 1]! == 0 do
-        sum := sum.pop
-    else
-      for i in [0:8] do
-        sum := sum.push v[i]!
-    v := sum
-  while v.size < 8 do
-    v := v.push 0
-  while atLeast v m do
-    v := subRaw v m
-  return v
+def fmul (a b : Num) : Num := Mont.mul fp a b
+def fadd (a b : Num) : Num := Mont.addMod p a b
+def fsub (a b : Num) : Num := Mont.subMod p a b
 
-def mulMod (a b m gap : Num) : Num := reduce (mulRaw a b) m gap
-
-def addMod (a b m gap : Num) : Num := Id.run do
-  let mut out : Num := Array.emptyWithCapacity 9
-  let mut carry : UInt64 := 0
-  for i in [0:8] do
-    let t := a[i]! + b[i]! + carry
-    out := out.push (t &&& 0xFFFFFFFF)
-    carry := t >>> 32
-  out := out.push carry
-  return reduce out m gap
-
-/-- `a − b` modulo `m`, for `a` and `b` below `m`. -/
-def subMod (a b m : Num) : Num :=
-  if atLeast a b then subRaw a b else subRaw m (subRaw b a)
-
-/-- `a` to the power `e` (eight digits) modulo `m`. -/
-def powMod (a e m gap : Num) : Num := Id.run do
-  let mut result := one
-  let mut started := false
-  let mut i := 256
-  while i > 0 do
-    i := i - 1
-    if started then
-      result := mulMod result result m gap
-    if (e[i / 32]! >>> (i % 32).toUInt64) &&& 1 == 1 then
-      result := if started then mulMod result a m gap else a
-      started := true
-  return result
-
--- field arithmetic
-def fmul (a b : Num) : Num := mulMod a b p pGap
-def fadd (a b : Num) : Num := addMod a b p pGap
-def fsub (a b : Num) : Num := subMod a b p
-
-/-- A point in Jacobian coordinates: `(X/Z², Y/Z³)`, with `Z = 0` for the point at infinity. -/
+/-- A point in Jacobian coordinates: `(X/Z², Y/Z³)`, with `Z = 0` for the point at infinity. The
+coordinates are in Montgomery form. -/
 structure Point where
   x : Num
   y : Num
   z : Num
   deriving Inhabited
 
-def infinity : Point := ⟨one, one, zero⟩
+def infinity : Point := ⟨fp.one, fp.one, zero⟩
 
 def generator : Point :=
-  ⟨#[0x16F81798, 0x59F2815B, 0x2DCE28D9, 0x029BFCDB, 0xCE870B07, 0x55A06295, 0xF9DCBBAC, 0x79BE667E],
-   #[0xFB10D4B8, 0x9C47D08F, 0xA6855419, 0xFD17B448, 0x0E1108A8, 0x5DA4FBFC, 0x26A3C465, 0x483ADA77], one⟩
+  ⟨fp.enter #[0x16F81798, 0x59F2815B, 0x2DCE28D9, 0x029BFCDB, 0xCE870B07, 0x55A06295, 0xF9DCBBAC, 0x79BE667E],
+   fp.enter #[0xFB10D4B8, 0x9C47D08F, 0xA6855419, 0xFD17B448, 0x0E1108A8, 0x5DA4FBFC, 0x26A3C465, 0x483ADA77], fp.one⟩
 
 def double (a : Point) : Point :=
   if isZero a.z || isZero a.y then infinity
@@ -193,15 +118,30 @@ def add (a b : Point) : Point :=
       let y3 := fsub (fmul r (fsub v x3)) (fmul s1 hhh)
       ⟨x3, y3, fmul h (fmul a.z b.z)⟩
 
-/-- `k` times a point. -/
-def scale (k : Num) (a : Point) : Point := Id.run do
+/-- `j·a + k·b` in one pass over the bits of both numbers, four at a time: the sixteen sums
+`u·a + v·b` for `u`, `v` from 0 to 3 are made first. -/
+def combine (j : Num) (a : Point) (k : Num) (b : Point) : Point := Id.run do
+  -- table[4·u + v] = u·a + v·b
+  let a2 := double a
+  let a3 := add a2 a
+  let b2 := double b
+  let b3 := add b2 b
+  let mut table : Array Point := Array.emptyWithCapacity 16
+  for u in [0:4] do
+    let au := if u == 0 then infinity else if u == 1 then a else if u == 2 then a2 else a3
+    table := table.push au
+    table := table.push (add au b)
+    table := table.push (add au b2)
+    table := table.push (add au b3)
   let mut result := infinity
-  let mut i := 256
+  let mut i := 128
   while i > 0 do
     i := i - 1
-    result := double result
-    if (k[i / 32]! >>> (i % 32).toUInt64) &&& 1 == 1 then
-      result := add result a
+    result := double (double result)
+    let u := (j[i / 16]! >>> (2 * (i % 16)).toUInt64) &&& 3
+    let v := (k[i / 16]! >>> (2 * (i % 16)).toUInt64) &&& 3
+    if u != 0 || v != 0 then
+      result := add result table[(4 * u + v).toNat]!
   return result
 
 /-- Thirty-two big-endian bytes at `o` as a number. -/
@@ -246,27 +186,27 @@ def recover (hash : ByteArray) (recovery : Nat) (signature : ByteArray) : ByteAr
     if carry != 0 || atLeast sum p then
       return ByteArray.empty
     x := sum
-  let rhs := fadd (fmul (fmul x x) x) #[7, 0, 0, 0, 0, 0, 0, 0]
+  let xm := fp.enter x
+  let rhs := fadd (fmul (fmul xm xm) xm) (fp.enter #[7, 0, 0, 0, 0, 0, 0, 0])
   -- p is 3 modulo 4: a square root, if there is one, is the (p + 1)/4-th power
   let exponent : Num := #[0xBFFFFF0C, 0xFFFFFFFF, 0xFFFFFFFF, 0xFFFFFFFF, 0xFFFFFFFF, 0xFFFFFFFF, 0xFFFFFFFF, 0x3FFFFFFF]
-  let mut y := powMod rhs exponent p pGap
+  let mut y := Mont.pow fp rhs exponent
   if !(same (fmul y y) rhs) then
     return ByteArray.empty
-  if (y[0]! &&& 1 == 1) != (recovery % 2 == 1) then
+  if ((fp.leave y)[0]! &&& 1 == 1) != (recovery % 2 == 1) then
     y := fsub zero y
-  -- the key is (s·R − z·G) / r
-  let z := reduce (ofBytes hash 0) n nGap
-  let nMinus2 : Num := #[0xD036413F, 0xBFD25E8C, 0xAF48A03B, 0xBAAEDCE6, 0xFFFFFFFE, 0xFFFFFFFF, 0xFFFFFFFF, 0xFFFFFFFF]
-  let rInverse := powMod r nMinus2 n nGap
-  let u1 := subMod zero (mulMod z rInverse n nGap) n
-  let u2 := mulMod s rInverse n nGap
-  let q := add (scale u1 generator) (scale u2 ⟨x, y, one⟩)
+  -- the key is (s·R − z·G) / r: the two products are made together
+  let h := ofBytes hash 0
+  let z := if atLeast h n then subRaw h n else h
+  let rInverse := Mont.inv fq (fq.enter r)
+  let u1 := Mont.subMod n zero (fq.leave (Mont.mul fq (fq.enter z) rInverse))
+  let u2 := fq.leave (Mont.mul fq (fq.enter s) rInverse)
+  let q := combine u1 generator u2 ⟨xm, y, fp.one⟩
   if isZero q.z then
     return ByteArray.empty
   -- back from Jacobian coordinates
-  let pMinus2 : Num := #[0xFFFFFC2D, 0xFFFFFFFE, 0xFFFFFFFF, 0xFFFFFFFF, 0xFFFFFFFF, 0xFFFFFFFF, 0xFFFFFFFF, 0xFFFFFFFF]
-  let zInverse := powMod q.z pMinus2 p pGap
+  let zInverse := Mont.inv fp q.z
   let zz := fmul zInverse zInverse
-  return toBytes (fmul q.y (fmul zz zInverse)) (toBytes (fmul q.x zz) (ByteArray.emptyWithCapacity 64))
+  return toBytes (fp.leave (fmul q.y (fmul zz zInverse))) (toBytes (fp.leave (fmul q.x zz)) (ByteArray.emptyWithCapacity 64))
 
 end Secp256k1

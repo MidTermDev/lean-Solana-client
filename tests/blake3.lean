@@ -136,3 +136,15 @@ def main : IO Unit := do
   IO.println s!"sixteen at a time: {agree} of {sizes.size} inputs hash the same, to 32 bytes, to 2048 and into the lattice"
   let kept := LtHash.contribution 1000 data false owner key1
   IO.println s!"what an account adds, kept and taken out again: {kept.size} bytes; {same (LtHash.addBytes both kept true) two}; nothing for no account: {(LtHash.contribution 0 data false owner key1).size} bytes"
+
+  -- several inputs at once: their chunks side by side, whoever's they are
+  let several : Array ByteArray := #[pattern 0, pattern 65, pattern 1024, pattern 1100, pattern 2049, pattern 3835, pattern 3835, pattern 5000]
+  let together := Blake3.rootNodes several Fast.wide
+  let mut alike := 0
+  for i in [0:several.size] do
+    if (Blake3.rootNodeBy several[i]! false).bytes 64 == together[i]!.bytes 64 then
+      alike := alike + 1
+  IO.println s!"hashed together: {alike} of {several.size} as when hashed alone"
+  let asFile := LtHash.addToFile (LtHash.addToFile (LtHash.toFile both) kept true Fast.wide) (LtHash.contribution 77 (pattern 100) false owner key2) false Fast.wide
+  let asWords := LtHash.addBytes (LtHash.addBytes both kept true) (LtHash.contribution 77 (pattern 100) false owner key2) false
+  IO.println s!"the sum kept as bytes and added to by vector: {same (LtHash.ofFile asFile) asWords}; and without: {same (LtHash.ofFile (LtHash.addToFile (LtHash.toFile both) kept true false)) two}"

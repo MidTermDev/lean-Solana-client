@@ -1031,8 +1031,8 @@ def serializePacked (accounts : Array Account) (metas : Array Meta) (instruction
   b := b ++ instruction
   return b ++ programId
 
-def serialize (accounts : Array Account) (metas : Array Meta) (instruction programId : ByteArray) : ByteArray := Id.run do
-  let mut b := Wire.putU64 (ByteArray.emptyWithCapacity 16384) metas.size.toUInt64
+def serializeOnto (b0 : ByteArray) (accounts : Array Account) (metas : Array Meta) (instruction programId : ByteArray) : ByteArray := Id.run do
+  let mut b := Wire.putU64 b0 metas.size.toUInt64
   for i in [0:metas.size] do
     let mt := metas[i]!
     -- an account referenced twice is serialized once; later mentions point at the first
@@ -1060,5 +1060,19 @@ def serialize (accounts : Array Account) (metas : Array Meta) (instruction progr
   b := Wire.putU64 b instruction.size.toUInt64
   b := b ++ instruction
   return b ++ programId
+
+def serialize (accounts : Array Account) (metas : Array Meta) (instruction programId : ByteArray) : ByteArray :=
+  serializeOnto (ByteArray.emptyWithCapacity 16384) accounts metas instruction programId
+
+/-- How many bytes `serialize` will produce. -/
+def serializedSize (accounts : Array Account) (metas : Array Meta) (instruction : ByteArray) : Nat := Id.run do
+  let mut size := 8
+  for i in [0:metas.size] do
+    let mut first := i
+    for j in [0:i] do
+      if first == i && metas[j]!.index == metas[i]!.index then
+        first := j
+    size := size + (if first != i then 8 else accountSpan accounts[metas[i]!.index]!.data.size)
+  return size + 8 + instruction.size + 32
 
 end Sbpf

@@ -204,6 +204,66 @@ def g2Scale (k : Mont.Num) (a : G2) : G2 := Id.run do
       result := g2Add result a
   return result
 
+/-- Is `order` times the point the point at infinity? The same multiplication as `g2Scale`, in coordinates
+(X/Z², Y/Z³) that need no division: of a point that came off the wire, only this is asked. -/
+def g2InSubgroup (a : G2) : Bool := Id.run do
+  if a.infinite then
+    return true
+  let mut x := Fq2.one
+  let mut y := Fq2.one
+  let mut z := Fq2.zero
+  let mut i := 256
+  while i > 0 do
+    i := i - 1
+    -- double
+    if !(z.isZero) then
+      if y.isZero then
+        z := Fq2.zero
+      else
+        let xx := Fq2.mul x x
+        let yy := Fq2.mul y y
+        let yyyy := Fq2.mul yy yy
+        let t := Fq2.add x yy
+        let d0 := Fq2.sub (Fq2.sub (Fq2.mul t t) xx) yyyy
+        let d := Fq2.add d0 d0
+        let e := Fq2.add (Fq2.add xx xx) xx
+        let x3 := Fq2.sub (Fq2.mul e e) (Fq2.add d d)
+        let c2 := Fq2.add yyyy yyyy
+        let c4 := Fq2.add c2 c2
+        let y3 := Fq2.sub (Fq2.mul e (Fq2.sub d x3)) (Fq2.add c4 c4)
+        let yz := Fq2.mul y z
+        x := x3
+        y := y3
+        z := Fq2.add yz yz
+    if (order[i / 32]! >>> (i % 32).toUInt64) &&& 1 == 1 then
+      -- add the point itself (whose Z is 1)
+      if z.isZero then
+        x := a.x
+        y := a.y
+        z := Fq2.one
+      else
+        let zz := Fq2.mul z z
+        let u2 := Fq2.mul a.x zz
+        let s2 := Fq2.mul a.y (Fq2.mul z zz)
+        if Fq2.same x u2 then
+          if Fq2.same y s2 then
+            -- the same point: this would be a doubling, which the order's bits never ask for of a
+            -- point in the subgroup; leave it to the slow, general routine
+            return (g2Scale order a).infinite
+          z := Fq2.zero
+        else
+          let h := Fq2.sub u2 x
+          let r := Fq2.sub s2 y
+          let hh := Fq2.mul h h
+          let hhh := Fq2.mul h hh
+          let v := Fq2.mul x hh
+          let x3 := Fq2.sub (Fq2.sub (Fq2.mul r r) hhh) (Fq2.add v v)
+          let y3 := Fq2.sub (Fq2.mul r (Fq2.sub v x3)) (Fq2.mul y hhh)
+          z := Fq2.mul h z
+          x := x3
+          y := y3
+  return z.isZero
+
 /-- A point of the twist from its 128 bytes, in Ethereum's order: for x and then for y, the `u` part first.
 `none` if out of range, off the curve, or not in the subgroup the pairing is defined on. -/
 def g2OfBytes (b : ByteArray) (o : Nat) (big : Bool) : Option G2 := Id.run do
@@ -234,7 +294,7 @@ def g2OfBytes (b : ByteArray) (o : Nat) (big : Bool) : Option G2 := Id.run do
   if !(Fq2.same (Fq2.mul y y) (Fq2.add (Fq2.mul (Fq2.mul x x) x) twistB)) then
     return none
   let q : G2 := ⟨x, y, false⟩
-  if !(g2Scale order q).infinite then
+  if !(g2InSubgroup q) then
     return none
   return some q
 
@@ -332,7 +392,8 @@ def miller (q : G2) (px py : Fq) : Fq12 := Id.run do
 /-- (p¹² − 1) / order: the power that turns the loop's result into the pairing. -/
 def finalExponent : ByteArray := Hex.decode "2f4b6dc97020fddadf107d20bc842d43bf6369b1ff6a1c71015f3f7be2e1e30a73bb94fec0daf15466b2383a5d3ec3d15ad524d8f70c54efee1bd8c3b21377e563a09a1b705887e72eceaddea3790364a61f676baaf977870e88d5c6c8fef0781361e443ae77f5b63a2a2264487f2940a8b1ddb3d15062cd0fb2015dfc6668449aed3cc48a82d0d602d268c7daab6a41294c0cc4ebe5664568dfc50e1648a45a4a1e3a5195846a3ed011a337a02088ec80e0ebae8755cfe107acf3aafb40494e406f804216bb10cf430b0f37856b42db8dc5514724ee93dfb10826f0dd4a0364b9580291d2cd65664814fde37ca80bb4ea44eacc5e641bbadf423f9a2cbf813b8d145da90029baee7ddadda71c7f3811c4105262945bba1668c3be69a3c230974d83561841d766f9c9d570bb7fbe04c7e8a6c3c760c0de81def35692da361102b6b9b2b918837fa97896e84abb40a4efb7e54523a486964b64ca86f120"
 
-def finalPower (x : Fq12) : Fq12 := Id.run do
+/-- The same power, bit by bit: three thousand squarings. Kept as the plain statement of what `finalPower` computes. -/
+def finalPowerSlow (x : Fq12) : Fq12 := Id.run do
   let e := finalExponent
   let mut result := one12
   let mut started := false
@@ -345,18 +406,243 @@ def finalPower (x : Fq12) : Fq12 := Id.run do
         started := true
   return result
 
+-- The same power in a few hundred multiplications. (p¹² − 1)/order = (p⁶ − 1)·(p² + 1)·(p⁴ − p² + 1)/order.
+-- Raising to a power of p is a symmetry of the field ("Frobenius"), linear in the twelve coefficients, so
+-- it costs one multiplication's worth; the first two factors are done that way. What they leave has its
+-- inverse for the asking (it is the image under the p⁶ symmetry), and the last factor then unfolds into
+-- three powers by the curve's 63-bit parameter and a short chain of products.
+
+/-- `x` to the power `e` (eight 32-bit digits). -/
+def pow12 (x : Fq12) (e : Mont.Num) : Fq12 := Id.run do
+  let mut result := one12
+  let mut started := false
+  let mut i := 256
+  while i > 0 do
+    i := i - 1
+    if started then
+      result := mul12 result result
+    if (e[i / 32]! >>> (i % 32).toUInt64) &&& 1 == 1 then
+      result := if started then mul12 result x else x
+      started := true
+  return result
+
+/-- 1, s, s², ..., s¹¹. -/
+def powersOf (s : Fq12) : Array Fq12 := Id.run do
+  let mut out : Array Fq12 := Array.emptyWithCapacity 12
+  let mut power := one12
+  for _ in [0:12] do
+    out := out.push power
+    power := mul12 power s
+  return out
+
+/-- The image of `x` under the symmetry that sends `w` to `s`, given the powers of `s`. -/
+def mapBy (powers : Array Fq12) (x : Fq12) : Fq12 := Id.run do
+  let mut out : Fq12 := Array.replicate 12 Mont.zero
+  for i in [0:12] do
+    let c := x[i]!
+    if !(Mont.isZero c) then
+      let column := powers[i]!
+      for j in [0:12] do
+        if !(Mont.isZero column[j]!) then
+          out := out.set! j (fadd out[j]! (fmul c column[j]!))
+  return out
+
+/-- Where `w` goes when everything is raised to the power p, p² and p³ (as the powers of its image). -/
+def frobenius1 : Array Fq12 := powersOf (pow12 ((Array.replicate 12 Mont.zero).set! 1 one) p)
+def frobenius2 : Array Fq12 := powersOf (mapBy frobenius1 frobenius1[1]!)
+def frobenius3 : Array Fq12 := powersOf (mapBy frobenius1 frobenius2[1]!)
+
+/-- Raising to the power p⁶ sends `w` to `−w`: the odd coefficients change sign. -/
+def conj12 (x : Fq12) : Fq12 := Id.run do
+  let mut out : Fq12 := Array.emptyWithCapacity 12
+  for i in [0:12] do
+    out := out.push (if i % 2 == 1 then fneg x[i]! else x[i]!)
+  return out
+
+/-- `x` times `w`. -/
+def timesW (x : Fq12) : Fq12 := Id.run do
+  let top := x[11]!
+  let mut out : Fq12 := Array.emptyWithCapacity 12
+  out := out.push (fneg (fmul top eightyTwo))
+  for i in [0:11] do
+    out := out.push (if i == 5 then fadd x[i]! (fmul top eighteen) else x[i]!)
+  return out
+
+/-- 1/x, by solving `x·y = 1` for the twelve coefficients of `y` (twelve equations, by elimination).
+All zeros for `x = 0`. -/
+def inv12 (x : Fq12) : Fq12 := Id.run do
+  -- 12 rows of 13 numbers: row i holds coefficient i of x, x·w, ..., x·w¹¹, and then of 1
+  let mut m : Array Fq := Array.replicate 156 Mont.zero
+  let mut column := x
+  for j in [0:12] do
+    for i in [0:12] do
+      m := m.set! (13 * i + j) column[i]!
+    column := timesW column
+  m := m.set! 12 one
+  for c in [0:12] do
+    let mut pivot := c
+    while pivot < 12 && Mont.isZero m[13 * pivot + c]! do
+      pivot := pivot + 1
+    if pivot == 12 then
+      return Array.replicate 12 Mont.zero
+    if pivot != c then
+      for k in [0:13] do
+        let t := m[13 * c + k]!
+        m := m.set! (13 * c + k) m[13 * pivot + k]!
+        m := m.set! (13 * pivot + k) t
+    let scale := finv m[13 * c + c]!
+    for k in [c:13] do
+      m := m.set! (13 * c + k) (fmul m[13 * c + k]! scale)
+    for r in [0:12] do
+      let factor := m[13 * r + c]!
+      if r != c && !(Mont.isZero factor) then
+        for k in [c:13] do
+          m := m.set! (13 * r + k) (fsub m[13 * r + k]! (fmul factor m[13 * c + k]!))
+  let mut out : Fq12 := Array.emptyWithCapacity 12
+  for i in [0:12] do
+    out := out.push m[13 * i + 12]!
+  return out
+
+/-- `x` to the power of the curve's parameter, 4965661367192848881. -/
+def powParameter (x : Fq12) : Fq12 := pow12 x #[0x4A6909F1, 0x44E992B4, 0, 0, 0, 0, 0, 0]
+
+def finalPower (x : Fq12) : Fq12 :=
+  -- to the power (p⁶ − 1)(p² + 1)
+  let t := mul12 (conj12 x) (inv12 x)
+  let t := mul12 (mapBy frobenius2 t) t
+  -- and to (p⁴ − p² + 1)/order
+  let fp := mapBy frobenius1 t
+  let fp2 := mapBy frobenius2 t
+  let fp3 := mapBy frobenius3 t
+  let fu := powParameter t
+  let fu2 := powParameter fu
+  let fu3 := powParameter fu2
+  let y0 := mul12 (mul12 fp fp2) fp3
+  let y1 := conj12 t
+  let y2 := mapBy frobenius2 fu2
+  let y3 := conj12 (mapBy frobenius1 fu)
+  let y4 := conj12 (mul12 fu (mapBy frobenius1 fu2))
+  let y5 := conj12 fu2
+  let y6 := conj12 (mul12 fu3 (mapBy frobenius1 fu3))
+  let t0 := mul12 (mul12 (mul12 y6 y6) y4) y5
+  let t1 := mul12 (mul12 y3 y5) t0
+  let t0 := mul12 t0 y2
+  let t1 := mul12 (mul12 t1 t1) t0
+  let t1 := mul12 t1 t1
+  let t0 := mul12 t1 y1
+  let t1 := mul12 t1 y0
+  mul12 (mul12 t0 t0) t1
+
+/-- The inverses of several pairs with a single division (the product of all is inverted, and each
+one's inverse recovered from it). Empty if one of them is zero. -/
+def invertAll (xs : Array Fq2) : Array Fq2 := Id.run do
+  -- a pair's inverse is its conjugate over its norm, a plain number: those are what gets inverted
+  let mut norms : Array Fq := Array.emptyWithCapacity xs.size
+  let mut running : Array Fq := Array.emptyWithCapacity xs.size
+  let mut product := one
+  for x in xs do
+    let norm := fadd (fmul x.a x.a) (fmul x.b x.b)
+    if Mont.isZero norm then
+      return Array.emptyWithCapacity 0
+    norms := norms.push norm
+    running := running.push product
+    product := fmul product norm
+  let mut inverse := finv product
+  let mut out : Array Fq2 := Array.replicate xs.size Fq2.zero
+  let mut k := xs.size
+  while k > 0 do
+    k := k - 1
+    let normInverse := fmul inverse running[k]!
+    inverse := fmul inverse norms[k]!
+    out := out.set! k ⟨fmul xs[k]!.a normInverse, fneg (fmul xs[k]!.b normInverse)⟩
+  return out
+
+/-- The line of slope `m` through the point `(x, y)` of the twist, evaluated at `(px, py)` (see `line`). -/
+def lineOfSlope (m x y : Fq2) (px py : Fq) : Fq12 :=
+  let zero12 : Fq12 := Array.replicate 12 Mont.zero
+  addAt (addAt (zero12.set! 0 (fneg py)) 1 (Fq2.scale m px)) 3 (Fq2.sub y (Fq2.mul m x))
+
+/-- One step of the loop for every pair at once: multiplies `f` by each pair's line through its running
+point `ts[k]` and `others[k]` (the tangent, with `tangent`), and moves each running point along its
+line. The slopes need a division each; they are all had from one (`invertAll`). Returns nothing new
+if some line is vertical, which the caller then does the slow way. -/
+def stepAll (f : Fq12) (ts others : Array G2) (pxs pys : Array Fq) (tangent : Bool) : Fq12 × Array G2 := Id.run do
+  let mut bottoms : Array Fq2 := Array.emptyWithCapacity ts.size
+  for k in [0:ts.size] do
+    bottoms := bottoms.push (if tangent then Fq2.add ts[k]!.y ts[k]!.y else Fq2.sub others[k]!.x ts[k]!.x)
+  let inverses := invertAll bottoms
+  if inverses.size != ts.size then
+    return (f, Array.emptyWithCapacity 0)
+  let mut g := f
+  let mut next : Array G2 := Array.emptyWithCapacity ts.size
+  for k in [0:ts.size] do
+    let t := ts[k]!
+    let o := others[k]!
+    let top := if tangent then
+        let xx := Fq2.mul t.x t.x
+        Fq2.add (Fq2.add xx xx) xx
+      else Fq2.sub o.y t.y
+    let m := Fq2.mul top inverses[k]!
+    g := mul12 g (lineOfSlope m t.x t.y pxs[k]! pys[k]!)
+    let x3 := Fq2.sub (Fq2.sub (Fq2.mul m m) t.x) (if tangent then t.x else o.x)
+    next := next.push ⟨x3, Fq2.sub (Fq2.mul m (Fq2.sub t.x x3)) t.y, false⟩
+  return (g, next)
+
+/-- The loops of all the pairs, run together: `f` is squared once per step for all of them. -/
+def millerAll (qs : Array G2) (pxs pys : Array Fq) : Fq12 := Id.run do
+  let count : UInt64 := 0x9D797039BE763BA8
+  let mut f := one12
+  let mut ts := qs
+  let mut i := 64
+  while i > 0 do
+    i := i - 1
+    f := mul12 f f
+    let (g, doubled) := stepAll f ts ts pxs pys true
+    if doubled.size != ts.size then
+      -- (a point with y = 0: not one that passed the subgroup check; the pairs one by one, then)
+      let mut slow := one12
+      for k in [0:qs.size] do
+        slow := mul12 slow (miller qs[k]! pxs[k]! pys[k]!)
+      return slow
+    f := g
+    ts := doubled
+    if (count >>> i.toUInt64) &&& 1 == 1 then
+      let (g, added) := stepAll f ts qs pxs pys false
+      if added.size != ts.size then
+        let mut slow := one12
+        for k in [0:qs.size] do
+          slow := mul12 slow (miller qs[k]! pxs[k]! pys[k]!)
+        return slow
+      f := g
+      ts := added
+  -- the two closing steps, with each point moved by the field's symmetry once and twice
+  for k in [0:qs.size] do
+    let q := qs[k]!
+    let q1 : G2 := ⟨Fq2.mul (Fq2.conj q.x) twistX, Fq2.mul (Fq2.conj q.y) twistY, false⟩
+    let q2 : G2 := ⟨Fq2.mul q.x (Fq2.mul twistX (Fq2.conj twistX)), q.y, false⟩
+    f := mul12 f (line ts[k]! q1 pxs[k]! pys[k]!)
+    f := mul12 f (line (g2Add ts[k]! q1) q2 pxs[k]! pys[k]!)
+  return f
+
 /-- Is the product of the pairings of these pairs 1? `input` is pairs of a point of the curve (64 bytes)
 and a point of the twist (128 bytes). Returns 1 or 0, or 2 if a point is not valid. -/
 def pairingCheck (input : ByteArray) (big : Bool) : Nat := Id.run do
-  let mut f := one12
+  let mut qs : Array G2 := Array.emptyWithCapacity 4
+  let mut pxs : Array Fq := Array.emptyWithCapacity 4
+  let mut pys : Array Fq := Array.emptyWithCapacity 4
   for k in [0:input.size / 192] do
     match g1OfBytes input (192 * k) big, g2OfBytes input (192 * k + 64) big with
     | some g, some q =>
+      -- (a pair with a point at infinity pairs to 1)
       if !(Mont.isZero g.z) && !q.infinite then
         let (px, py) := g1Affine g
-        f := mul12 f (miller q px py)
+        qs := qs.push q
+        pxs := pxs.push px
+        pys := pys.push py
     | _, _ => return 2
-  return if isOne12 (finalPower f) then 1 else 0
+  if qs.size == 0 then
+    return 1
+  return if isOne12 (finalPower (millerAll qs pxs pys)) then 1 else 0
 
 -- ------------------------------------------------------- points in half the bytes
 

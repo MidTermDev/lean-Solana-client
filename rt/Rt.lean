@@ -323,6 +323,9 @@ def baExtract (b start stop : UInt64) : IO UInt64 := do
   return q
 
 def baEq (a b : UInt64) : IO Bool := do
+  -- the very same array (an account nobody changed is compared with itself)
+  if a == b then
+    return true
   let sa ← Mem.load64 (a + 8)
   let sb ← Mem.load64 (b + 8)
   if sa != sb then

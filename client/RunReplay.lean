@@ -629,14 +629,29 @@ def main : IO Unit := do
     let usFooter := (← Sys.nowUs) - mark
     mark ← Sys.nowUs
     -- ---- the lattice hash moves by exactly what changed
+    -- (the accounts as they are now are hashed together: sixteen chunks at a time, whoever's they are)
+    let mut nows : Array Sbpf.Account := Array.emptyWithCapacity touched.size
+    let mut inputs : Array ByteArray := Array.emptyWithCapacity touched.size
+    for was in touched do
+      let now ← world.get pending was.key
+      nows := nows.push now
+      if now.lamports != 0 then
+        inputs := inputs.push (LtHash.accountInput now.lamports now.data now.executable now.owner now.key)
+    let roots := Blake3.rootNodes inputs Fast.quick
+    let mut hashed := 0
+    let mut sumFile := LtHash.toFile sum
     for k in [0:touched.size] do
       let was := touched[k]!
-      let now ← world.get pending was.key
+      let now := nows[k]!
       let before := if touchedHashes[k]!.size == 2048 then touchedHashes[k]!
         else LtHash.contribution was.lamports was.data was.executable was.owner was.key
-      let after := LtHash.contribution now.lamports now.data now.executable now.owner now.key
-      sum := LtHash.addBytes (LtHash.addBytes sum before true) after false
+      let mut after := ByteArray.empty
+      if now.lamports != 0 then
+        after := roots[hashed]!.bytesBy 2048 Fast.quick
+        hashed := hashed + 1
+      sumFile := LtHash.addToFile (LtHash.addToFile sumFile before true Fast.quick) after false Fast.quick
       world := world.noteHash now.key after
+    sum := LtHash.ofFile sumFile
     if lines then
       for was in touched do
         let now ← world.get pending was.key

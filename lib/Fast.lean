@@ -58,6 +58,11 @@ def put64 (b : ByteArray) (o : Nat) (v : UInt64) : ByteArray := Id.run do
     out := out.set! (o + i) (v >>> (8 * i).toUInt64).toUInt8
   return out
 
+/-- 1 for true, 0 for false, without a branch: a comparison leaves its answer in a register, and this is
+that register. (Sums of many words carry or do not at the whim of the data; a branch on each carry is
+guessed wrong half the time.) -/
+def bit (b : Bool) : UInt64 := if b then 1 else 0
+
 /-- The high 64 bits of the 128-bit product `a × b`. -/
 def mulHi (a b : UInt64) : UInt64 :=
   let al := a &&& 0xFFFFFFFF
