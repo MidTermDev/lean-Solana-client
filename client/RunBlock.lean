@@ -187,6 +187,9 @@ def fetchFrom (sock : UInt64) (seed pubkey : ByteArray) (peers0 : Array Peer) (s
           if chosen == Wire.bad then
             turn := (turn + 1) % peers.size
             chosen := turn
+          -- (with nobody to ask there is nothing to send)
+          if chosen >= peers.size then
+            break
           let p := peers[chosen]!
           let _ ← Sys.sendTo sock p.ip p.port (Repair.request Repair.windowIndex seed pubkey p.key now nonce slot i.toUInt64)
           nonce := nonce + 1

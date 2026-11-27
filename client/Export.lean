@@ -77,6 +77,7 @@ def json (sh : Shared) (cfg : Config) (withNodes : Bool) : IO String := do
   s := s ++ s!"\"following\": {if cfg.tvuPort != 0 then "true" else "false"}, "
   s := s ++ s!"\"followed\": {← m.get M.blocksFollowed}, \"linked\": {← m.get M.blocksLinked}, "
   s := s ++ s!"\"onAnotherFork\": {← m.get M.blocksUnlinked}, \"slotsRepaired\": {← m.get M.slotsRepaired}, "
+  s := s ++ s!"\"leaderSchedule\": {if cfg.schedule.size != 0 then "true" else "false"}, \"byScheduledLeader\": {← m.get M.blocksScheduled}, "
   s := s ++ s!"\"slotsIncomplete\": {← m.get M.slotsIncomplete}, \"shredsReceived\": {← m.get M.shredsRx}, "
   s := s ++ s!"\"shredBytes\": {← m.get M.shredBytes}, \"shredsDuplicate\": {← m.get M.shredsDuplicate}, "
   s := s ++ s!"\"shredsRebuilt\": {← m.get M.shredsRecovered}, \"setsRebuilt\": {← m.get M.setsRecovered}, "
@@ -196,6 +197,8 @@ def prometheus (sh : Shared) (cfg : Config) : IO String := do
     "Verified blocks whose first entry and first shred set follow the verified parent block." (← m.get M.blocksLinked)
   s := s ++ sample "leansol_blocks_other_fork_total" "counter"
     "Verified blocks that do not follow the block verified for their parent slot." (← m.get M.blocksUnlinked)
+  s := s ++ sample "leansol_blocks_scheduled_leader_total" "counter"
+    "Verified blocks signed by the leader the schedule names for their slot." (← m.get M.blocksScheduled)
   s := s ++ sample "leansol_slots_repaired_total" "counter" "Slots completed by asking validators for missing shreds."
     (← m.get M.slotsRepaired)
   s := s ++ sample "leansol_slots_incomplete_total" "counter" "Slots that began arriving and were never completed."

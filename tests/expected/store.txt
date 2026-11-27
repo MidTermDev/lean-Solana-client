@@ -6,4 +6,7 @@ addresses never filed: 5000 of 5000 not found
 account 9: 1010 lamports, executable true, 344 bytes, slot 6, rent epoch 18446744073709551615
 opened with the wrong seed: 2000 of 2000 not found
 a shard that is not there: failed true
+zeros squeezed out of 600 shapes of data: 600 come back as they were; 183300 bytes stored as 79814
+an account with a rent epoch: 123, 77 lamports, data intact true; without: true
+damaged packing is not unpacked: 0 0
 which shard: 0 7 8 of 16

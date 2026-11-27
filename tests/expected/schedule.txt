@@ -1,0 +1,26 @@
+numbers below 294533: 280405 7507 84194 272634 52124 190984 8676 230277 223574 126007 
+            expected: 280405 7507 84194 272634 52124 190984 8676 230277 223574 126007 
+the largest product: 18446744073709551614 1
+weighted picks: 975 160 534 962 420 805 172 884 871 654 
+      expected: 975 160 534 962 420 805 172 884 871 654 
+epoch 1, stakes 10 20 30:          1 1 2 1 1 0 0 1 2 1 0 1 
+                         expected: 1 1 2 1 1 0 0 1 2 1 0 1 
+the same, two slots each:          1 1 2 1 1 0 
+                         expected: 1 1 2 1 1 0 
+epoch 1, stakes 30 10 20:          2 2 0 2 2 1 1 2 0 2 1 2 
+                         expected: 2 2 0 2 2 1 1 2 0 2 1 2 
+seven validators:                  4 5 6 3 4 1 2 3 6 4 2 4 5 6 6 
+                         expected: 4 5 6 3 4 1 2 3 6 4 2 4 5 6 6 
+epoch 457468:                      2 2 0 1 0 2 1 2 1 2 2 2 
+                         expected: 2 2 0 1 0 2 1 2 1 2 2 2 
+epoch 3466545, 14 slots:           2 2 0 0 2 1 1 1 0 0 2 2 1 2 
+                         expected: 2 2 0 0 2 1 1 1 0 0 2 2 1 2 
+epoch 42, equal stakes:  G2MGFXgdLATXWr1336i8PTcaUMc4GbJRMJdbxiarCttr
+               expected: G2MGFXgdLATXWr1336i8PTcaUMc4GbJRMJdbxiarCttr
+epoch 42, stake i:       9xLLKyyqF5YrdwPSDbqh5oVamSF7cqPqQLxEyHTexEiP
+               expected: 9xLLKyyqF5YrdwPSDbqh5oVamSF7cqPqQLxEyHTexEiP
+epoch 346436, stake i³:  H2bw3Y2AjxJyK7smy1ZBB4LJ7MY3i9bPQM3YdAChAww2
+               expected: H2bw3Y2AjxJyK7smy1ZBB4LJ7MY3i9bPQM3YdAChAww2
+epoch 454357, stake i²:  7KwK44Y7V3GzJLN8aGZtM8EEfAYmRvaiDyKYV6jg4MQn
+               expected: 7KwK44Y7V3GzJLN8aGZtM8EEfAYmRvaiDyKYV6jg4MQn
+listed twice: 2 validators; nobody staked: 0 slots drawn

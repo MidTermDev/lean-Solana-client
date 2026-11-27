@@ -295,7 +295,9 @@ def parse (b : ByteArray) : Manifest := Id.run do
       o := o + 1
   if o < b.size && b[o]! == 1 && o + 33 <= b.size then
     blockId := b.extract (o + 1) (o + 33)
-  return ⟨"", slot, parentSlot, hash, parentHash, blockhash, blockHeight, epoch, capitalization, accountsDataLen, transactionCount,
+  -- newer manifests leave the epoch field unused: it follows from the slot
+  let counted := if slotsPerEpoch != 0 && slot >= firstNormalSlot then firstNormalEpoch + (slot - firstNormalSlot) / slotsPerEpoch else epoch
+  return ⟨"", slot, parentSlot, hash, parentHash, blockhash, blockHeight, (if epoch == 0 then counted else epoch), capitalization, accountsDataLen, transactionCount,
     signatureCount, tickHeight, ticksPerSlot, hashesPerTick, lamportsPerSignature, slotsPerEpoch, leaderScheduleOffset, warmup,
     firstNormalEpoch, firstNormalSlot, leader, blockhashes, voteCount, delegations, epochStakes, ltHash, blockId⟩
 

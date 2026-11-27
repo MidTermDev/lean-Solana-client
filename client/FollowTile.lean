@@ -1,3 +1,4 @@
+import Solana.LeaderSchedule
 import Layout
 import Directory
 import Solana.Block
@@ -43,6 +44,8 @@ structure Slot where
   asked : Bool
   /-- some of its shreds came by repair and have not been checked one by one yet -/
   unchecked : Bool
+  /-- the leader is the one the schedule names for the slot, not whoever turned out to have signed it -/
+  scheduled : Bool
   deriving Inhabited
 
 -- The shared table of verified blocks: 256 entries of 256 bytes, indexed by slot.
@@ -92,8 +95,11 @@ def link (base slot : UInt64) : IO UInt64 := do
 
 def emptyGroup : Group := ⟨ByteArray.empty, Array.replicate 32 ByteArray.empty, 0, false⟩
 
-def newSlot (slot : UInt64) : Slot :=
-  ⟨slot, ByteArray.empty, Array.replicate 1024 ByteArray.empty, 0, Wire.bad, Array.emptyWithCapacity 32, false, false, false, false⟩
+/-- A slot with nothing received yet. If the schedule covers it, its leader is known before any shred arrives,
+and only that key's signature will do. -/
+def newSlot (schedule : ByteArray) (slot : UInt64) : Slot :=
+  let leader := LeaderSchedule.leaderAt schedule slot
+  ⟨slot, leader, Array.replicate 1024 ByteArray.empty, 0, Wire.bad, Array.emptyWithCapacity 32, false, false, false, false, leader.size == 32⟩
 
 /-- The data shreds `[32 g, 32 g + 32)` of a slot. -/
 def groupData (s : Slot) (g : Nat) : Array ByteArray := Id.run do
@@ -184,6 +190,8 @@ def finish (m : Ipc.Metrics) (seenBase : UInt64) (s : Slot) (candidates : ByteAr
   remember seenBase r (Block.rootOf shreds[shreds.size - 1]!)
   m.add M.blocksOk 1
   m.add M.blocksFollowed 1
+  if s.scheduled then
+    m.add M.blocksScheduled 1
   -- this block to its parent, and any child that was verified before it
   for k in [0:9] do
     let outcome ← link seenBase (s.slot + k.toUInt64)
@@ -240,7 +248,8 @@ def followTile (sh : Shared) (cfg : Config) (which : Nat) : IO Unit := do
       for i in [0:slots.size] do
         if !slots[i]!.done && !slots[i]!.asked && slots[i]!.slot + 8 <= newest then
           late := i
-      if late != Wire.bad then
+      -- (right after starting, gossip has named nobody to ask yet: the slot waits)
+      if late != Wire.bad && snap.count != 0 then
         let s := slots[late]!
         let mut peers : Array RunBlock.Peer := Array.emptyWithCapacity 16
         let mut row := turn * 257
@@ -293,10 +302,10 @@ def followTile (sh : Shared) (cfg : Config) (which : Nat) : IO Unit := do
                 oldest := i
             if !slots[oldest]!.done then
               m.add M.slotsIncomplete 1
-            slots := slots.set! oldest (newSlot h.slot)
+            slots := slots.set! oldest (newSlot cfg.schedule h.slot)
             at_ := oldest
           else
-            slots := slots.push (newSlot h.slot)
+            slots := slots.push (newSlot cfg.schedule h.slot)
             at_ := slots.size - 1
         let mut s := slots[at_]!
         let g := (h.fecSet / 32).toNat

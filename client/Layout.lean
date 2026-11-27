@@ -105,6 +105,8 @@ def shredsDuplicate : Nat := 228
 def slotsRepaired : Nat := 229
 /-- Blocks that turned out not to follow the block verified for their parent slot (another fork). -/
 def blocksUnlinked : Nat := 230
+/-- Blocks verified against the leader the schedule names for their slot (not merely a node known from gossip). -/
+def blocksScheduled : Nat := 231
 
 end M
 
@@ -128,6 +130,8 @@ structure Config where
   tvuPort : UInt16
   /-- How many tiles assemble and verify blocks from those shreds. -/
   followTiles : Nat
+  /-- The leader schedule (`LeaderSchedule.table`), computed from the stakes in a loaded snapshot; empty without one. -/
+  schedule : ByteArray
 
 /-- The shared mappings and the socket, inherited by every tile across `fork`. -/
 structure Shared where

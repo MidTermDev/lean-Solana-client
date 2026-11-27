@@ -8,6 +8,7 @@ import RunProgram
 import RunTx
 import RunBlock
 import RunSnapshot
+import Solana.LeaderSchedule
 import BlockTile
 import TurbineTile
 import FollowTile
@@ -34,6 +35,8 @@ def usage : String :=
   "                      Both it and --port must be reachable from the internet (validators ping the\n" ++
   "                      gossip port before they believe a node exists); they may be the same port.\n" ++
   "  --follow-tiles N    processes that assemble and verify the blocks received that way (default 6)\n" ++
+  "  --state DIR         a store loaded by `leansol snapshot`: the stakes in its manifest give the\n" ++
+  "                      leader schedule, and each block must then be signed by its slot's leader\n" ++
   "  --block-interval S  fetch a recent block from validators and verify it every S seconds\n" ++
   "                      (default 5; 0 = never)\n" ++
   "  --duration SECONDS  exit after this long (default: run until interrupted)\n" ++
@@ -160,6 +163,7 @@ def main : IO Unit := do
   let mut blockInterval : UInt64 := 5
   let mut tvuPort : UInt16 := 0
   let mut followTiles := 6
+  let mut stateDir := ""
   let mut duration := 0
   let mut plain := !(← Sys.isTty 1)
   let mut jsonOut := false
@@ -201,6 +205,8 @@ def main : IO Unit := do
         tvuPort := (← numberArg a v).toUInt16
       else if a == "--follow-tiles" then
         followTiles := ← numberArg a v
+      else if a == "--state" then
+        stateDir := v
       else if a == "--duration" then
         duration := ← numberArg a v
       else if a == "--json-file" then
@@ -274,8 +280,22 @@ def main : IO Unit := do
   Sys.setTimeout sock 20 500
   let boundPort ← Sys.localPort sock
   let outsetUs := (← Sys.nowMs) * 1000
+  -- the leader schedule, if a snapshot has been loaded: computed once here, inherited by every tile
+  let mut schedule := ByteArray.empty
+  if stateDir != "" then
+    let fd ← Sys.openFile s!"{stateDir}/manifest.bin" 0
+    if Sys.isErr fd then
+      die s!"{stateDir} holds no snapshot manifest (load one with: leansol snapshot)"
+    let bytes ← Sys.readAt fd 0 (← Sys.fileSize fd).toNat
+    Sys.close fd
+    let manifest := Snapshot.parse bytes
+    if manifest.error != "" then
+      die s!"{stateDir}/manifest.bin: {manifest.error}"
+    schedule := LeaderSchedule.table manifest
+    let (low, high) := LeaderSchedule.covers schedule
+    IO.eprintln s!"leansol: leader schedule for slots {low} to {high - 1}, from the stakes in the snapshot of slot {manifest.slot}"
   let cfg : Config :=
-    { seed := seed, pubkey := pubkey, publicIp := publicIp, port := boundPort,
+    { seed := seed, pubkey := pubkey, publicIp := publicIp, port := boundPort, schedule := schedule,
       shredVersion := shredVersion, entrypoints := entrypoints, outsetUs := outsetUs, fanout := fanout,
       cluster := cluster, httpAddr := listen, blockInterval := blockInterval, tvuPort := tvuPort, followTiles := followTiles }
   -- the HTTP endpoint is opened here, before forking, so that a port that

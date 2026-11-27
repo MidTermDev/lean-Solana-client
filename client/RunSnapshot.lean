@@ -363,7 +363,8 @@ def worker (dir : String) (id : Nat) (seed fd page : UInt64) : IO Unit := do
       let mut keep := true
       if loc != Accounts.none_ then
         let old ← shard.recordAt pending loc
-        if old.size < Accounts.headerSize + Accounts.recDataLen old then
+        let oldData := Accounts.recData old
+        if old.size < Accounts.headerSize || oldData.size != Accounts.recDataLen old then
           Mem.store64 (page + 64) 1
           Sys.exit 1
         if slot >= Accounts.recSlot old then
@@ -374,7 +375,7 @@ def worker (dir : String) (id : Nat) (seed fd page : UInt64) : IO Unit := do
             live := live - 1
             lamports := lamports - had
             dataBytes := dataBytes - (Accounts.recDataLen old).toUInt64
-            sum := LtHash.mixStored sum old had Accounts.headerSize (Accounts.recDataLen old) (Accounts.recExecutable old) 32 0 true
+            sum := LtHash.mixAccount sum had oldData (Accounts.recExecutable old) (old.extract 32 64) (old.extract 0 32) true
           else
             closed := closed - 1
         else
@@ -719,9 +720,7 @@ def main : IO Unit := do
                 let _ ← Sys.writeFileAtomic s!"{dir}/manifest.bin" content
                 -- the log needs the accounts' data and 96 bytes for each account
                 let free ← Sys.freeSpace dir
-                IO.println s!"disk         {size free} free in {dir}; the store needs {size manifest.accountsDataLen} and 96 bytes per account"
-                if free != 0 && free < manifest.accountsDataLen then
-                  error := s!"not enough room in {dir}"
+                IO.println s!"disk         {size free} free in {dir} (the store takes 88 bytes per account and its data with the zeros squeezed out)"
               if peek then
                 finished := true
       else
@@ -839,7 +838,7 @@ def main : IO Unit := do
     IO.println s!"result       INVALID: {wrong}"
     Sys.exit 1
   let state := "{\n" ++ s!"  \"slot\": {manifest.slot},\n  \"hash\": \"{checksum}\",\n  \"bankHash\": \"{Base58.encode manifest.hash}\",\n" ++
-    s!"  \"shards\": {workers},\n  \"seed\": \"{Hex.encode seedBytes}\",\n  \"accounts\": {live},\n  \"lamports\": {lamports},\n  \"logBytes\": {logBytes}\n" ++ "}\n"
+    s!"  \"format\": 2,\n  \"shards\": {workers},\n  \"seed\": \"{Hex.encode seedBytes}\",\n  \"accounts\": {live},\n  \"lamports\": {lamports},\n  \"logBytes\": {logBytes}\n" ++ "}\n"
   if !(← Sys.writeFileAtomic s!"{dir}/state.json" state.toUTF8) then
     IO.println s!"result       FAILED: cannot write {dir}/state.json"
     Sys.exit 1
@@ -872,6 +871,8 @@ def account : IO Unit := do
   let seed := Wire.u64 seedBytes 0
   if shards == 0 || seedBytes.size != 8 then
     fail s!"{dir}/state.json is not readable"
+  if RunBlock.jsonField state "format" 0 != "2" then
+    fail s!"{dir} was written in another format of the store; load the snapshot again"
   let id := Accounts.shardOf key 0 shards
   let shard ← Accounts.Shard.openRead dir id seed
   if shard.failed then
@@ -881,13 +882,16 @@ def account : IO Unit := do
     IO.println s!"{address}: no such account at slot {RunBlock.jsonField state "slot" 0}"
     Sys.exit 1
   let r ← shard.recordAt ByteArray.empty loc
+  let data := Accounts.recData r
   let dataLen := Accounts.recDataLen r
+  if r.size < Accounts.headerSize || data.size != dataLen then
+    fail s!"the record of {address} in shard {id} is damaged"
   IO.println s!"address      {address}"
   IO.println s!"lamports     {Accounts.recLamports r} ({sol (Accounts.recLamports r)} SOL)"
   IO.println s!"owner        {Base58.encode (r.extract 32 64)}"
   IO.println s!"executable   {Accounts.recExecutable r}"
   IO.println s!"rent epoch   {Accounts.recRentEpoch r}"
-  IO.println s!"data         {Fmt.thousands dataLen.toUInt64} bytes{if dataLen != 0 then s!" · sha256 {Hex.encode (Sha256.hash (r.extract Accounts.headerSize (Accounts.headerSize + dataLen)))}" else ""}"
+  IO.println s!"data         {Fmt.thousands dataLen.toUInt64} bytes{if dataLen != 0 then s!" · sha256 {Hex.encode (Sha256.hash data)}" else ""}"
   IO.println s!"last written slot {Accounts.recSlot r} (store of slot {RunBlock.jsonField state "slot" 0})"
 
 end RunSnapshot
