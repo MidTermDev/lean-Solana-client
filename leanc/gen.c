@@ -1046,7 +1046,7 @@ static void gen_op(Expr *e) {
   case OP_VEC: {
     // d = a (op) b on 64-byte slots of the array, in place. EVEX.512 with zmm0 (and zmm1), [rax + disp32].
     int which = (int)e->num2;
-    u64 slot[4] = {0}, top = 0;
+    u64 slot[8] = {0}, top = 0;
     bool scalar = which == V_SET32; // the last argument is a number computed at run time
     for (int i = 1; i < n - (scalar ? 1 : 0); i++) {
       if (e->args[i]->kind != E_INT) fatal("line %d: the slots of a vector operation must be literal numbers", e->line);
@@ -1092,6 +1092,30 @@ static void gen_op(Expr *e) {
       VLOAD1(slot[2]);
       EVEX(2, 0xF5, which == V_MADD52LO ? 0xB4 : 0xB5, 0x80, slot[3]);
       break;
+    case V_QUARTER32: {
+      // a, b, c, d in zmm0-3; the eight steps between registers; the message words straight from memory
+#define VLOADR(r, s) EVEX(1, 0xFE, 0x6F, 0x80 | ((r) << 3), s)
+#define VSTORER(r, s) EVEX(1, 0xFE, 0x7F, 0x80 | ((r) << 3), s)
+#define VRR(opc, d, s) (b1(0x62), b1(0xF1), b1(0x05 | ((~(d) & 15) << 3)), b1(0x48), b1(opc), b1(0xC0 | ((d) << 3) | (s)))
+#define VADDM(d, s) (b1(0x62), b1(0xF1), b1(0x05 | ((~(d) & 15) << 3)), b1(0x48), b1(0xFE), b1(0x80 | ((d) << 3)), buf_u32(&code, (u32)(24 + 64 * (s))))
+#define VROR(d, n) (b1(0x62), b1(0xF1), b1(0x05 | ((~(d) & 15) << 3)), b1(0x48), b1(0x72), b1(0xC0 | (d)), b1(n))
+      for (int r = 0; r < 4; r++) VLOADR(r, slot[r]);
+      VRR(0xFE, 0, 1), VADDM(0, slot[4]); // a += b + mx
+      VRR(0xEF, 3, 0), VROR(3, 16);       // d = (d ^ a) >>> 16
+      VRR(0xFE, 2, 3);                    // c += d
+      VRR(0xEF, 1, 2), VROR(1, 12);       // b = (b ^ c) >>> 12
+      VRR(0xFE, 0, 1), VADDM(0, slot[5]); // a += b + my
+      VRR(0xEF, 3, 0), VROR(3, 8);
+      VRR(0xFE, 2, 3);
+      VRR(0xEF, 1, 2), VROR(1, 7);
+      for (int r = 1; r < 4; r++) VSTORER(r, slot[r]);
+#undef VLOADR
+#undef VSTORER
+#undef VRR
+#undef VADDM
+#undef VROR
+      break; // (zmm0, a, is stored below like every operation's result)
+    }
     case V_MOVE: VLOAD0(slot[1]); break;
     case V_SET32: b1(0x62), b1(0xF2), b1(0x7D), b1(0x48), b1(0x7C), b1(0xC1); break; // vpbroadcastd zmm0, ecx
     case V_ADD32X3:

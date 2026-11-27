@@ -79,14 +79,11 @@ def skipShortVec (b : ByteArray) (o : Nat) (elemSize : Nat) : Nat :=
 
 -- ------------------------------------------------------------------ writers
 
-def putU16 (b : ByteArray) (v : UInt64) : ByteArray :=
-  (b.push v.toUInt8).push (v >>> 8).toUInt8
+@[inline] def putU16 (b : ByteArray) (v : UInt64) : ByteArray := Fast.push16 b v
 
-def putU32 (b : ByteArray) (v : UInt64) : ByteArray :=
-  putU16 (putU16 b v) (v >>> 16)
+@[inline] def putU32 (b : ByteArray) (v : UInt64) : ByteArray := Fast.push32 b v
 
-def putU64 (b : ByteArray) (v : UInt64) : ByteArray :=
-  putU32 (putU32 b v) (v >>> 32)
+@[inline] def putU64 (b : ByteArray) (v : UInt64) : ByteArray := Fast.push64 b v
 
 def putVarint (b : ByteArray) (v : UInt64) : ByteArray := Id.run do
   let mut out := b

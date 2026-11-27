@@ -302,6 +302,7 @@ enum {
   V_XORROR32,  // d = (a xor b) rotated right by a literal count
   V_UNPCKLDQ, V_UNPCKHDQ, V_UNPCKLQDQ, V_UNPCKHQDQ, // interleave the low (high) halves of each quarter, by 32 or 64 bits
   V_SHUF128,   // d = quarters of a and b picked by a literal
+  V_QUARTER32, // the add-rotate-xor quarter-round of BLAKE2s and BLAKE3 on registers a, b, c, d with two message registers
 };
 
 enum {

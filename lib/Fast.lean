@@ -63,6 +63,25 @@ that register. (Sums of many words carry or do not at the whim of the data; a br
 guessed wrong half the time.) -/
 def bit (b : Bool) : UInt64 := if b then 1 else 0
 
+/-- Appends the low two bytes of `v`, least significant first. -/
+def push16 (b : ByteArray) (v : UInt64) : ByteArray := (b.push v.toUInt8).push (v >>> 8).toUInt8
+
+/-- Appends the low four bytes of `v`. -/
+def push32 (b : ByteArray) (v : UInt64) : ByteArray := push16 (push16 b v) (v >>> 16)
+
+/-- Appends `v`, eight bytes. -/
+def push64 (b : ByteArray) (v : UInt64) : ByteArray := push32 (push32 b v) (v >>> 32)
+
+/-- Appends `n` zero bytes. -/
+def pushZeros (b : ByteArray) (n : Nat) : ByteArray := Id.run do
+  let mut out := b
+  for _ in [0:n] do
+    out := out.push 0
+  return out
+
+/-- `n` zero bytes, in an array with room for `capacity` bytes. -/
+def zeroed (n capacity : Nat) : ByteArray := pushZeros (ByteArray.emptyWithCapacity (if capacity > n then capacity else n)) n
+
 /-- The high 64 bits of the 128-bit product `a × b`. -/
 def mulHi (a b : UInt64) : UInt64 :=
   let al := a &&& 0xFFFFFFFF
@@ -251,6 +270,18 @@ def shuffle128 (f : ByteArray) (d a b sel : Nat) : ByteArray := Id.run do
   out := y.copySlice (16 * (sel / 64 % 4)) out (64 * d + 48) 16
   return out
 
+/-- The quarter-round of BLAKE2s and BLAKE3 on registers `a`, `b`, `c`, `d`, with the message registers
+`mx` and `my`: eight steps of add, exclusive-or and rotate. -/
+def quarter32 (f : ByteArray) (a b c d mx my : Nat) : ByteArray :=
+  let f := add32x3 f a a b mx
+  let f := xorRor32 f d d a 16
+  let f := add32 f c c d
+  let f := xorRor32 f b b c 12
+  let f := add32x3 f a a b my
+  let f := xorRor32 f d d a 8
+  let f := add32 f c c d
+  xorRor32 f b b c 7
+
 end Ref
 
 -- ---------------------------------------- the vector operations, as `leanc` compiles them
@@ -278,5 +309,7 @@ def unpackHigh32 (f : ByteArray) (d a b : Nat) : ByteArray := Ref.unpackHigh32 f
 def unpackLow64 (f : ByteArray) (d a b : Nat) : ByteArray := Ref.unpackLow64 f d a b
 def unpackHigh64 (f : ByteArray) (d a b : Nat) : ByteArray := Ref.unpackHigh64 f d a b
 def shuffle128 (f : ByteArray) (d a b sel : Nat) : ByteArray := Ref.shuffle128 f d a b sel
+/-- (The four registers must be different ones.) -/
+def quarter32 (f : ByteArray) (a b c d mx my : Nat) : ByteArray := Ref.quarter32 f a b c d mx my
 
 end Fast

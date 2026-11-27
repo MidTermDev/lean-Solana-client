@@ -57,7 +57,7 @@ It **replays mainnet blocks** against that state and arrives at the bank hashes 
 
 ## Quick start
 
-**Just run it.** Every release ships the client as a single 995 KB static binary (Linux, x86-64):
+**Just run it.** Every release ships the client as a single 1.0 MB static binary (Linux, x86-64):
 
 ```sh
 curl -LO https://github.com/MidTermDev/lean-Solana-client/releases/latest/download/leansol-x86_64-linux
@@ -395,21 +395,22 @@ Holding the state and receiving the blocks, the remaining step is to apply one t
 ```console
 $ ./build/leansol replay --state state --blocks blocks --count 600
 state        slot 474362232, bank hash CVT3U37SYMvWgyLEqXQA2FfmPjvcNKJeWmA9iba5viVM
-slot 474362233: 333 transactions (82 failed), 348 signatures, 12,472,797 compute units, 1394 accounts changed (654 vote accounts by the footer)
+slot 474362233: 333 transactions (82 failed), 348 signatures, 12,472,797 compute units, 1394 accounts changed (654 vote accounts by the footer), fees 3693723 · 531 ms
   bank hash  66HQiwhcu6bm8iBo9X4cqfQzAzWKGCpNXvsVvByKcU1J
-  the block's 66HQiwhcu6bm8iBo9X4cqfQzAzWKGCpNXvsVvByKcU1J  MATCH
-slot 474362234: 296 transactions (73 failed), 306 signatures, 9,625,365 compute units, 1313 accounts changed (654 vote accounts by the footer)
+  the block's 66HQiwhcu6bm8iBo9X4cqfQzAzWKGCpNXvsVvByKcU1J  MATCH · signatures valid
+slot 474362234: 296 transactions (73 failed), 306 signatures, 9,625,365 compute units, 1313 accounts changed (654 vote accounts by the footer), fees 3327507 · 219 ms
   bank hash  Evo4N1GPsJUdugG8ExuzC5TatWw39yVUNDnahMgkia6K
-  the block's Evo4N1GPsJUdugG8ExuzC5TatWw39yVUNDnahMgkia6K  MATCH
+  the block's Evo4N1GPsJUdugG8ExuzC5TatWw39yVUNDnahMgkia6K  MATCH · signatures valid
 ...
-slot 474362832: 250 transactions (45 failed), 281 signatures, 8,798,485 compute units, 1245 accounts changed (654 vote accounts by the footer)
+slot 474362832: 250 transactions (45 failed), 281 signatures, 8,798,485 compute units, 1245 accounts changed (654 vote accounts by the footer), fees 2444356 · 136 ms
   bank hash  HkKDErqSRg9EpKRBtKkpc5nFfhQKMpDmRzZabAdeDFt7
-  the block's HkKDErqSRg9EpKRBtKkpc5nFfhQKMpDmRzZabAdeDFt7  MATCH
+  the block's HkKDErqSRg9EpKRBtKkpc5nFfhQKMpDmRzZabAdeDFt7  MATCH · signatures valid
+signatures   228,723 checked in 3 processes, 0 did not verify
 ```
 
 Those are the 600 mainnet blocks after the snapshot, two minutes of the chain: 204,532 transactions, 7.1 billion compute units of other people's programs (Jupiter, Raydium, Orca, pump, the token programs, zero-knowledge verifiers, passkey wallets, hand-written assembly), every one of them run by a virtual machine written in Lean, and **600 bank hashes out of 600** equal to the ones mainnet's leaders signed. Each depends on the one before it, so the last one vouches for all of it: 825,698 account changes, none of them off by a lamport or a byte.
 
-**Almost at the chain's pace.** The 600 blocks, which the chain made in 120 seconds, replay in 129 on one core: 0.21 seconds a block where mainnet takes 0.2. It was 1.2 seconds when the hashes first matched. What changed is told under [How it works](#how-it-works): the compiler learned to keep a loop's busiest values in registers, to store into an array where it lies, and to emit **AVX-512**, with which the lattice hash now runs BLAKE3 sixteen blocks at a time, the chunks of all a block's changed accounts side by side; the virtual machine decodes a program once instead of at every instruction; accounts a block touches are kept in memory with what each adds to the lattice hash; arithmetic modulo a 256-bit prime works in 64-bit words with whole products; the pairing's last step uses the field's symmetries instead of three thousand squarings (a Groth16 proof: half a second then, a few hundredths now); and "is this address on the curve?", asked for every derived address, is answered by a Jacobi symbol instead of an exponentiation. Signatures are not yet checked while replaying, and that, on other cores, is the next piece of work.
+**At the chain's pace.** The 600 blocks, which the chain made in 120 seconds, replay in 123: 0.2 seconds a block, with every signature checked (228,723 of them, in three other processes, beside the execution, which does not depend on them). It was 1.2 seconds a block, signatures unchecked, when the hashes first matched. What changed is told under [How it works](#how-it-works): the compiler learned to keep a loop's busiest values in registers, to store into an array where it lies, and to emit **AVX-512**, with which the lattice hash now runs BLAKE3 sixteen blocks at a time, the chunks of all a block's changed accounts side by side; the virtual machine decodes a program once instead of at every instruction; accounts a block touches are kept in memory with what each adds to the lattice hash; arithmetic modulo a 256-bit prime works in 64-bit words with whole products; the pairing's last step uses the field's symmetries instead of three thousand squarings (a Groth16 proof: half a second then, a few hundredths now); and "is this address on the curve?", asked for every derived address, is answered by a Jacobi symbol instead of an exponentiation. There is no margin yet: a block with more in it than these takes longer than the chain gave it.
 
 What a block does, beyond its transactions, each part of which had to be exactly right for the hash to match:
 
@@ -423,7 +424,7 @@ The state is the snapshot's store, never written, and an overlay: one more shard
 
 How it was found, since a hash that does not match says nothing about why: a public RPC gives, for each transaction of a block, its status, fee, compute units and the balance of every account afterwards. The replay prints the same (`--lines`), and the first disagreement names the transaction. That took the first block from 9 of its first 11 transactions to 333 of 333; then the leader's fee reward matched the RPC's to the lamport; and then, with the footer applied, the hash. The same loop found everything after it, one block at a time. Two findings were not in any transaction. Programs hand the pairing check points whose top bits are set; the library Agave reads them with treats those bits as flags and ignores one of them, so this must too. And once, every transaction of a block agreed and its hash did not: that block's leader collects its fees in its own vote account, which the footer had just rewritten, and the fee deposit was putting the old version back.
 
-**What is not checked.** The transactions' own signatures and the BLS signatures on the footer's certificates are not verified during replay (who voted is taken from the bitmaps), and a transaction's blockhash is checked for being recent but not for having been used before: these are things a block's producer is trusted for here, and none of them changes the hash of a valid block. No epoch boundary falls within the 600 blocks, so what happens at one (rewards, new stakes) is not written yet. Blocks come from files saved by `leansol block --save`, not yet from the node that follows the chain.
+**What is not checked.** The BLS signatures on the footer's certificates are not verified (who voted is taken from the bitmaps), and a transaction's blockhash is checked for being recent but not for having been used before: both are things a block's producer is trusted for here, and neither changes the hash of a valid block. No epoch boundary falls within the 600 blocks, so what happens at one (rewards, new stakes) is not written yet. Blocks come from files saved by `leansol block --save`, not yet from the node that follows the chain.
 
 ## Run on-chain programs
 
@@ -932,10 +933,10 @@ Measured on one machine (Xeon Gold 5515+), single core unless noted. They are he
 | | |
 |---|---|
 | `leanc` source | about 6,200 lines of C |
-| `leanc` binary | 153 KB, static, zero undefined symbols |
-| Lean in this repo | 16,450 lines: runtime 657, libraries 11,440, client 4,350 |
+| `leanc` binary | 158 KB, static, zero undefined symbols |
+| Lean in this repo | 17,270 lines: runtime 711, libraries 12,120, client 4,430 |
 | Compiling the whole client | **about 0.1 s** |
-| `leansol` binary | **995 KB**, static |
+| `leansol` binary | **1.0 MB**, static |
 | Full build from a fresh clone | about 0.1 s |
 | Ed25519 verification (Lean, compiled by `leanc`) | about 2,950 signatures/s per core |
 | SHA-256 (Lean, compiled by `leanc`) | about 72 MB/s |
@@ -943,7 +944,7 @@ Measured on one machine (Xeon Gold 5515+), single core unless noted. They are he
 | Loading a snapshot: decompress, file, hash every account | 3 million accounts (3.65 GB) in 20 s with 16 workers |
 | Mainnet's snapshot, from a validator, verified | 1,245,863,525 accounts (498 GiB unpacked) in 90 minutes; 241 GB on disk |
 | An epoch's leader schedule (432,000 slots, 659 validators) | 15 ms |
-| Replaying a mainnet block (about 340 transactions, 12 million compute units, 1,400 accounts changed) | **0.21 s** (the chain: 0.2 s) |
+| Replaying a mainnet block (about 340 transactions, 12 million compute units, 1,400 accounts changed) | **0.2 s**, signatures checked on three more cores (the chain: 0.2 s) |
 | The same before the compiler had registers and vector instructions | 1.2 s |
 | Checking a Groth16 proof (four pairings on alt_bn128) | about 40 ms (it was 0.5 s) |
 | A multiplication modulo a 256-bit prime (Montgomery, four 64-bit words) | about 100 ns |
@@ -998,7 +999,7 @@ lakefile.toml     lets the official toolchain check all of the above
 
 Being straightforward about what this is:
 
-- **Not a validator.** It verifies gossip; it receives and verifies every block; it holds mainnet's state as of a snapshot, verified account by account; and it has replayed the 600 blocks after that snapshot to the bank hashes mainnet's leaders signed. Every block it was given matched, but 600 blocks are two minutes: some system calls no program used in them are still missing (Ristretto, big modular exponentiation, the little-endian and twist forms of the alt_bn128 calls), as are the vote and stake programs' rarer instructions and epoch boundaries. It replays a block in 0.21 seconds where the chain makes one in 0.2: at the line, not over it, and without checking signatures; and it replays from files rather than from the live feed. It does not vote.
+- **Not a validator.** It verifies gossip; it receives and verifies every block; it holds mainnet's state as of a snapshot, verified account by account; and it has replayed the 600 blocks after that snapshot to the bank hashes mainnet's leaders signed. Every block it was given matched, but 600 blocks are two minutes: some system calls no program used in them are still missing (Ristretto, big modular exponentiation, the little-endian and twist forms of the alt_bn128 calls), as are the vote and stake programs' rarer instructions and epoch boundaries. It replays a block in 0.2 seconds, signatures checked, which is the chain's pace with nothing to spare; and it replays from files rather than from the live feed. It does not vote.
 - **Blocks run, from files.** Signed transactions are applied with fees, budgets, rent checks, every sysvar and every version of sBPF, and programs can be deployed and upgraded through the loader. Blocks of mainnet [replay](#replay) too, from files; the vote program's instructions are still absent (mainnet no longer votes with transactions).
 - **Listen-only.** It answers pings but does not serve pull requests or push records to others.
 - **A simple store.** Records are remembered by hash, up to 400,000; when that fills (every several minutes on mainnet) the hash set is flushed and refilled rather than aged out record by record. The node table survives the flush.
@@ -1006,7 +1007,7 @@ Being straightforward about what this is:
 - **The compiler is not self-hosted.** Its source is C. Nothing in the build uses a C toolchain, because a prebuilt compiler is checked in, but changing the compiler does.
 - **A subset of Lean.** No type classes or higher-order functions is a real restriction; the libraries here are written around it.
 - **`Nat` is 64 bits** (overflow traps rather than wraps; see above).
-- **Young code.** The compiler has been exercised by about 16,450 lines of Lean and the test suite, not by years of users. The Ed25519 implementation is variable-time, which is fine for verifying public data and not what you want around long-lived secret keys.
+- **Young code.** The compiler has been exercised by about 17,270 lines of Lean and the test suite, not by years of users. The Ed25519 implementation is variable-time, which is fine for verifying public data and not what you want around long-lived secret keys.
 - **The network moves.** Wire formats follow agave's current gossip code; when the protocol changes, this needs to follow.
 
 ## How this relates to lean-svm
@@ -1023,7 +1024,7 @@ They meet at the `.so` file: lean-svm writes it, the virtual machine here runs i
 Write them with [lean-svm](https://github.com/aeyakovenko/lean-svm), and run them locally with `leansol run`, including ones that use tokens. It can build, sign and apply transactions locally, but it does not send them: deploying needs the standard Solana tools.
 
 **Is this the Lean theorem prover's language, or just "lean" as in small?**
-Both. The client is written in Lean 4, the language of the theorem prover, and the result is also small: a 995 KB static binary.
+Both. The client is written in Lean 4, the language of the theorem prover, and the result is also small: a 1.0 MB static binary.
 
 **Is there really no C toolchain involved?**
 Not in building or running anything here: `make` uses the checked-in `leanc` binary, which compiles Lean straight to an ELF. The compiler's *source* is C, so changing the compiler itself needs a C compiler (`make from-c`). The remaining step is for `leanc` to be written in Lean and compile itself; its subset is not there yet.

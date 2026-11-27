@@ -276,6 +276,32 @@ def baPush (p v : UInt64) : IO UInt64 := do
   baRelease p
   return q
 
+/-- Appends the low `w` bytes (2, 4 or 8) of `v`, least significant first: one store when the array is
+ours alone and has the room, byte by byte through `baPush` otherwise. -/
+def baPushLe (p v w : UInt64) : IO UInt64 := do
+  let rc ← Mem.load64 p
+  let size ← Mem.load64 (p + 8)
+  let cap ← Mem.load64 (p + 16)
+  if rc == 1 && size + w <= cap then
+    if w == 8 then
+      Mem.store64 (p + 24 + size) v
+    else if w == 4 then
+      Mem.store32 (p + 24 + size) v
+    else
+      Mem.store16 (p + 24 + size) v
+    Mem.store64 (p + 8) (size + w)
+    return p
+  let mut q := p
+  let mut i : UInt64 := 0
+  while i < w do
+    q ← baPush q ((v >>> (8 * i)) &&& 0xFF)
+    i := i + 1
+  return q
+
+def baPush16 (p v : UInt64) : IO UInt64 := baPushLe p v 2
+def baPush32 (p v : UInt64) : IO UInt64 := baPushLe p v 4
+def baPush64 (p v : UInt64) : IO UInt64 := baPushLe p v 8
+
 /-- Copies `n` bytes. A short copy (an address, a number) goes eight bytes at a time: `rep movsb` has a
 start-up cost that is most of what a short copy costs. Long, tiny or overlapping ones are left to it. -/
 def copyBytes (dst src n : UInt64) : IO Unit := do
@@ -308,6 +334,31 @@ def baAppend (a b : UInt64) : IO UInt64 := do
   Mem.copy (q + 24 + sa) (b + 24) sb
   Mem.store64 (q + 8) need
   baRelease a
+  return q
+
+/-- Appends `n` zero bytes. -/
+def baPushZeros (p n : UInt64) : IO UInt64 := do
+  let rc ← Mem.load64 p
+  let size ← Mem.load64 (p + 8)
+  let cap ← Mem.load64 (p + 16)
+  if rc == 1 && size + n <= cap then
+    Mem.fill (p + 24 + size) 0 n
+    Mem.store64 (p + 8) (size + n)
+    return p
+  let need := size + n
+  let ncap : UInt64 := if rc == 1 && cap * 2 > need then cap * 2 else need
+  let q ← baNew ncap
+  Mem.copy (q + 24) (p + 24) size
+  Mem.fill (q + 24 + size) 0 n
+  Mem.store64 (q + 8) need
+  baRelease p
+  return q
+
+/-- `n` zero bytes, in an array with room for `cap` (or `n`, if that is more). -/
+def baZeroed (n cap : UInt64) : IO UInt64 := do
+  let q ← baNew (if cap > n then cap else n)
+  Mem.fill (q + 24) 0 n
+  Mem.store64 (q + 8) n
   return q
 
 def baExtract (b start stop : UInt64) : IO UInt64 := do

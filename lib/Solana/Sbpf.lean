@@ -243,13 +243,10 @@ partial def execute (m : Machine) (st0 : State) (programId : ByteArray) (metas :
   let mut trace := trace0
   let budget := m.budget
 
-  -- The program's memory: stack, heap, then its input. The stack and the heap start as zeros (copied from
-  -- a block of zeros made once, not pushed a byte at a time), and the input is written straight after them.
+  -- The program's memory: stack, heap, then its input. The stack and the heap start as zeros, and the
+  -- input is written straight after them.
   let packedInput := if p.packed then serializePacked accounts metas data programId else ByteArray.empty
-  let mut mem := ByteArray.emptyWithCapacity (stackBytes + p.heap + (if p.packed then packedInput.size else serializedSize accounts metas data) + 64)
-  mem := zeroBlock.copySlice 0 mem 0 (if stackBytes + p.heap < zeroBlock.size then stackBytes + p.heap else zeroBlock.size)
-  for _ in [mem.size:stackBytes + p.heap] do
-    mem := mem.push 0
+  let mut mem := Fast.zeroed (stackBytes + p.heap) (stackBytes + p.heap + (if p.packed then packedInput.size else serializedSize accounts metas data) + 64)
   mem := if p.packed then mem ++ packedInput else serializeOnto mem accounts metas data programId
   let inputLen := mem.size - (stackBytes + p.heap)
   let mut regs : Array UInt64 := Array.replicate 11 0

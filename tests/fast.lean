@@ -82,4 +82,7 @@ def main : IO Unit := do
   v := if wide then Fast.shuffle128 v 24 24 23 0x1B else Fast.Ref.shuffle128 v 24 24 23 0x1B
   v := if wide then Fast.unpackLow32 v 19 19 20 else Fast.Ref.unpackLow32 v 19 19 20
   IO.println s!"interleaving and picking quarters: {digest v}"
+  v := if wide then Fast.quarter32 v 25 26 27 28 3 4 else Fast.Ref.quarter32 v 25 26 27 28 3 4
+  v := if wide then Fast.quarter32 v 28 25 26 27 39 0 else Fast.Ref.quarter32 v 28 25 26 27 39 0
+  IO.println s!"the quarter-round: {digest v}"
   IO.println s!"and the file they started from: {digest f}"

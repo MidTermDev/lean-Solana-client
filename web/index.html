@@ -241,7 +241,7 @@
     </div>
 
     <div class="facts">
-      <div class="fact"><strong>995 KB</strong><span>the whole client, one static binary</span></div>
+      <div class="fact"><strong>1.0 MB</strong><span>the whole client, one static binary</span></div>
       <div class="fact"><strong>40 ms</strong><span>to build it from source</span></div>
       <div class="fact"><strong>0</strong><span>dependencies to build or run</span></div>
       <div class="fact"><strong id="f-uptime">—</strong><span>this node's uptime</span></div>
@@ -413,7 +413,7 @@ account   vaultB   data 5a60e8a6…   <i>(changed)</i></pre>
             <div class="def"><h3>Not a validator</h3><p>It does not execute blocks, vote or produce anything. It observes and verifies: gossip, every block, and state from a snapshot.</p></div>
             <div class="def"><h3>Listen-only</h3><p>It answers pings but does not yet serve or push records to other nodes.</p></div>
             <div class="def"><h3>Replays from files, not live</h3><p>The node that follows the chain verifies each block but does not execute it; replay runs on blocks saved to disk, and trusts the certificates in their footers without checking the BLS signatures.</p></div>
-            <div class="def"><h3>Replay is almost at the chain's pace</h3><p>600 mainnet blocks in a row replay to the bank hashes their leaders signed, at 0.21 seconds a block where the chain makes one in 0.2. Signatures are not yet checked while replaying.</p></div>
+            <div class="def"><h3>Replay has no margin yet</h3><p>600 mainnet blocks in a row replay to the bank hashes their leaders signed, signatures checked, at 0.2 seconds a block: the chain's pace, with nothing to spare, and from files rather than the live feed.</p></div>
             <div class="def"><h3>Nothing is sent on-chain</h3><p>Programs execute locally. The client does not build, sign or submit transactions.</p></div>
             <div class="def"><h3>x86-64 Linux</h3><p>The code generator and the system-call numbers are specific to it.</p></div>
             <div class="def"><h3>A subset of Lean</h3><p>No type classes, lambdas or polymorphism. The compiler does not check proofs; official Lean does that.</p></div>
@@ -452,12 +452,13 @@ account   vaultB   data 5a60e8a6…   <i>(changed)</i></pre>
                 <li><b>Mainnet's state</b>1,245,863,525 accounts from a validator's snapshot, every one hashed: the lattice hash and the supply match.</li>
                 <li><b>Leader schedule</b>Computed from the stakes in the snapshot; every block must be signed by the validator whose slot it is.</li>
                 <li><b>Replay</b>600 mainnet blocks executed against the state: 204,532 transactions, and 600 bank hashes out of 600 equal to the leaders'.</li>
+                <li><b>At the chain's pace</b>Those 600 blocks in 123 seconds (the chain: 120), every signature checked; AVX-512 from the compiler.</li>
               </ul>
             </div>
             <div class="stage next">
               <h3><i></i>Next</h3>
               <ul>
-                <li><b>Replay at the chain's pace</b>0.21 seconds a block today on one core, 0.2 needed, with signatures checked on the others.</li>
+                <li><b>Replay from the live feed</b>Execute each block as it arrives, with room to spare: today 0.2 seconds a block, which is exactly the chain's pace.</li>
                 <li><b>Full gossip participant</b>Serve pull requests and push records, not only listen.</li>
                 <li><b>Record ageing</b>Expire old records one by one instead of flushing the store.</li>
                 <li><b>Self-hosting</b>leanc rewritten in Lean, compiling itself.</li>

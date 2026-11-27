@@ -12,4 +12,5 @@ in place, and the last register: d9dea0914dc582badd47cf91
 madd52lo, madd52hi: 4fed52e25b7dae661b3d865a
 move, set32, add32x3, xorRor32: fea1ebb533be308cfa8dcd17
 interleaving and picking quarters: 372c3e3d93b1eec800d9ed05
+the quarter-round: ab58056f12d71f05b8fda997
 and the file they started from: 780639485bf2fc605d5bc1e7

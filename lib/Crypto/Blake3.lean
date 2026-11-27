@@ -197,15 +197,7 @@ def template : ByteArray := Id.run do
   return f
 
 /-- The quarter-round, on registers: the same eight steps as in `compress`. -/
-@[inline] def g (f : ByteArray) (a b c d mx my : Nat) : ByteArray :=
-  let f := Fast.add32x3 f a a b mx
-  let f := Fast.xorRor32 f d d a 16
-  let f := Fast.add32 f c c d
-  let f := Fast.xorRor32 f b b c 12
-  let f := Fast.add32x3 f a a b my
-  let f := Fast.xorRor32 f d d a 8
-  let f := Fast.add32 f c c d
-  Fast.xorRor32 f b b c 7
+@[inline] def g (f : ByteArray) (a b c d mx my : Nat) : ByteArray := Fast.quarter32 f a b c d mx my
 
 /-- The seven rounds, on the state in registers 0-15 with the message in 16-31. (Written out: the
 registers an instruction uses are part of the instruction.) -/

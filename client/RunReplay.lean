@@ -37,6 +37,7 @@ def usage : String :=
   "  --lines        print one line per transaction: its outcome, fee, compute units and balances\n" ++
   "  --follow       after a block whose hash differs, continue from the block's own hash\n" ++
   "  --timing       say where each block's time went\n" ++
+  "  --signatures N check every transaction's signatures, in N other processes (default 3; 0 = not at all)\n" ++
   "  --trace N      print the log of transaction N of the first block\n"
 
 def fail (message : String) : IO Unit := do
@@ -215,6 +216,32 @@ def stakesOf (m : Snapshot.Manifest) (epoch : UInt64) : Snapshot.EpochStakes := 
 /-- Where the chain keeps its clock to the nanosecond: an address derived from the Alpenglow feature's. -/
 def nanosecondClock : ByteArray := (Sbpf.findProgramAddress #["alpenclock".toUTF8] alpenglowFeature).1
 
+/-- The block saved for `slot`, or one whose `error` says why not. -/
+def savedBlock (blocksDir : String) (slot : UInt64) : IO Block.Contents := do
+  let file ← Sys.readFile s!"{blocksDir}/{slot}.block" 0x8000000
+  if file.size < 104 + Shred.dataPayload || (file.size - 104) % Shred.dataPayload != 0 then
+    return { Block.contents (Array.emptyWithCapacity 0) with error := s!"{blocksDir}/{slot}.block is not a saved block" }
+  let mut shreds : Array ByteArray := Array.emptyWithCapacity ((file.size - 104) / Shred.dataPayload)
+  for k in [0:(file.size - 104) / Shred.dataPayload] do
+    shreds := shreds.push (file.extract (104 + Shred.dataPayload * k) (104 + Shred.dataPayload * (k + 1)))
+  return Block.contents shreds
+
+/-- A process that checks signatures. For every slot number it is sent it reads that block and checks the
+signatures of its share of the transactions (every `workers`-th), and answers with how many did not
+verify. Executing a block does not depend on its signatures, so this is done beside it, on other cores. -/
+def signatureWorker (blocksDir : String) (share workers : Nat) (requests answers : UInt64) : IO Unit := do
+  repeat
+    let request ← Sys.read requests 8
+    if request.size != 8 then
+      break
+    let block ← savedBlock blocksDir (Wire.u64 request 0)
+    let mut bad : UInt64 := if block.error != "" then 0xFFFFFFFF else 0
+    for t in [0:block.transactions.size] do
+      if t % workers == share && !(block.transactions[t]!.verify) then
+        bad := bad + 1
+    if !(← Sys.writeFully answers (u64 bad)) then
+      break
+
 def main : IO Unit := do
   let argc ← Sys.argc
   let mut stateDir := ""
@@ -227,6 +254,7 @@ def main : IO Unit := do
   let mut follow := false
   -- say where each block's time went
   let mut timing := false
+  let mut checkers := 3
   let mut trace := Sbpf.notFound
   let mut cap : UInt64 := 0
   let mut traceSlot : UInt64 := 0
@@ -255,6 +283,8 @@ def main : IO Unit := do
         blocksDir := v
       else if a == "--from" then
         first := RunBlock.number v
+      else if a == "--signatures" then
+        checkers := (RunBlock.number v).toNat
       else if a == "--count" then
         count := (RunBlock.number v).toNat
       else if a == "--trace" then
@@ -268,6 +298,33 @@ def main : IO Unit := do
       i := i + 2
   if stateDir == "" || blocksDir == "" then
     fail usage
+  -- ---- the processes that check signatures, started before there is much to copy
+  let mut askChecker : Array UInt64 := Array.emptyWithCapacity checkers
+  let mut hearChecker : Array UInt64 := Array.emptyWithCapacity checkers
+  if checkers > 16 then
+    checkers := 16
+  if checkers != 0 then
+    Sys.ignoreBrokenPipes
+    for w in [0:checkers] do
+      let (requests, ask) ← Sys.pipe
+      let (hear, answers) ← Sys.pipe
+      let pid ← Sys.fork
+      if pid == 0 then
+        Sys.dieWithParent
+        Sys.close ask
+        Sys.close hear
+        for fd in askChecker do
+          Sys.close fd
+        signatureWorker blocksDir w checkers requests answers
+        Sys.exit 0
+      if Sys.isErr pid then
+        fail "cannot start a process to check signatures"
+      Sys.close requests
+      Sys.close answers
+      askChecker := askChecker.push ask
+      hearChecker := hearChecker.push hear
+  let mut signaturesChecked : UInt64 := 0
+  let mut signaturesBad : UInt64 := 0
   -- ---- the state
   let state ← Sys.readFile s!"{stateDir}/state.json" 65536
   let shardCount := (RunBlock.number (RunBlock.jsonField state "shards" 0)).toNat
@@ -315,13 +372,10 @@ def main : IO Unit := do
   for n in [0:count] do
     let parent := slot
     slot := parent + 1
-    let file ← Sys.readFile s!"{blocksDir}/{slot}.block" 0x8000000
-    if file.size < 104 + Shred.dataPayload || (file.size - 104) % Shred.dataPayload != 0 then
-      fail s!"{blocksDir}/{slot}.block is not a saved block"
-    let mut shreds : Array ByteArray := Array.emptyWithCapacity ((file.size - 104) / Shred.dataPayload)
-    for k in [0:(file.size - 104) / Shred.dataPayload] do
-      shreds := shreds.push (file.extract (104 + Shred.dataPayload * k) (104 + Shred.dataPayload * (k + 1)))
-    let block := Block.contents shreds
+    -- (the signature checkers start on the block at once, each reading it for itself)
+    for fd in askChecker do
+      let _ ← Sys.writeFully fd (u64 slot)
+    let block ← savedBlock blocksDir slot
     if block.error != "" then
       fail s!"slot {slot}: {block.error}"
     let started ← Sys.nowMs
@@ -661,13 +715,28 @@ def main : IO Unit := do
       IO.println s!"timing: accounts read {usLoad / 1000} ms, transactions run {usRun / 1000} ms, changes kept {usKeep / 1000} ms, footer and closing {usFooter / 1000} ms, lattice hash {usHash / 1000} ms"
     let inner := Sha256.hash (bankHash ++ u64 signatures ++ latest)
     bankHash := Sha256.hash (inner ++ LtHash.bytes sum)
+    -- what the signature checkers found
+    let waited ← Sys.nowUs
+    let mut bad : UInt64 := 0
+    for fd in hearChecker do
+      let answer ← Sys.read fd 8
+      bad := bad + (if answer.size == 8 then Wire.u64 answer 0 else 0xFFFFFFFF)
+    signaturesBad := signaturesBad + bad
+    if checkers != 0 then
+      signaturesChecked := signaturesChecked + signatures
+    if timing && checkers != 0 then
+      IO.println s!"timing: waited {((← Sys.nowUs) - waited) / 1000} ms for the signature checks"
     let took := (← Sys.nowMs) - started
     IO.println s!"slot {slot}: {block.transactions.size} transactions ({failedCount} failed), {signatures} signatures, {Fmt.thousands units} compute units, {touched.size} accounts changed ({voteKeys.size} vote accounts by the footer), fees {fees} · {took} ms"
     if lines then
       IO.println s!"footer: final slot {certs.finalSlot} ({certs.finalBits.size} bitmaps), reward slot {certs.rewardSlot} ({certs.rewardBits.size} bitmaps), leader reward {leaderReward} to {leaderCredited}, migration epoch {migrationEpoch}"
     IO.println s!"  bank hash  {Base58.encode bankHash}"
-    IO.println s!"  the block's {Base58.encode block.bankHash}  {if bankHash == block.bankHash then "MATCH" else "(differs)"}"
+    IO.println s!"  the block's {Base58.encode block.bankHash}  {if bankHash == block.bankHash then "MATCH" else "(differs)"}{if checkers == 0 then "" else if bad == 0 then " · signatures valid" else s!" · {bad} SIGNATURES DO NOT VERIFY"}"
     if follow && block.bankHash.size == 32 then
       bankHash := block.bankHash
+  for fd in askChecker do
+    Sys.close fd
+  if checkers != 0 then
+    IO.println s!"signatures   {Fmt.thousands signaturesChecked} checked in {checkers} processes, {signaturesBad} did not verify"
 
 end RunReplay
