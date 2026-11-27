@@ -170,8 +170,16 @@ def finish (m : Ipc.Metrics) (seenBase : UInt64) (s : Slot) (candidates : ByteAr
   -- its shreds are no longer needed
   let closed := { s with done := true, data := Array.emptyWithCapacity 0, groups := Array.emptyWithCapacity 0 }
   if r.error != "" then
-    m.add M.blocksBad 1
-    IO.eprintln s!"leansol: slot {s.slot} failed verification: {r.error}"
+    -- A block whose signer is not among the nodes known so far (the first moments after starting,
+    -- before gossip has named everyone) has not been shown to be wrong: it could not be checked.
+    let reason := r.error.toUTF8
+    let unknown := "any known node".toUTF8
+    if s.leader.size != 32 && reason.size >= unknown.size && Wire.eqAt reason (reason.size - unknown.size) unknown 0 unknown.size then
+      m.add M.blocksMissed 1
+      IO.eprintln s!"leansol: slot {s.slot} could not be checked: its leader is not yet known from gossip"
+    else
+      m.add M.blocksBad 1
+      IO.eprintln s!"leansol: slot {s.slot} failed verification: {r.error}"
     return closed
   remember seenBase r (Block.rootOf shreds[shreds.size - 1]!)
   m.add M.blocksOk 1

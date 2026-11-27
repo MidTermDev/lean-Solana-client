@@ -31,7 +31,7 @@ def clientId : UInt64 := 0x4c4e
 
 def versionMajor : UInt64 := 0
 def versionMinor : UInt64 := 10
-def versionPatch : UInt64 := 0
+def versionPatch : UInt64 := 1
 
 /-- Our `CrdsData::ContactInfo`: identity, software version, the gossip socket
 and, if `tvuPort` is not 0, the socket shreds should be sent to. Naming that
