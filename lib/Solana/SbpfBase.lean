@@ -208,6 +208,9 @@ structure Program where
   native : UInt64
   /-- For each instruction, whether the translation can be entered there. -/
   starts : ByteArray
+  /-- How many times the program has run since it was loaded, while it waits to be translated (`settled`
+  once the question is closed). -/
+  uses : Nat
   deriving Inhabited
 
 /-- The `count` instructions at `textOff`, each as one little-endian word. -/
@@ -224,7 +227,7 @@ def tidyWords (code : Array UInt64) : Bool := Id.run do
   return true
 
 def Program.failed (elf : ByteArray) (why : String) : Program :=
-  ⟨elf, 0, 0, 0, 0, 0, Array.emptyWithCapacity 0, Array.emptyWithCapacity 0, why, 32768, 0, 0, 0, 1, 0, false, 0, Array.emptyWithCapacity 0, false, 0, ByteArray.empty⟩
+  ⟨elf, 0, 0, 0, 0, 0, Array.emptyWithCapacity 0, Array.emptyWithCapacity 0, why, 32768, 0, 0, 0, 1, 0, false, 0, Array.emptyWithCapacity 0, false, 0, ByteArray.empty, 0⟩
 
 /-- Where a section sits in the file, and the address it asks for. Size 0 means "absent". -/
 structure Section where
@@ -353,7 +356,7 @@ def loadStrict (elf : ByteArray) : Program := Id.run do
         syscalls := syscalls.set! pc id
   return ⟨elf, textOff, count, 0, roSize, ((entry - programStart) / 8).toNat, syscalls, Array.replicate count 0, "", 32768,
     3, roOff, programStart, 0, 0, false, 0, instructionWords elf textOff count, tidyWords (instructionWords elf textOff count),
-    0, ByteArray.empty⟩
+    0, ByteArray.empty, 0⟩
 
 /-- Parses and relocates an sBPF ELF file as written by Solana toolchains. Versions 0 to 2 share
 this loader; version 3 has its own. -/
@@ -441,20 +444,32 @@ def parse (image : ByteArray) : Program := Id.run do
           syscalls := syscalls.set! pc (syscallId elf (names.off + nameOff))
   return ⟨elf, text.off, count, roLow, roHigh, ((entryAddr - text.addr) / 8).toNat, syscalls, calls, "", 32768,
     version.toNat, roLow, programStart + text.off.toUInt64, 1, 0, false, 0, instructionWords elf text.off count,
-    tidyWords (instructionWords elf text.off count), 0, ByteArray.empty⟩
+    tidyWords (instructionWords elf text.off count), 0, ByteArray.empty, 0⟩
 
 /-- Translates a program into machine code where that can be run (`Solana.Jit`): on a processor that has
 what the translation uses, for the versions whose instructions it knows (0 and 3), and never under the
 official Lean toolchain, where `Fast.codeLoad` declines. The program is otherwise unchanged, and means
 the same either way. -/
+def settled : Nat := 0xFFFFFFFF
+
 def Program.translated (p : Program) : Program :=
-  if !Fast.compiled || !Fast.anyShift || p.error != "" || !p.tidy || (p.version != 0 && p.version != 3) then p
+  if !Fast.compiled || !Fast.anyShift || p.error != "" || !p.tidy || (p.version != 0 && p.version != 3) then
+    { p with uses := settled }
   else
     let (code, starts) := Jit.compile p.code p.syscalls p.calls p.count p.entry (p.version == 3) p.textAddr p.roRegion
     let at_ := Fast.codeLoad code
-    if at_ == 0 then p else { p with native := at_, starts := starts }
+    if at_ == 0 then { p with uses := settled } else { p with native := at_, starts := starts, uses := settled }
 
-/-- Loads a program: parses it, and translates it if this machine can run the translation. -/
+/-- Translating takes about as long as interpreting sixteen instructions for each one translated, and
+most programs on a chain run a handful of times in an hour. So a program met while following the
+chain is translated only once it has run often enough to pay for that: twice, and once more for every
+4,096 instructions it has. -/
+def Program.used (p : Program) : Program :=
+  if p.native != 0 || p.uses == settled then p
+  else if p.uses + 1 >= 2 + p.count / 4096 then p.translated
+  else { p with uses := p.uses + 1 }
+
+/-- Loads a program: parses it, and translates it at once if this machine can run the translation. -/
 def load (image : ByteArray) : Program := (parse image).translated
 
 -- ------------------------------------------------------------------- memory

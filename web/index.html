@@ -241,7 +241,7 @@
     </div>
 
     <div class="facts">
-      <div class="fact"><strong>1.0 MB</strong><span>the whole client, one static binary</span></div>
+      <div class="fact"><strong>1.1 MB</strong><span>the whole client, one static binary</span></div>
       <div class="fact"><strong>40 ms</strong><span>to build it from source</span></div>
       <div class="fact"><strong>0</strong><span>dependencies to build or run</span></div>
       <div class="fact"><strong id="f-uptime">—</strong><span>this node's uptime</span></div>
@@ -391,7 +391,8 @@ account   vaultB   data 5a60e8a6…   <i>(changed)</i></pre>
             <div class="def"><h3>Holds mainnet's state</h3><p>Streams a snapshot from a validator, files all 1.2 billion accounts in a store, and checks them against the lattice hash the snapshot is named after and the supply it records.</p></div>
             <div class="def"><h3>Knows whose slot it is</h3><p>Computes the leader schedule from the stakes in the snapshot, as every validator does, and accepts a block only from the validator scheduled to produce it.</p></div>
             <div class="def"><h3>Replays mainnet blocks</h3><p>Executes a block's transactions against the state, applies its footer, and arrives at the bank hash the leader signed: the hash of every account on the chain.</p></div>
-            <div class="def"><h3>Uses vector instructions</h3><p>The compiler emits AVX-512 for operations that are defined in Lean and checked against it; the lattice hash runs BLAKE3 sixteen blocks at a time.</p></div>
+            <div class="def"><h3>Runs programs as machine code</h3><p>A program that runs often is translated from sBPF into x86-64 by a translator written in Lean. The interpreter stays the definition: 1,500 random programs must come out the same both ways.</p></div>
+            <div class="def"><h3>Uses vector instructions</h3><p>The compiler emits AVX-512 and the SHA instructions for operations that are defined in Lean and checked against it; the lattice hash runs BLAKE3 sixteen blocks at a time.</p></div>
             <div class="def"><h3>Enforces the account rules</h3><p>Only an owner changes an account's data or spends its lamports, read-only stays read-only, and lamports are conserved.</p></div>
             <div class="def"><h3>Exports what it learns</h3><p>A JSON snapshot of every node, a JSON file that stays fresh, and Prometheus metrics over HTTP.</p></div>
             <div class="def"><h3>Keeps a stable identity</h3><p>An optional key file makes a long-running node the same node after a restart.</p></div>
@@ -413,7 +414,7 @@ account   vaultB   data 5a60e8a6…   <i>(changed)</i></pre>
             <div class="def"><h3>Not a validator</h3><p>It does not execute blocks, vote or produce anything. It observes and verifies: gossip, every block, and state from a snapshot.</p></div>
             <div class="def"><h3>Listen-only</h3><p>It answers pings but does not yet serve or push records to other nodes.</p></div>
             <div class="def"><h3>Replays from files, not live</h3><p>The node that follows the chain verifies each block but does not execute it; replay runs on blocks saved to disk, and trusts the certificates in their footers without checking the BLS signatures.</p></div>
-            <div class="def"><h3>Replay has no margin yet</h3><p>600 mainnet blocks in a row replay to the bank hashes their leaders signed, signatures checked, at 0.2 seconds a block: the chain's pace, with nothing to spare, and from files rather than the live feed.</p></div>
+            <div class="def"><h3>Replay has a modest margin</h3><p>600 mainnet blocks in a row replay to the bank hashes their leaders signed, signatures checked, at 0.12 seconds a block where the chain takes 0.2. A block several times fuller than these would still be too slow, and replay runs from files rather than the live feed.</p></div>
             <div class="def"><h3>Nothing is sent on-chain</h3><p>Programs execute locally. The client does not build, sign or submit transactions.</p></div>
             <div class="def"><h3>x86-64 Linux</h3><p>The code generator and the system-call numbers are specific to it.</p></div>
             <div class="def"><h3>A subset of Lean</h3><p>No type classes, lambdas or polymorphism. The compiler does not check proofs; official Lean does that.</p></div>
@@ -453,12 +454,13 @@ account   vaultB   data 5a60e8a6…   <i>(changed)</i></pre>
                 <li><b>Leader schedule</b>Computed from the stakes in the snapshot; every block must be signed by the validator whose slot it is.</li>
                 <li><b>Replay</b>600 mainnet blocks executed against the state: 204,532 transactions, and 600 bank hashes out of 600 equal to the leaders'.</li>
                 <li><b>At the chain's pace</b>Those 600 blocks in 123 seconds (the chain: 120), every signature checked; AVX-512 from the compiler.</li>
+                <li><b>Faster than the chain</b>The same 600 blocks in 73 seconds: programs translated from sBPF into machine code, by Lean, with the interpreter as the definition.</li>
               </ul>
             </div>
             <div class="stage next">
               <h3><i></i>Next</h3>
               <ul>
-                <li><b>Replay from the live feed</b>Execute each block as it arrives, with room to spare: today 0.2 seconds a block, which is exactly the chain's pace.</li>
+                <li><b>Replay from the live feed</b>Execute each block as it arrives: today 0.12 seconds a block from files, where the chain takes 0.2.</li>
                 <li><b>Full gossip participant</b>Serve pull requests and push records, not only listen.</li>
                 <li><b>Record ageing</b>Expire old records one by one instead of flushing the store.</li>
                 <li><b>Self-hosting</b>leanc rewritten in Lean, compiling itself.</li>

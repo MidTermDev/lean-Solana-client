@@ -127,12 +127,12 @@ def Bank.withPrograms (bank : Bank) (keys : Array ByteArray) (all : Bool) : Bank
       let account := out.accounts[at_]!
       if (account.owner == loaderV2 || account.owner == loaderV1) && account.executable && (all || !(hasProgram out key)) then
         -- the older loaders: the account's data is the program (and the first loader's programs take their input packed)
-        let program := Sbpf.load account.data
+        let program := Sbpf.parse account.data
         out := { out with machine := out.machine.add key { program with since := (if program.error != "" then 0xFFFFFFFFFFFFFFFF else 0), packed := account.owner == loaderV1 } }
       else if account.owner == Sbpf.loaderId && Sbpf.loaderKind account == 2 && (all || !(hasProgram out key)) then
         let holder := find out.accounts (account.data.extract 4 36)
         let code := if holder == Sbpf.notFound then ByteArray.empty else out.accounts[holder]!.data
-        let program := if code.size > 45 && Wire.u32 code 0 == 3 then Sbpf.load (code.extract 45 code.size)
+        let program := if code.size > 45 && Wire.u32 code 0 == 3 then Sbpf.parse (code.extract 45 code.size)
           else Sbpf.Program.failed ByteArray.empty "the program was closed"
         if program.error != "" then
           -- cannot run: every call to it is refused
@@ -697,6 +697,15 @@ def Bank.process (bank : Bank) (tx : Tx.Transaction) (verify : Bool) : Receipt :
   if error == "" && loaderTouched then
     -- programs this transaction deployed, upgraded or closed
     after := after.withPrograms keys true
+  -- 7. the programs that ran have run once more: those that have now run often enough are translated
+  -- into machine code (`Sbpf.Program.used`)
+  for frame in st.trace do
+    let which := after.machine.find frame.program
+    if which != Sbpf.notFound then
+      let p := after.machine.programs[which]!
+      if p.native == 0 && p.uses != Sbpf.settled then
+        let m := after.machine
+        after := { after with machine := { m with programs := m.programs.set! which p.used } }
   -- for whoever is looking into a failure: how the machine stopped, in its own words
   let why := if error == "" then "" else s!"status {st.status}, r0 {st.r0}: {st.detail}"
   return ⟨error, true, fee, st.units, limit, st.logs, st.returnData, after, why, st.trace⟩

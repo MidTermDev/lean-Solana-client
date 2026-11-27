@@ -200,9 +200,7 @@ def VoteState.bytes (s : VoteState) : ByteArray := Id.run do
   b := Wire.putU64 (Wire.putU64 b s.timestampSlot) s.timestamp
   if b.size > s.size then
     return ByteArray.empty
-  while b.size < s.size do
-    b := b.push 0
-  return b
+  return Fast.pushZeros b (s.size - b.size)
 
 /-- The slot of the newest vote, or 0. -/
 def VoteState.lastVoted (s : VoteState) : UInt64 :=
