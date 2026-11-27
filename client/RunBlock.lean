@@ -143,19 +143,19 @@ asked for arrived. -/
 def fetchFrom (sock : UInt64) (seed pubkey : ByteArray) (peers0 : Array Peer) (slot : UInt64) (tail : Nat) (budgetMs : UInt64)
     (already : Array ByteArray) (knownLast : Nat) : IO (Fetch × Array Peer) := do
   let mut peers := peers0
-  let mut shreds : Array ByteArray := Array.replicate 2048 ByteArray.empty
+  let mut shreds : Array ByteArray := Array.replicate Shred.maxData ByteArray.empty
   let mut last := knownLast
   let mut have_ := 0
   -- shreds in hand before asking: only the others are requested
   for i in [0:already.size] do
-    if i < 2048 && already[i]!.size != 0 then
+    if i < Shred.maxData && already[i]!.size != 0 then
       shreds := shreds.set! i already[i]!
       have_ := have_ + 1
   let mut requests := 0
   let mut pings := 0
   let mut nonce : UInt64 := 1
   -- when each shred was last asked for
-  let mut asked : Array UInt64 := Array.replicate 2048 0
+  let mut asked : Array UInt64 := Array.replicate Shred.maxData 0
   let mut first := 0
   let mut wanted := if knownLast == Wire.bad then 0 else knownLast + 1
   let started ← Sys.nowMs
@@ -217,7 +217,7 @@ def fetchFrom (sock : UInt64) (seed pubkey : ByteArray) (peers0 : Array Peer) (s
           else if d.data.size == Shred.dataPayload + 4 then
             let p := d.data.extract 0 Shred.dataPayload
             let h := Shred.parse p
-            if h.ok && h.isData && h.slot == slot && h.index < 2048 then
+            if h.ok && h.isData && h.slot == slot && h.index.toNat < Shred.maxData then
               peers := peers.set! who { peers[who]! with state := 1 }
               if h.flags &&& Shred.flagLastInSlot == Shred.flagLastInSlot && last == Wire.bad then
                 last := h.index.toNat

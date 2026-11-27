@@ -110,6 +110,8 @@ def groupData (s : Slot) (g : Nat) : Array ByteArray := Id.run do
 
 /-- Files a data shred. -/
 def put (s : Slot) (index : Nat) (p : ByteArray) (flags : UInt64) : Slot := Id.run do
+  if index >= Shred.maxData then
+    return s
   let mut data := s.data
   while index >= data.size do
     data := data.push ByteArray.empty

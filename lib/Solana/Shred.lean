@@ -28,6 +28,8 @@ namespace Shred
 
 def dataPayload : Nat := 1203
 def codePayload : Nat := 1228
+/-- The most data shreds a slot can have. -/
+def maxData : Nat := 32768
 def flagDataComplete : UInt64 := 0x40
 def flagLastInSlot : UInt64 := 0xC0
 
