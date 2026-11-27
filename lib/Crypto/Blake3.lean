@@ -1,3 +1,5 @@
+import Fast
+
 /-!
 # BLAKE3
 
@@ -175,24 +177,315 @@ def join (left right : Array UInt32) : Node :=
   ⟨iv, #[left[0]!, left[1]!, left[2]!, left[3]!, left[4]!, left[5]!, left[6]!, left[7]!,
     right[0]!, right[1]!, right[2]!, right[3]!, right[4]!, right[5]!, right[6]!, right[7]!], 0, 64, parent⟩
 
-/-- Hashes `b` down to the root of its tree. -/
-def rootNode (b : ByteArray) : Node := Id.run do
+-- ---------------------------------------------------------------- sixteen at once
+--
+-- With AVX-512 the compression function can be run on sixteen inputs at the price of one: each of its
+-- sixteen state words becomes a register holding that word for all sixteen (see `Fast`). Two things
+-- here have sixteen independent inputs: the chunks of a long input, and the output blocks of a root.
+--
+-- The registers of the file: 0-15 the state, 16-31 the message words, 32-39 the chaining value,
+-- 40-55 sixteen blocks as they lie in memory (one per register), 56-71 scratch, 72 the numbers 0 to 15.
+
+namespace Wide
+
+def template : ByteArray := Id.run do
+  let mut f := ByteArray.emptyWithCapacity 5120
+  for _ in [0:5120] do
+    f := f.push 0
+  for i in [0:16] do
+    f := Fast.put32 f (64 * 72 + 4 * i) i.toUInt64
+  return f
+
+/-- The quarter-round, on registers: the same eight steps as in `compress`. -/
+@[inline] def g (f : ByteArray) (a b c d mx my : Nat) : ByteArray :=
+  let f := Fast.add32x3 f a a b mx
+  let f := Fast.xorRor32 f d d a 16
+  let f := Fast.add32 f c c d
+  let f := Fast.xorRor32 f b b c 12
+  let f := Fast.add32x3 f a a b my
+  let f := Fast.xorRor32 f d d a 8
+  let f := Fast.add32 f c c d
+  Fast.xorRor32 f b b c 7
+
+/-- The seven rounds, on the state in registers 0-15 with the message in 16-31. (Written out: the
+registers an instruction uses are part of the instruction.) -/
+def rounds (f0 : ByteArray) : ByteArray :=
+  let f := g f0 0 4 8 12 16 17
+  let f := g f 1 5 9 13 18 19
+  let f := g f 2 6 10 14 20 21
+  let f := g f 3 7 11 15 22 23
+  let f := g f 0 5 10 15 24 25
+  let f := g f 1 6 11 12 26 27
+  let f := g f 2 7 8 13 28 29
+  let f := g f 3 4 9 14 30 31
+  let f := g f 0 4 8 12 18 22
+  let f := g f 1 5 9 13 19 26
+  let f := g f 2 6 10 14 23 16
+  let f := g f 3 7 11 15 20 29
+  let f := g f 0 5 10 15 17 27
+  let f := g f 1 6 11 12 28 21
+  let f := g f 2 7 8 13 25 30
+  let f := g f 3 4 9 14 31 24
+  let f := g f 0 4 8 12 19 20
+  let f := g f 1 5 9 13 26 28
+  let f := g f 2 6 10 14 29 18
+  let f := g f 3 7 11 15 23 30
+  let f := g f 0 5 10 15 22 21
+  let f := g f 1 6 11 12 25 16
+  let f := g f 2 7 8 13 27 31
+  let f := g f 3 4 9 14 24 17
+  let f := g f 0 4 8 12 26 23
+  let f := g f 1 5 9 13 28 25
+  let f := g f 2 6 10 14 30 19
+  let f := g f 3 7 11 15 29 31
+  let f := g f 0 5 10 15 20 16
+  let f := g f 1 6 11 12 27 18
+  let f := g f 2 7 8 13 21 24
+  let f := g f 3 4 9 14 17 22
+  let f := g f 0 4 8 12 28 29
+  let f := g f 1 5 9 13 25 27
+  let f := g f 2 6 10 14 31 26
+  let f := g f 3 7 11 15 30 24
+  let f := g f 0 5 10 15 23 18
+  let f := g f 1 6 11 12 21 19
+  let f := g f 2 7 8 13 16 17
+  let f := g f 3 4 9 14 22 20
+  let f := g f 0 4 8 12 25 30
+  let f := g f 1 5 9 13 27 21
+  let f := g f 2 6 10 14 24 28
+  let f := g f 3 7 11 15 31 17
+  let f := g f 0 5 10 15 29 19
+  let f := g f 1 6 11 12 16 26
+  let f := g f 2 7 8 13 18 22
+  let f := g f 3 4 9 14 20 23
+  let f := g f 0 4 8 12 27 31
+  let f := g f 1 5 9 13 21 16
+  let f := g f 2 6 10 14 17 25
+  let f := g f 3 7 11 15 24 22
+  let f := g f 0 5 10 15 30 26
+  let f := g f 1 6 11 12 18 28
+  let f := g f 2 7 8 13 19 20
+  let f := g f 3 4 9 14 23 29
+  f
+
+/-- Sixteen registers of sixteen numbers, turned: what was number `j` of register `s + i` becomes number
+`i` of register `d + j`. Registers `s` to `s + 15` and `t` to `t + 15` are used up. -/
+@[inline] def transpose (f0 : ByteArray) (s d t : Nat) : ByteArray :=
+  let f := Fast.unpackLow32 f0 (t + 0) (s + 0) (s + 1)
+  let f := Fast.unpackHigh32 f (t + 1) (s + 0) (s + 1)
+  let f := Fast.unpackLow32 f (t + 2) (s + 2) (s + 3)
+  let f := Fast.unpackHigh32 f (t + 3) (s + 2) (s + 3)
+  let f := Fast.unpackLow32 f (t + 4) (s + 4) (s + 5)
+  let f := Fast.unpackHigh32 f (t + 5) (s + 4) (s + 5)
+  let f := Fast.unpackLow32 f (t + 6) (s + 6) (s + 7)
+  let f := Fast.unpackHigh32 f (t + 7) (s + 6) (s + 7)
+  let f := Fast.unpackLow32 f (t + 8) (s + 8) (s + 9)
+  let f := Fast.unpackHigh32 f (t + 9) (s + 8) (s + 9)
+  let f := Fast.unpackLow32 f (t + 10) (s + 10) (s + 11)
+  let f := Fast.unpackHigh32 f (t + 11) (s + 10) (s + 11)
+  let f := Fast.unpackLow32 f (t + 12) (s + 12) (s + 13)
+  let f := Fast.unpackHigh32 f (t + 13) (s + 12) (s + 13)
+  let f := Fast.unpackLow32 f (t + 14) (s + 14) (s + 15)
+  let f := Fast.unpackHigh32 f (t + 15) (s + 14) (s + 15)
+  let f := Fast.unpackLow64 f (s + 0) (t + 0) (t + 2)
+  let f := Fast.unpackHigh64 f (s + 1) (t + 0) (t + 2)
+  let f := Fast.unpackLow64 f (s + 2) (t + 1) (t + 3)
+  let f := Fast.unpackHigh64 f (s + 3) (t + 1) (t + 3)
+  let f := Fast.unpackLow64 f (s + 4) (t + 4) (t + 6)
+  let f := Fast.unpackHigh64 f (s + 5) (t + 4) (t + 6)
+  let f := Fast.unpackLow64 f (s + 6) (t + 5) (t + 7)
+  let f := Fast.unpackHigh64 f (s + 7) (t + 5) (t + 7)
+  let f := Fast.unpackLow64 f (s + 8) (t + 8) (t + 10)
+  let f := Fast.unpackHigh64 f (s + 9) (t + 8) (t + 10)
+  let f := Fast.unpackLow64 f (s + 10) (t + 9) (t + 11)
+  let f := Fast.unpackHigh64 f (s + 11) (t + 9) (t + 11)
+  let f := Fast.unpackLow64 f (s + 12) (t + 12) (t + 14)
+  let f := Fast.unpackHigh64 f (s + 13) (t + 12) (t + 14)
+  let f := Fast.unpackLow64 f (s + 14) (t + 13) (t + 15)
+  let f := Fast.unpackHigh64 f (s + 15) (t + 13) (t + 15)
+  let f := Fast.shuffle128 f (t + 0) (s + 0) (s + 4) 0x88
+  let f := Fast.shuffle128 f (t + 4) (s + 0) (s + 4) 0xDD
+  let f := Fast.shuffle128 f (t + 1) (s + 1) (s + 5) 0x88
+  let f := Fast.shuffle128 f (t + 5) (s + 1) (s + 5) 0xDD
+  let f := Fast.shuffle128 f (t + 2) (s + 2) (s + 6) 0x88
+  let f := Fast.shuffle128 f (t + 6) (s + 2) (s + 6) 0xDD
+  let f := Fast.shuffle128 f (t + 3) (s + 3) (s + 7) 0x88
+  let f := Fast.shuffle128 f (t + 7) (s + 3) (s + 7) 0xDD
+  let f := Fast.shuffle128 f (t + 8) (s + 8) (s + 12) 0x88
+  let f := Fast.shuffle128 f (t + 12) (s + 8) (s + 12) 0xDD
+  let f := Fast.shuffle128 f (t + 9) (s + 9) (s + 13) 0x88
+  let f := Fast.shuffle128 f (t + 13) (s + 9) (s + 13) 0xDD
+  let f := Fast.shuffle128 f (t + 10) (s + 10) (s + 14) 0x88
+  let f := Fast.shuffle128 f (t + 14) (s + 10) (s + 14) 0xDD
+  let f := Fast.shuffle128 f (t + 11) (s + 11) (s + 15) 0x88
+  let f := Fast.shuffle128 f (t + 15) (s + 11) (s + 15) 0xDD
+  let f := Fast.shuffle128 f (d + 0) (t + 0) (t + 8) 0x88
+  let f := Fast.shuffle128 f (d + 8) (t + 0) (t + 8) 0xDD
+  let f := Fast.shuffle128 f (d + 1) (t + 1) (t + 9) 0x88
+  let f := Fast.shuffle128 f (d + 9) (t + 1) (t + 9) 0xDD
+  let f := Fast.shuffle128 f (d + 2) (t + 2) (t + 10) 0x88
+  let f := Fast.shuffle128 f (d + 10) (t + 2) (t + 10) 0xDD
+  let f := Fast.shuffle128 f (d + 3) (t + 3) (t + 11) 0x88
+  let f := Fast.shuffle128 f (d + 11) (t + 3) (t + 11) 0xDD
+  let f := Fast.shuffle128 f (d + 4) (t + 4) (t + 12) 0x88
+  let f := Fast.shuffle128 f (d + 12) (t + 4) (t + 12) 0xDD
+  let f := Fast.shuffle128 f (d + 5) (t + 5) (t + 13) 0x88
+  let f := Fast.shuffle128 f (d + 13) (t + 5) (t + 13) 0xDD
+  let f := Fast.shuffle128 f (d + 6) (t + 6) (t + 14) 0x88
+  let f := Fast.shuffle128 f (d + 14) (t + 6) (t + 14) 0xDD
+  let f := Fast.shuffle128 f (d + 7) (t + 7) (t + 15) 0x88
+  let f := Fast.shuffle128 f (d + 15) (t + 7) (t + 15) 0xDD
+  f
+
+/-- Output blocks `base` to `base + 15` of a root node: afterwards registers 40-55 hold them, 64 bytes
+each, in order (bytes 2560 to 3583 of the file). -/
+def output (f0 : ByteArray) (n : Node) (base : UInt64) : ByteArray := Id.run do
+  let mut f := f0
+  f := Fast.set32 f 0 n.cv[0]!.toUInt64
+  f := Fast.set32 f 1 n.cv[1]!.toUInt64
+  f := Fast.set32 f 2 n.cv[2]!.toUInt64
+  f := Fast.set32 f 3 n.cv[3]!.toUInt64
+  f := Fast.set32 f 4 n.cv[4]!.toUInt64
+  f := Fast.set32 f 5 n.cv[5]!.toUInt64
+  f := Fast.set32 f 6 n.cv[6]!.toUInt64
+  f := Fast.set32 f 7 n.cv[7]!.toUInt64
+  f := Fast.move f 32 0
+  f := Fast.move f 33 1
+  f := Fast.move f 34 2
+  f := Fast.move f 35 3
+  f := Fast.move f 36 4
+  f := Fast.move f 37 5
+  f := Fast.move f 38 6
+  f := Fast.move f 39 7
+  f := Fast.set32 f 8 iv[0]!.toUInt64
+  f := Fast.set32 f 9 iv[1]!.toUInt64
+  f := Fast.set32 f 10 iv[2]!.toUInt64
+  f := Fast.set32 f 11 iv[3]!.toUInt64
+  -- the block number: `base` plus 0 to 15
+  f := Fast.set32 f 12 base
+  f := Fast.add32 f 12 12 72
+  f := Fast.set32 f 13 (base >>> 32)
+  f := Fast.set32 f 14 n.blockLen.toUInt64
+  f := Fast.set32 f 15 (n.flags ||| root).toUInt64
+  f := Fast.set32 f 16 n.block[0]!.toUInt64
+  f := Fast.set32 f 17 n.block[1]!.toUInt64
+  f := Fast.set32 f 18 n.block[2]!.toUInt64
+  f := Fast.set32 f 19 n.block[3]!.toUInt64
+  f := Fast.set32 f 20 n.block[4]!.toUInt64
+  f := Fast.set32 f 21 n.block[5]!.toUInt64
+  f := Fast.set32 f 22 n.block[6]!.toUInt64
+  f := Fast.set32 f 23 n.block[7]!.toUInt64
+  f := Fast.set32 f 24 n.block[8]!.toUInt64
+  f := Fast.set32 f 25 n.block[9]!.toUInt64
+  f := Fast.set32 f 26 n.block[10]!.toUInt64
+  f := Fast.set32 f 27 n.block[11]!.toUInt64
+  f := Fast.set32 f 28 n.block[12]!.toUInt64
+  f := Fast.set32 f 29 n.block[13]!.toUInt64
+  f := Fast.set32 f 30 n.block[14]!.toUInt64
+  f := Fast.set32 f 31 n.block[15]!.toUInt64
+  f := rounds f
+  f := Fast.xor f 0 0 8
+  f := Fast.xor f 1 1 9
+  f := Fast.xor f 2 2 10
+  f := Fast.xor f 3 3 11
+  f := Fast.xor f 4 4 12
+  f := Fast.xor f 5 5 13
+  f := Fast.xor f 6 6 14
+  f := Fast.xor f 7 7 15
+  f := Fast.xor f 8 8 32
+  f := Fast.xor f 9 9 33
+  f := Fast.xor f 10 10 34
+  f := Fast.xor f 11 11 35
+  f := Fast.xor f 12 12 36
+  f := Fast.xor f 13 13 37
+  f := Fast.xor f 14 14 38
+  f := Fast.xor f 15 15 39
+  return transpose f 0 40 56
+
+/-- The values of `count` whole chunks of `b` (2 to 16 of them, 1024 bytes each, chunk numbers from
+`first`), hashed side by side: afterwards word `i` of chunk `first + j` is number `j` of register `32 + i`. -/
+def chunks (f0 : ByteArray) (b : ByteArray) (first count : Nat) : ByteArray := Id.run do
+  let mut f := f0
+  f := Fast.set32 f 32 iv[0]!.toUInt64
+  f := Fast.set32 f 33 iv[1]!.toUInt64
+  f := Fast.set32 f 34 iv[2]!.toUInt64
+  f := Fast.set32 f 35 iv[3]!.toUInt64
+  f := Fast.set32 f 36 iv[4]!.toUInt64
+  f := Fast.set32 f 37 iv[5]!.toUInt64
+  f := Fast.set32 f 38 iv[6]!.toUInt64
+  f := Fast.set32 f 39 iv[7]!.toUInt64
+  for k in [0:16] do
+    -- block `k` of every chunk, one to a register, then turned into sixteen registers of message words
+    for j in [0:count] do
+      f := b.copySlice ((first + j) * 1024 + 64 * k) f (64 * (40 + j)) 64
+    f := transpose f 40 16 56
+    f := Fast.move f 0 32
+    f := Fast.move f 1 33
+    f := Fast.move f 2 34
+    f := Fast.move f 3 35
+    f := Fast.move f 4 36
+    f := Fast.move f 5 37
+    f := Fast.move f 6 38
+    f := Fast.move f 7 39
+    f := Fast.set32 f 8 iv[0]!.toUInt64
+    f := Fast.set32 f 9 iv[1]!.toUInt64
+    f := Fast.set32 f 10 iv[2]!.toUInt64
+    f := Fast.set32 f 11 iv[3]!.toUInt64
+    f := Fast.set32 f 12 first.toUInt64
+    f := Fast.add32 f 12 12 72
+    f := Fast.set32 f 13 0
+    f := Fast.set32 f 14 64
+    f := Fast.set32 f 15 ((if k == 0 then chunkStart else 0) ||| (if k == 15 then chunkEnd else 0)).toUInt64
+    f := rounds f
+    f := Fast.xor f 32 0 8
+    f := Fast.xor f 33 1 9
+    f := Fast.xor f 34 2 10
+    f := Fast.xor f 35 3 11
+    f := Fast.xor f 36 4 12
+    f := Fast.xor f 37 5 13
+    f := Fast.xor f 38 6 14
+    f := Fast.xor f 39 7 15
+  return f
+
+/-- The value of chunk number `j` of those `chunks` hashed. -/
+def value (f : ByteArray) (j : Nat) : Array UInt32 := Id.run do
+  let mut v : Array UInt32 := Array.emptyWithCapacity 8
+  for i in [0:8] do
+    v := v.push (Fast.le32 f (64 * (32 + i) + 4 * j)).toUInt32
+  return v
+
+end Wide
+
+/-- Hashes `b` down to the root of its tree. With `wide`, whole chunks are hashed sixteen at a time by
+vector instructions; the result is the same either way. -/
+def rootNodeBy (b : ByteArray) (wide : Bool) : Node := Id.run do
   let chunks := if b.size == 0 then 1 else (b.size + 1023) / 1024
   -- values of finished subtrees, largest first: one for each set bit of the number of chunks done
   let mut stack : Array (Array UInt32) := Array.emptyWithCapacity 54
-  for i in [0:chunks - 1] do
-    let mut value := (chunk b (i * 1024) (i * 1024 + 1024) i.toUInt64).value
-    let mut done := i + 1
-    while done % 2 == 0 do
-      value := (join stack[stack.size - 1]! value).value
-      stack := stack.pop
-      done := done / 2
-    stack := stack.push value
+  let mut f := if wide && chunks > 2 then Wide.template else ByteArray.empty
+  let mut i := 0
+  while i < chunks - 1 do
+    -- every chunk but the last is whole; two or more of them are done together
+    let together := if wide && chunks - 1 - i >= 2 && chunks < 0xFFFFFFF0 then min 16 (chunks - 1 - i) else 1
+    if together != 1 then
+      f := Wide.chunks f b i together
+    for j in [0:together] do
+      let mut value := if together != 1 then Wide.value f j
+        else (chunk b ((i + j) * 1024) ((i + j) * 1024 + 1024) (i + j).toUInt64).value
+      let mut done := i + j + 1
+      while done % 2 == 0 do
+        value := (join stack[stack.size - 1]! value).value
+        stack := stack.pop
+        done := done / 2
+      stack := stack.push value
+    i := i + together
   let mut node := chunk b ((chunks - 1) * 1024) b.size (chunks - 1).toUInt64
   while stack.size > 0 do
     node := join stack[stack.size - 1]! node.value
     stack := stack.pop
   return node
+
+def rootNode (b : ByteArray) : Node := rootNodeBy b Fast.quick
 
 /-- The 16 words of output block number `k` of a root node. -/
 @[inline] def Node.output (n : Node) (k : UInt64) : Array UInt32 :=
@@ -212,10 +505,23 @@ def Node.bytes (n : Node) (length : Nat) : ByteArray := Id.run do
     k := k + 1
   return out.extract 0 length
 
+/-- `length` bytes of output; with `wide`, sixteen blocks at a time. -/
+def Node.bytesBy (n : Node) (length : Nat) (wide : Bool) : ByteArray := Id.run do
+  if !wide || length <= 64 then
+    return n.bytes length
+  let mut out := ByteArray.emptyWithCapacity (length + 1024)
+  let mut f := Wide.template
+  let mut k : UInt64 := 0
+  while out.size < length do
+    f := Wide.output f n k
+    out := f.copySlice 2560 out out.size 1024
+    k := k + 16
+  return out.extract 0 length
+
 /-- BLAKE3 of `b`: 32 bytes. -/
 def hash (b : ByteArray) : ByteArray := (rootNode b).bytes 32
 
 /-- BLAKE3 of `b`, extended to `length` bytes. -/
-def xof (b : ByteArray) (length : Nat) : ByteArray := (rootNode b).bytes length
+def xof (b : ByteArray) (length : Nat) : ByteArray := (rootNode b).bytesBy length Fast.quick
 
 end Blake3

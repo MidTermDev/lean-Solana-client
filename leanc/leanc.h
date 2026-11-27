@@ -284,6 +284,24 @@ enum {
   OP_CAST,       // reinterpret (String <-> ByteArray), owned -> owned
   OP_INTRIN,     // raw machine intrinsic, num2 = which
   OP_PANIC,      // args[0] = message string
+  // Operations that stand in for functions defined in lib/Fast.lean (the Lean there is what they mean).
+  OP_BA_LE,      // little-endian load of num2 bytes at args[1]; bytes past the end read as zero
+  OP_BA_PUTLE,   // little-endian store of num2 bytes of args[2] at args[1]
+  OP_MULHI,      // high 64 bits of a 64x64 product
+  OP_CPU,        // CPUID leaf 7: ebx in the low half, ecx in the high half (AVX-512 bits cleared if the OS does not save zmm)
+  OP_VEC,        // a vector instruction on 64-byte slots of a byte array; num2 = which, the slots are literals
+  OP_HOT,        // its argument, unchanged: a local defined as this gets a register before any other
+};
+
+// OP_VEC: d = a (op) b on 16 lanes of 32 bits unless noted; ROR32 rotates by a literal count.
+enum {
+  V_ADD32 = 1, V_XOR, V_ROR32, V_ADD16, V_SUB16, V_ADD64, V_AND, V_SRL64, V_SLL64, V_MADD52LO, V_MADD52HI,
+  V_MOVE,      // d = a
+  V_SET32,     // d = sixteen copies of a number (the one operand that is not a literal)
+  V_ADD32X3,   // d = a + b + c
+  V_XORROR32,  // d = (a xor b) rotated right by a literal count
+  V_UNPCKLDQ, V_UNPCKHDQ, V_UNPCKLQDQ, V_UNPCKHQDQ, // interleave the low (high) halves of each quarter, by 32 or 64 bits
+  V_SHUF128,   // d = quarters of a and b picked by a literal
 };
 
 enum {
@@ -306,6 +324,8 @@ struct Var {
   bool is_mut;
   bool moved;  // some reference moves out of this variable
   bool hidden;
+  int reg;     // the register that holds it for the whole function, or 0 (it lives in its frame slot)
+  u64 uses;    // how often it is read or written, loops counting for more: decides who gets a register
 };
 
 typedef struct Global Global;
@@ -419,5 +439,7 @@ void gen_program(Func *main_fn, Buf *out);
 #define BSS_RT_SIZE 0x1000ull // runtime scratch + allocator state (see rt/Rt.lean)
 
 extern bool opt_verbose;
+extern Buf map_out;
+extern const char *opt_map;
 
 #endif

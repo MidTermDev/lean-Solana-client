@@ -1,3 +1,4 @@
+import Fast
 import Crypto.Sha512
 import Encoding.Hex
 
@@ -362,6 +363,76 @@ def decode (b : ByteArray) : Option Point :=
       let x := if Fe.isNegative x != wantNeg then Fe.neg x else x
       some ⟨x, y, Fe.one, Fe.mul x y⟩
     else none
+
+/-- Is the number `a` (below p = 2²⁵⁵ − 19, as four 64-bit words, least significant first) a square of
+something other than zero? By the Jacobi symbol, which needs only halvings, subtractions and a look at
+the low bits: far cheaper than raising `a` to a power, which is the other way to tell. -/
+def isSquare (w0 w1 w2 w3 : UInt64) : Bool := Id.run do
+  let mut a0 := Fast.hot w0
+  let mut a1 := w1
+  let mut a2 := w2
+  let mut a3 := w3
+  let mut n0 : UInt64 := Fast.hot 0xFFFFFFFFFFFFFFED
+  let mut n1 : UInt64 := 0xFFFFFFFFFFFFFFFF
+  let mut n2 : UInt64 := 0xFFFFFFFFFFFFFFFF
+  let mut n3 : UInt64 := 0x7FFFFFFFFFFFFFFF
+  -- the symbol so far: true for +1
+  let mut plus := true
+  for _ in [0:1200] do
+    if a0 ||| a1 ||| a2 ||| a3 == 0 then
+      break
+    if a0 &&& 1 == 0 then
+      -- (2/n) is −1 when n is 3 or 5 modulo 8
+      a0 := (a0 >>> 1) ||| (a1 <<< 63)
+      a1 := (a1 >>> 1) ||| (a2 <<< 63)
+      a2 := (a2 >>> 1) ||| (a3 <<< 63)
+      a3 := a3 >>> 1
+      let r := n0 &&& 7
+      if r == 3 || r == 5 then
+        plus := !plus
+    else
+      -- both odd: the larger first (swapping flips the sign when both are 3 modulo 4), then subtract
+      let less := if a3 != n3 then a3 < n3 else if a2 != n2 then a2 < n2 else if a1 != n1 then a1 < n1 else a0 < n0
+      if less then
+        if a0 &&& 3 == 3 && n0 &&& 3 == 3 then
+          plus := !plus
+        let t0 := a0
+        let t1 := a1
+        let t2 := a2
+        let t3 := a3
+        a0 := n0
+        a1 := n1
+        a2 := n2
+        a3 := n3
+        n0 := t0
+        n1 := t1
+        n2 := t2
+        n3 := t3
+      let b0 : UInt64 := if a0 < n0 then 1 else 0
+      let b1 : UInt64 := if a1 < n1 || (a1 == n1 && b0 == 1) then 1 else 0
+      let b2 : UInt64 := if a2 < n2 || (a2 == n2 && b1 == 1) then 1 else 0
+      a0 := a0 - n0
+      a1 := a1 - n1 - b0
+      a2 := a2 - n2 - b1
+      a3 := a3 - n3 - b2
+  return plus && n0 == 1 && n1 ||| n2 ||| n3 == 0
+
+/-- Are these 32 bytes a point of the curve? The same answer as `(decode b).isSome`, without finding the
+point: there is an `x` exactly when (y² − 1)/(d·y² + 1) is zero or a square, and a quotient is a square
+when the product is. -/
+def isOnCurve (b : ByteArray) : Bool :=
+  if b.size != 32 then false
+  else
+    let y := Fe.fromBytes b
+    let yy := Fe.sq y
+    let u := Fe.sub yy Fe.one
+    let v := Fe.add (Fe.mul d yy) Fe.one
+    let product := Fe.toBytes (Fe.mul u v)
+    let w0 := Fast.le64 product 0
+    let w1 := Fast.le64 product 8
+    let w2 := Fast.le64 product 16
+    let w3 := Fast.le64 product 24
+    w0 ||| w1 ||| w2 ||| w3 == 0 || isSquare w0 w1 w2 w3
 
 /-- True when 8P is the identity, i.e. P lies in the small torsion subgroup. -/
 def isSmallOrder (p : Point) : Bool :=

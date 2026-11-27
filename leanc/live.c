@@ -68,6 +68,7 @@ void op_modes(Expr *e, char *m) {
   if (e->kind != E_OP) return;
   switch (e->num) {
   case OP_ARR_GET: case OP_ARR_SIZE: case OP_BA_GET: case OP_BA_SIZE: case OP_TAG: case OP_OPT_GET: case OP_PANIC:
+  case OP_BA_LE:
     m[0] = 'b';
     break;
   case OP_ARR_REPLICATE: m[1] = 'b'; break;

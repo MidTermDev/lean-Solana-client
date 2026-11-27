@@ -2,6 +2,8 @@
 #include "leanc.h"
 
 bool opt_verbose;
+Buf map_out;
+const char *opt_map;
 
 static const char *include_dirs[32];
 static int ninclude;
@@ -57,7 +59,8 @@ static const char *usage =
     "usage: leanc [options] Main.lean\n"
     "  -o FILE   output executable (default: a.out)\n"
     "  -I DIR    add a module search directory (the runtime Rt.lean must be on it)\n"
-    "  -v        print statistics\n";
+    "  -v        print statistics\n"
+    "  -m FILE   write the address of every function to FILE (for reading a profile)\n";
 
 static int real_main(int argc, char **argv) {
   const char *out = "a.out", *input = NULL;
@@ -67,6 +70,7 @@ static int real_main(int argc, char **argv) {
     else if (a[0] == '-' && a[1] == 'I' && !a[2] && i + 1 < argc) include_dirs[ninclude++] = intern(argv[++i]);
     else if (a[0] == '-' && a[1] == 'I' && a[2]) include_dirs[ninclude++] = intern(a + 2);
     else if (a[0] == '-' && a[1] == 'v' && !a[2]) opt_verbose = true;
+    else if (a[0] == '-' && a[1] == 'm' && !a[2] && i + 1 < argc) opt_map = argv[++i];
     else if (a[0] == '-') {
       plat_write(2, usage, strlen(usage));
       return 2;
@@ -100,6 +104,7 @@ static int real_main(int argc, char **argv) {
   Buf elf = {0};
   gen_program(main_fn, &elf);
   if (!plat_write_file(out, elf.p, elf.len, 0755)) fatal("cannot write '%s'", out);
+  if (opt_map && !plat_write_file(opt_map, map_out.p, map_out.len, 0644)) fatal("cannot write '%s'", opt_map);
   if (opt_verbose) {
     Buf b = {0};
     buf_fmt(&b, "leanc: %s: %d functions, %d constants, %lu bytes\n", out, nwork, ngwork, elf.len);

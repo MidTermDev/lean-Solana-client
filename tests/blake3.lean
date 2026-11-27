@@ -121,3 +121,18 @@ def main : IO Unit := do
   IO.println s!"each field matters: lamports {!(same one (LtHash.mixAccount LtHash.zero 1001 data false owner key1 false))}, executable {!(same one (LtHash.mixAccount LtHash.zero 1000 data true owner key1 false))}, owner {!(same one (LtHash.mixAccount LtHash.zero 1000 data false key2 key1 false))}, data {!(same one (LtHash.mixAccount LtHash.zero 1000 (pattern 3001) false owner key1 false))}"
   IO.println s!"the same from a buffer: {same one (LtHash.mixStored LtHash.zero (key1 ++ owner ++ data) 1000 64 3000 false 32 0 false)}"
   IO.println s!"as bytes and back: {same (LtHash.ofBytes (LtHash.bytes both)) both}; nothing hashes to {Hex.encode (LtHash.checksum LtHash.zero)}"
+
+  -- sixteen at a time: the same answers from the vector instructions (under the official toolchain: from
+  -- what those instructions are defined to do)
+  let mut agree := 0
+  let sizes := #[1, 64, 1025, 2049, 3835, 4097, 17409, 33000]
+  for n in sizes do
+    let b := pattern n
+    let plain := Blake3.rootNodeBy b false
+    let wide := Blake3.rootNodeBy b Fast.wide
+    if plain.bytes 32 == wide.bytes 32 && plain.bytesBy 2048 false == wide.bytesBy 2048 Fast.wide
+        && same (LtHash.mixNodeBy LtHash.zero plain (n % 2 == 1) false) (LtHash.mixNodeBy LtHash.zero wide (n % 2 == 1) Fast.wide) then
+      agree := agree + 1
+  IO.println s!"sixteen at a time: {agree} of {sizes.size} inputs hash the same, to 32 bytes, to 2048 and into the lattice"
+  let kept := LtHash.contribution 1000 data false owner key1
+  IO.println s!"what an account adds, kept and taken out again: {kept.size} bytes; {same (LtHash.addBytes both kept true) two}; nothing for no account: {(LtHash.contribution 0 data false owner key1).size} bytes"

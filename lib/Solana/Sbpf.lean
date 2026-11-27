@@ -225,10 +225,7 @@ partial def execute (m : Machine) (st0 : State) (programId : ByteArray) (metas :
     if after.units > m.budget then
       return { after with units := m.budget, status := meterExceeded }
     return after
-  let mut which := notFound
-  for i in [0:m.ids.size] do
-    if m.ids[i]! == programId then
-      which := i
+  let which := m.find programId
   if which == notFound then
     return st0.stop unknownProgram (Base58.encode programId)
   if m.programs[which]!.error != "" then
@@ -240,7 +237,7 @@ partial def execute (m : Machine) (st0 : State) (programId : ByteArray) (metas :
   let ⟨accounts0, units0, logs0, returnData0, _, _, _, trace0⟩ := st0
   let mut accounts := accounts0
   -- a heap beyond the first 32 KiB costs 8 units per further 32 KiB
-  let mut units := units0 + ((p.heap + 32767) / 32768 - 1).toUInt64 * 8
+  let mut units := Fast.hot (units0 + ((p.heap + 32767) / 32768 - 1).toUInt64 * 8)
   let mut logs := logs0
   let mut returnData := returnData0
   let mut trace := trace0
@@ -270,7 +267,11 @@ partial def execute (m : Machine) (st0 : State) (programId : ByteArray) (metas :
   let mut allocated : UInt64 := 0
   let mut frames : Array UInt64 := Array.replicate (maxDepth * 6) 0
   let mut calls := 0
-  let mut pc := p.entry
+  let mut pc := Fast.hotNat p.entry
+  let code := p.code
+  let count := p.count
+  let heapSize := p.heap
+  let plain := !v2 && p.tidy
   let mut status := finished
   let mut r0 : UInt64 := 0
   let mut detail := ""
@@ -278,16 +279,69 @@ partial def execute (m : Machine) (st0 : State) (programId : ByteArray) (metas :
     if units >= budget then
       status := budgetExceeded
       break
-    if pc >= p.count then
+    if pc >= count then
       status := executionOverrun
       break
     units := units + 1
-    let o := p.textOff + pc * 8
-    let opc := Wire.u8 p.elf o
-    let dst := (Wire.u8 p.elf (o + 1) &&& 15).toNat
-    let src := (Wire.u8 p.elf (o + 1) >>> 4).toNat
-    let off := sext16 (Wire.u16 p.elf (o + 2))
-    let imm32 := Wire.u32 p.elf (o + 4)
+    let word := Fast.hot code[pc]!
+    -- The instructions that make up nearly all of a run, first and without the detours: arithmetic, loads
+    -- and stores, conditional jumps, in the versions that share version 0's encodings. Each does exactly
+    -- what the general code below does for it, reading its fields straight from the word; whatever is
+    -- unusual about an instruction is left to that code.
+    if plain then
+      let cls := word &&& 7
+      if cls == 7 then
+        let op := word &&& 0xf0
+        if op <= 0xc0 && op != 0x30 && op != 0x90 then
+          let d := ((word >>> 8) &&& 15).toNat
+          let b := if word &&& 8 != 0 then regs[((word >>> 12) &&& 15).toNat]! else sext32 (word >>> 32)
+          regs := regs.set! d (if op == 0xb0 then b else if op == 0x00 then regs[d]! + b else alu64 op regs[d]! b)
+          pc := pc + 1
+          continue
+      else if cls == 1 || cls == 2 || cls == 3 then
+        if word &&& 0xe0 == 0x60 then
+          let width := word &&& 0x18
+          let size := if width == 0x00 then 4 else if width == 0x08 then 2 else if width == 0x10 then 1 else 8
+          let d := ((word >>> 8) &&& 15).toNat
+          let s := ((word >>> 12) &&& 15).toNat
+          let addr := (if cls == 1 then regs[s]! else regs[d]!) + sext16 ((word >>> 16) &&& 0xFFFF)
+          let region := addr >>> 32
+          let within := (addr &&& 0xFFFFFFFF).toNat
+          -- the stack and the input are where nearly every access goes
+          let idx := if region == 2 && within + size <= stackBytes then within
+            else if region == 4 && within + size <= inputLen then stackBytes + heapSize + within
+            else locate p inputLen addr size (cls != 1)
+          if Wire.ok idx then
+            if cls == 1 then
+              regs := regs.set! d (if idx >= progBase then loadAt p mem idx size
+                else if size == 8 then Fast.le64 mem idx else if size == 4 then Fast.le32 mem idx
+                else if size == 2 then Fast.le16 mem idx else Wire.u8 mem idx)
+            else
+              mem := storeAt mem idx size (if cls == 2 then sext32 (word >>> 32) else regs[s]!)
+            pc := pc + 1
+            continue
+      else if cls == 5 then
+        let op := word &&& 0xf0
+        if op != 0 && op != 0x80 && op != 0x90 && op <= 0xd0 then
+          let b := if word &&& 8 != 0 then regs[((word >>> 12) &&& 15).toNat]! else sext32 (word >>> 32)
+          let a := regs[((word >>> 8) &&& 15).toNat]!
+          let taken := if op == 0x10 then a == b else if op == 0x50 then a != b else jumpTaken op a b
+          pc := if taken then ((pc + 1).toUInt64 + sext16 ((word >>> 16) &&& 0xFFFF)).toNat else pc + 1
+          continue
+      else if cls == 4 then
+        let op := word &&& 0xf0
+        if op <= 0xc0 && op != 0x30 && op != 0x90 then
+          let d := ((word >>> 8) &&& 15).toNat
+          let b := if word &&& 8 != 0 then regs[((word >>> 12) &&& 15).toNat]! else sext32 (word >>> 32)
+          regs := regs.set! d (alu32 op regs[d]! b)
+          pc := pc + 1
+          continue
+    -- the instruction: opcode, two registers, a 16-bit offset, a 32-bit constant
+    let opc := word &&& 0xFF
+    let dst := ((word >>> 8) &&& 15).toNat
+    let src := ((word >>> 12) &&& 15).toNat
+    let off := sext16 ((word >>> 16) &&& 0xFFFF)
+    let imm32 := word >>> 32
     let imm := sext32 imm32
     if dst > 10 || src > 10 then
       status := unsupportedInstruction
@@ -868,7 +922,8 @@ partial def execute (m : Machine) (st0 : State) (programId : ByteArray) (metas :
           next := (next.toUInt64 + off).toNat
     else if opc == 0x18 && !v2 then
       -- load a 64-bit constant: two instruction slots
-      regs := regs.set! dst (imm32 ||| (Wire.u32 p.elf (o + 12) <<< 32))
+      let upper := if pc + 1 < p.count then code[pc + 1]! >>> 32 else Wire.u32 p.elf (p.textOff + pc * 8 + 12)
+      regs := regs.set! dst (imm32 ||| (upper <<< 32))
       next := pc + 2
     else if !v2 && (cls == 1 || cls == 2 || cls == 3) then
       -- memory: load (1), store immediate (2), store register (3); width in bits 3-4

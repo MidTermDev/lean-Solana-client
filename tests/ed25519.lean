@@ -45,3 +45,24 @@ def main : IO Unit := do
   check "rfc8032 test 1" (Ed25519.verify pk sig ByteArray.empty)
   IO.println (Hex.encode (Ed25519.Point.encode Ed25519.basePoint))
   IO.println (Hex.encode (Ed25519.Fe.toBytes (Ed25519.Fe.invert (Ed25519.Fe.add Ed25519.Fe.one Ed25519.Fe.one))))
+
+  -- "is this a point of the curve?", asked of every derived address: the Jacobi symbol must answer as decoding does
+  let mut candidate := Sha512.hash "on the curve or off it".toUTF8
+  let mut onCurve := 0
+  let mut same := 0
+  for i in [0:400] do
+    candidate := Sha512.hash candidate
+    -- every twentieth is a small or a very large y, with either sign bit
+    let special : ByteArray := Id.run do
+      let mut z := ByteArray.emptyWithCapacity 32
+      z := z.push (i / 20).toUInt8
+      for _ in [1:31] do
+        z := z.push (if i % 40 == 0 then 0 else 255)
+      return z.push (if i % 40 == 0 then (i / 40 % 2 * 128).toUInt8 else (127 + i / 40 % 2 * 128).toUInt8)
+    let bytes := if i % 20 == 0 then special else candidate.extract 0 32
+    let decoded := (Ed25519.Point.decode bytes).isSome
+    if decoded then
+      onCurve := onCurve + 1
+    if decoded == Ed25519.Point.isOnCurve bytes then
+      same := same + 1
+  IO.println s!"on the curve: {onCurve} of 400 candidates; the symbol and decoding agree on {same}"

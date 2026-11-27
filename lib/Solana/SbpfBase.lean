@@ -163,11 +163,15 @@ def syscallId (b : ByteArray) (o : Nat) : UInt64 :=
   else if cstrIs b o "sol_get_processed_sibling_instruction" then sysSibling
   else sysUnknown
 
-def storeAt (mem : ByteArray) (idx size : Nat) (v : UInt64) : ByteArray := Id.run do
-  let mut m := mem
-  for i in [0:size] do
-    m := m.set! (idx + i) (v >>> (8 * i).toUInt64).toUInt8
-  return m
+def storeAt (mem : ByteArray) (idx size : Nat) (v : UInt64) : ByteArray :=
+  if size == 8 then Fast.put64 mem idx v
+  else if size == 4 then Fast.put32 mem idx v
+  else if size == 2 then Fast.put16 mem idx v
+  else Id.run do
+    let mut m := mem
+    for i in [0:size] do
+      m := m.set! (idx + i) (v >>> (8 * i).toUInt64).toUInt8
+    return m
 
 /-- A loaded program. `syscalls[pc]` is the system call made by the `call`
 instruction at `pc` (or 0) and `calls[pc]` the function it calls by symbol
@@ -201,10 +205,27 @@ structure Program where
   /-- For a program whose code is kept in a second account: that account's size (0 if it is gone). A
   transaction is charged for it against the amount of data it may load. -/
   holderSize : Nat
+  /-- The instructions, eight bytes each, as words: read once here so that running one costs one lookup. -/
+  code : Array UInt64
+  /-- No instruction names a register above 10 (so running one need not check). -/
+  tidy : Bool
   deriving Inhabited
 
+/-- The `count` instructions at `textOff`, each as one little-endian word. -/
+def instructionWords (elf : ByteArray) (textOff count : Nat) : Array UInt64 := Id.run do
+  let mut code : Array UInt64 := Array.emptyWithCapacity count
+  for i in [0:count] do
+    code := code.push (Wire.u64 elf (textOff + 8 * i))
+  return code
+
+def tidyWords (code : Array UInt64) : Bool := Id.run do
+  for word in code do
+    if (word >>> 8) &&& 15 > 10 || (word >>> 12) &&& 15 > 10 then
+      return false
+  return true
+
 def Program.failed (elf : ByteArray) (why : String) : Program :=
-  ⟨elf, 0, 0, 0, 0, 0, Array.emptyWithCapacity 0, Array.emptyWithCapacity 0, why, 32768, 0, 0, 0, 1, 0, false, 0⟩
+  ⟨elf, 0, 0, 0, 0, 0, Array.emptyWithCapacity 0, Array.emptyWithCapacity 0, why, 32768, 0, 0, 0, 1, 0, false, 0, Array.emptyWithCapacity 0, false⟩
 
 /-- Where a section sits in the file, and the address it asks for. Size 0 means "absent". -/
 structure Section where
@@ -332,7 +353,7 @@ def loadStrict (elf : ByteArray) : Program := Id.run do
       else
         syscalls := syscalls.set! pc id
   return ⟨elf, textOff, count, 0, roSize, ((entry - programStart) / 8).toNat, syscalls, Array.replicate count 0, "", 32768,
-    3, roOff, programStart, 0, 0, false, 0⟩
+    3, roOff, programStart, 0, 0, false, 0, instructionWords elf textOff count, tidyWords (instructionWords elf textOff count)⟩
 
 /-- Parses and relocates an sBPF ELF file as written by Solana toolchains. Versions 0 to 2 share
 this loader; version 3 has its own. -/
@@ -419,7 +440,8 @@ def load (image : ByteArray) : Program := Id.run do
         else if nameOff < names.size then
           syscalls := syscalls.set! pc (syscallId elf (names.off + nameOff))
   return ⟨elf, text.off, count, roLow, roHigh, ((entryAddr - text.addr) / 8).toNat, syscalls, calls, "", 32768,
-    version.toNat, roLow, programStart + text.off.toUInt64, 1, 0, false, 0⟩
+    version.toNat, roLow, programStart + text.off.toUInt64, 1, 0, false, 0, instructionWords elf text.off count,
+    tidyWords (instructionWords elf text.off count)⟩
 
 -- ------------------------------------------------------------------- memory
 --
@@ -466,14 +488,14 @@ def writable (p : Program) (inputLen : Nat) (addr len : UInt64) : Nat :=
 
 -- --------------------------------------------------------------- arithmetic
 
-def sext32 (x : UInt64) : UInt64 :=
+@[inline] def sext32 (x : UInt64) : UInt64 :=
   if x &&& 0x80000000 != 0 then x ||| 0xFFFFFFFF00000000 else x &&& 0xFFFFFFFF
 
-def sext16 (x : UInt64) : UInt64 :=
+@[inline] def sext16 (x : UInt64) : UInt64 :=
   if x &&& 0x8000 != 0 then x ||| 0xFFFFFFFFFFFF0000 else x &&& 0xFFFF
 
 /-- Signed "less than" on two's-complement words. -/
-def slt (a b : UInt64) : Bool := (a ^^^ 0x8000000000000000) < (b ^^^ 0x8000000000000000)
+@[inline] def slt (a b : UInt64) : Bool := (a ^^^ 0x8000000000000000) < (b ^^^ 0x8000000000000000)
 
 /-- Arithmetic shift right by `n` (0..63). -/
 def arsh (a n : UInt64) : UInt64 :=
@@ -571,6 +593,65 @@ structure Account where
   executable : Bool
   deriving Inhabited
 
+def notFound : Nat := 0xFFFFFFFF
+
+-- ----------------------------------------------------- finding things by address
+--
+-- A table of slots, a power of two of them, each holding 0 or a position + 1 in some array of addresses.
+-- An address starts looking at the slot its bytes name and walks on until it finds itself or an empty
+-- slot. (The bytes are taken from the middle: chosen addresses share their beginnings or their ends.)
+
+def slotOf (key : ByteArray) (size : Nat) : Nat :=
+  ((Wire.u64 key 8 ^^^ (Wire.u64 key 16 * 0x9E3779B97F4A7C15)) >>> 20).toNat % size
+
+/-- The position of `key` among `keys`, by way of the table; `notFound` if it is not there. -/
+def keyAt (slots : Array UInt64) (keys : Array ByteArray) (key : ByteArray) : Nat := Id.run do
+  if slots.size == 0 then
+    return notFound
+  let mut at_ := slotOf key slots.size
+  for _ in [0:slots.size] do
+    let s := slots[at_]!
+    if s == 0 then
+      return notFound
+    if keys[s.toNat - 1]! == key then
+      return s.toNat - 1
+    at_ := if at_ + 1 == slots.size then 0 else at_ + 1
+  return notFound
+
+/-- The table, with `key` now naming `position` (replacing what it named before, if anything). The array
+of addresses is the one `position` refers to, with `key` in it or not yet. -/
+def keyLink (slots : Array UInt64) (keys : Array ByteArray) (key : ByteArray) (position : Nat) : Array UInt64 := Id.run do
+  let mut at_ := slotOf key slots.size
+  for _ in [0:slots.size] do
+    let s := slots[at_]!
+    if s == 0 || (s.toNat - 1 < keys.size && keys[s.toNat - 1]! == key) then
+      return slots.set! at_ (position + 1).toUInt64
+    at_ := if at_ + 1 == slots.size then 0 else at_ + 1
+  return slots
+
+/-- The same for accounts, by their addresses. -/
+def accountAt (slots : Array UInt64) (accounts : Array Account) (key : ByteArray) : Nat := Id.run do
+  if slots.size == 0 then
+    return notFound
+  let mut at_ := slotOf key slots.size
+  for _ in [0:slots.size] do
+    let s := slots[at_]!
+    if s == 0 then
+      return notFound
+    if accounts[s.toNat - 1]!.key == key then
+      return s.toNat - 1
+    at_ := if at_ + 1 == slots.size then 0 else at_ + 1
+  return notFound
+
+def accountLink (slots : Array UInt64) (accounts : Array Account) (key : ByteArray) (position : Nat) : Array UInt64 := Id.run do
+  let mut at_ := slotOf key slots.size
+  for _ in [0:slots.size] do
+    let s := slots[at_]!
+    if s == 0 || (s.toNat - 1 < accounts.size && accounts[s.toNat - 1]!.key == key) then
+      return slots.set! at_ (position + 1).toUInt64
+    at_ := if at_ + 1 == slots.size then 0 else at_ + 1
+  return slots
+
 /-- A reference to an account by an instruction: which one, and with what rights. -/
 structure Meta where
   index : Nat
@@ -626,6 +707,8 @@ structure Machine where
   lamportsPerSignature : UInt64
   /-- for looking into a transaction: stop it after this many compute units, whatever it asked for (0 = no cap) -/
   cap : UInt64
+  /-- where each address in `ids` is (see `keyAt`); the latest registration of an address is the one found -/
+  index : Array UInt64
   deriving Inhabited
 
 /-- Everything an instruction can change. `status` is `finished` (0) while
@@ -642,7 +725,6 @@ structure State where
   trace : Array Frame
   deriving Inhabited
 
-def notFound : Nat := 0xFFFFFFFF
 
 def zeros (b : ByteArray) (n : Nat) : ByteArray := Id.run do
   let mut out := b
@@ -678,7 +760,8 @@ def Sysvars.standard : Sysvars :=
   ⟨rent, schedule, zeros ByteArray.empty 81, zeros ByteArray.empty 8, zeros ByteArray.empty 8, 0⟩
 
 def Machine.create (clock : Clock) (budget : UInt64) : Machine :=
-  ⟨Array.emptyWithCapacity 4, Array.emptyWithCapacity 4, clock, budget, Sysvars.standard, 32768, ByteArray.empty, 5000, 0⟩
+  ⟨Array.emptyWithCapacity 4, Array.emptyWithCapacity 4, clock, budget, Sysvars.standard, 32768, ByteArray.empty, 5000, 0,
+    Array.replicate 64 0⟩
 
 /-- The smallest balance at which an account with `size` bytes of data is
 exempt from rent: (128 + size) bytes at the rate in the Rent sysvar. -/
@@ -688,8 +771,20 @@ def Machine.rentMinimum (m : Machine) (size : Nat) : UInt64 :=
   (128 + size).toUInt64 * Wire.u64 m.sysvars.rent 0 * factor
 
 /-- Registers a program under an address. -/
-def Machine.add (m : Machine) (id : ByteArray) (p : Program) : Machine :=
-  { m with ids := m.ids.push id, programs := m.programs.push p }
+def Machine.add (m : Machine) (id : ByteArray) (p : Program) : Machine := Id.run do
+  let ids := m.ids.push id
+  -- the table is kept at most half full
+  let mut index := m.index
+  if ids.size * 2 > index.size then
+    index := Array.replicate (index.size * 4) 0
+    for i in [0:ids.size] do
+      index := keyLink index ids ids[i]! i
+  else
+    index := keyLink index ids id (ids.size - 1)
+  return { m with ids := ids, programs := m.programs.push p, index := index }
+
+/-- Where the program registered under `id` is in `programs`, or `notFound`. -/
+def Machine.find (m : Machine) (id : ByteArray) : Nat := keyAt m.index m.ids id
 
 /-- The account that stands for a deployed program when it is passed to another program. -/
 def programAccount (id : ByteArray) : Account :=
@@ -761,7 +856,7 @@ def createProgramAddress (seeds : Array ByteArray) (programId : ByteArray) : Opt
     message := message ++ seed
   message := message ++ programId ++ "ProgramDerivedAddress".toUTF8
   let hash := Sha256.hash message
-  if (Ed25519.Point.decode hash).isSome then
+  if Ed25519.Point.isOnCurve hash then
     return none
   return some hash
 
@@ -903,7 +998,7 @@ def findInfo (infos : Array Info) (key : ByteArray) : Nat := Id.run do
 -- buffer, laid out the way Solana's loader does (the "aligned" format).
 
 /-- Zeros for a program's stack and the usual heap, made once: memory that starts as zeros is copied from here rather than pushed a byte at a time. -/
-def zeroBlock : ByteArray := zeros (ByteArray.emptyWithCapacity (stackBytes + 32768)) (stackBytes + 32768)
+def zeroBlock : ByteArray := zeros (ByteArray.emptyWithCapacity (stackBytes + 262144)) (stackBytes + 262144)
 
 /-- Bytes an account occupies in the input: header, data, room to grow, alignment, rent epoch. -/
 def accountSpan (dataLen : Nat) : Nat := (dataLen + 10343) / 8 * 8

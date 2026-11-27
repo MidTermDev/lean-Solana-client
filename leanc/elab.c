@@ -427,6 +427,8 @@ typedef struct {
   int arg;
   const char *rt;
   Type *conv_to;   // SP_CONV
+  int arg2;        // B_OP: stored in the expression's num2
+  bool over;       // takes the place of a function of the same name defined in Lean
 } Builtin;
 
 static Builtin builtins[] = {
@@ -441,6 +443,38 @@ static Builtin builtins[] = {
     {"ByteArray.append", "YY&>Y", B_RT, 0, "Rt.baAppend"},
     {"ByteArray.isEmpty", "Y&>B", B_RT, 0, "Rt.baIsEmpty"},
     {"ByteArray.copySlice", "Y&NYNN>Y", B_RT, 0, "Rt.baCopySlice"},
+    // lib/Fast.lean: each of these is defined there in plain Lean, and compiled here to a few instructions
+    {"Fast.le16", "Y&N>q", B_OP, OP_BA_LE, NULL, NULL, 2, true},
+    {"Fast.le32", "Y&N>q", B_OP, OP_BA_LE, NULL, NULL, 4, true},
+    {"Fast.le64", "Y&N>q", B_OP, OP_BA_LE, NULL, NULL, 8, true},
+    {"Fast.put16", "YNq>Y", B_OP, OP_BA_PUTLE, NULL, NULL, 2, true},
+    {"Fast.put32", "YNq>Y", B_OP, OP_BA_PUTLE, NULL, NULL, 4, true},
+    {"Fast.put64", "YNq>Y", B_OP, OP_BA_PUTLE, NULL, NULL, 8, true},
+    {"Fast.mulHi", "qq>q", B_OP, OP_MULHI, NULL, NULL, 0, true},
+    {"Fast.cpuBits", ">q", B_OP, OP_CPU, NULL, NULL, 0, true},
+    {"Fast.add32", "YNNN>Y", B_OP, OP_VEC, NULL, NULL, V_ADD32, true},
+    {"Fast.xor", "YNNN>Y", B_OP, OP_VEC, NULL, NULL, V_XOR, true},
+    {"Fast.ror32", "YNNN>Y", B_OP, OP_VEC, NULL, NULL, V_ROR32, true},
+    {"Fast.add16", "YNNN>Y", B_OP, OP_VEC, NULL, NULL, V_ADD16, true},
+    {"Fast.sub16", "YNNN>Y", B_OP, OP_VEC, NULL, NULL, V_SUB16, true},
+    {"Fast.add64", "YNNN>Y", B_OP, OP_VEC, NULL, NULL, V_ADD64, true},
+    {"Fast.and", "YNNN>Y", B_OP, OP_VEC, NULL, NULL, V_AND, true},
+    {"Fast.srl64", "YNNN>Y", B_OP, OP_VEC, NULL, NULL, V_SRL64, true},
+    {"Fast.sll64", "YNNN>Y", B_OP, OP_VEC, NULL, NULL, V_SLL64, true},
+    {"Fast.madd52lo", "YNNNN>Y", B_OP, OP_VEC, NULL, NULL, V_MADD52LO, true},
+    {"Fast.madd52hi", "YNNNN>Y", B_OP, OP_VEC, NULL, NULL, V_MADD52HI, true},
+    {"Fast.move", "YNN>Y", B_OP, OP_VEC, NULL, NULL, V_MOVE, true},
+    {"Fast.set32", "YNq>Y", B_OP, OP_VEC, NULL, NULL, V_SET32, true},
+    {"Fast.add32x3", "YNNNN>Y", B_OP, OP_VEC, NULL, NULL, V_ADD32X3, true},
+    {"Fast.xorRor32", "YNNNN>Y", B_OP, OP_VEC, NULL, NULL, V_XORROR32, true},
+    {"Fast.unpackLow32", "YNNN>Y", B_OP, OP_VEC, NULL, NULL, V_UNPCKLDQ, true},
+    {"Fast.unpackHigh32", "YNNN>Y", B_OP, OP_VEC, NULL, NULL, V_UNPCKHDQ, true},
+    {"Fast.unpackLow64", "YNNN>Y", B_OP, OP_VEC, NULL, NULL, V_UNPCKLQDQ, true},
+    {"Fast.unpackHigh64", "YNNN>Y", B_OP, OP_VEC, NULL, NULL, V_UNPCKHQDQ, true},
+    {"Fast.shuffle128", "YNNNN>Y", B_OP, OP_VEC, NULL, NULL, V_SHUF128, true},
+    {"Fast.compiled", "", B_SPECIAL, SP_TRUE, NULL, NULL, 0, true},
+    {"Fast.hot", "q>q", B_OP, OP_HOT, NULL, NULL, 0, true},
+    {"Fast.hotNat", "N>N", B_OP, OP_HOT, NULL, NULL, 0, true},
     {"String.append", "SS&>S", B_RT, 0, "Rt.baAppend"},
     {"String.length", "S&>N", B_RT, 0, "Rt.strLength"},
     {"String.utf8ByteSize", "S&>N", B_OP, OP_BA_SIZE},
@@ -563,7 +597,11 @@ typedef struct {
 static Ref ref_tmp;
 static void *try_ref(const char *full) {
   Ref r = {0};
-  if ((r.fn = map_get(&funcs, full))) r.kind = R_FUNC;
+  Builtin *over = map_get(&builtin_map, full);
+  if (over && over->over) {
+    r.bi = over;
+    r.kind = R_BUILTIN;
+  } else if ((r.fn = map_get(&funcs, full))) r.kind = R_FUNC;
   else if ((r.glob = map_get(&globals, full))) r.kind = R_GLOBAL;
   else if ((r.ctor = map_get(&ctors, full))) r.kind = R_CTOR;
   else if ((r.bi = lookup_builtin(full))) r.kind = R_BUILTIN;
@@ -1121,6 +1159,9 @@ static Expr *apply_builtin(Builtin *b, Expr *first, Node **args, int nargs, Type
   for (int i = 0; i < k; i++) e->args[i] = ea[i];
   if (b->kind == B_OP) {
     e->num = (u64)b->arg;
+    e->num2 = (u64)b->arg2;
+    if (b->arg == OP_BA_LE) elab_require("Rt.baLe");
+    if (b->arg == OP_BA_PUTLE || b->arg == OP_VEC) elab_require("Rt.baUnique");
   } else {
     e->num = OP_RTCALL;
     e->fn = elab_require(b->rt);
@@ -1782,7 +1823,7 @@ static Expr *clone(Expr *e, Sub *subs, int *nsubs) {
     r->a = clone(e->a, subs, nsubs);
     Var *nv = new_var(e->var->name, e->var->type, e->var->is_mut);
     nv->hidden = e->var->hidden;
-    if (*nsubs == 64) fatal("inliner: too many bindings");
+    if (*nsubs == 256) fatal("inliner: too many bindings");
     subs[*nsubs].from = e->var;
     subs[(*nsubs)++].to = mk_local(nv, NULL);
     r->var = nv;
@@ -1810,7 +1851,7 @@ static Expr *inline_expr(Expr *e, int depth) {
   if (e->kind != E_CALL || depth >= 6) return fold(e);
   Func *f = e->fn;
   if (!(f->node->flag & 4) || !f->body || !inline_ok(f->body)) return e;
-  Sub subs[64];
+  Sub subs[256];
   int nsubs = 0;
   Var *temps[32];
   Expr *inits[32];

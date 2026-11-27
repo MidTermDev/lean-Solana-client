@@ -70,6 +70,7 @@ def scratch : UInt64 := 0x20000040
 def freeLists : UInt64 := 0x20000100
 def chunkSize : UInt64 := 0x400000
 def bigThreshold : UInt64 := 0x100000
+def hugeThreshold : UInt64 := 0x4000000
 def errorFloor : UInt64 := 0xFFFFFFFFFFFFF000
 
 def exit (code : UInt64) : IO Unit := do
@@ -140,9 +141,13 @@ def panicMsg (msg line : UInt64) : IO Unit := do
 -- ---------------------------------------------------------------- allocator
 --
 -- Segregated free lists. Requests up to 1 KiB use exact 16-byte classes,
--- larger ones power-of-two classes, and anything from 1 MiB up goes straight
--- to mmap/munmap. `free` is always told the size that was requested, so
--- objects carry no allocator header.
+-- larger ones power-of-two classes. Up to 1 MiB they are carved from chunks;
+-- from there to 64 MiB each is mapped on its own and, when freed, kept for
+-- the next request of its class (a fresh mapping costs a page fault for
+-- every page touched, which for buffers of megabytes that live for a moment
+-- is most of their cost). Anything larger goes straight to mmap/munmap.
+-- `free` is always told the size that was requested, so objects carry no
+-- allocator header.
 
 def mmapAnon (len : UInt64) : IO UInt64 := do
   let p ← Sys.syscall 9 0 len 3 0x22 0xFFFFFFFFFFFFFFFF 0
@@ -187,9 +192,11 @@ def alloc (size : UInt64) : IO UInt64 := do
       return head
     let p ← bump sz
     return p
-  if sz >= bigThreshold then
-    let p ← mmapAnon ((sz + 4095) &&& errorFloor)
-    return p
+  -- From here on, objects are placed so that the bytes of an array (which start 24 bytes in) begin on a
+  -- 64-byte boundary: a vector instruction then never straddles two cache lines.
+  if sz > hugeThreshold then
+    let p ← mmapAnon (((sz + 4095) &&& errorFloor) + 4096)
+    return p + 40
   let cls := largeClass sz
   let slot := largeSlot cls
   let head ← Mem.load64 slot
@@ -197,8 +204,11 @@ def alloc (size : UInt64) : IO UInt64 := do
     let next ← Mem.load64 head
     Mem.store64 slot next
     return head
-  let p ← bump cls
-  return p
+  if sz >= bigThreshold then
+    let p ← mmapAnon (cls + 4096)
+    return p + 40
+  let p ← bump (cls + 64)
+  return ((p + 87) &&& 0xFFFFFFFFFFFFFFC0) - 24
 
 def free (p size : UInt64) : IO Unit := do
   let sz := (size + 15) &&& 0xFFFFFFFFFFFFFFF0
@@ -208,8 +218,8 @@ def free (p size : UInt64) : IO Unit := do
     Mem.store64 p head
     Mem.store64 slot p
     return
-  if sz >= bigThreshold then
-    let _ ← Sys.syscall 11 p ((sz + 4095) &&& errorFloor) 0 0 0 0
+  if sz > hugeThreshold then
+    let _ ← Sys.syscall 11 (p - 40) (((sz + 4095) &&& errorFloor) + 4096) 0 0 0 0
     return
   let slot := largeSlot (largeClass sz)
   let head ← Mem.load64 slot
@@ -217,6 +227,19 @@ def free (p size : UInt64) : IO Unit := do
   Mem.store64 slot p
 
 -- ------------------------------------------------------- ByteArray / String
+
+/-- `w` bytes at `idx` as a little-endian number, for a read that runs past the end of the array: the
+bytes that are not there count as zero. (A read that fits is a single instruction and never comes here.) -/
+def baLe (b idx w : UInt64) : IO UInt64 := do
+  let size ← Mem.load64 (b + 8)
+  let mut v : UInt64 := 0
+  if idx < size then
+    let mut i : UInt64 := 0
+    while i < w && i < size - idx do
+      let x ← Mem.load8 (b + 24 + idx + i)
+      v := v ||| (x <<< (8 * i))
+      i := i + 1
+  return v
 
 def baNew (cap : UInt64) : IO UInt64 := do
   let p ← alloc (24 + cap)
@@ -253,6 +276,21 @@ def baPush (p v : UInt64) : IO UInt64 := do
   baRelease p
   return q
 
+/-- Copies `n` bytes. A short copy (an address, a number) goes eight bytes at a time: `rep movsb` has a
+start-up cost that is most of what a short copy costs. Long, tiny or overlapping ones are left to it. -/
+def copyBytes (dst src n : UInt64) : IO Unit := do
+  if n > 64 || n < 8 || (dst < src + n && src < dst + n) then
+    Mem.copy dst src n
+    return
+  let mut i : UInt64 := 0
+  while i + 8 <= n do
+    let word ← Mem.load64 (src + i)
+    Mem.store64 (dst + i) word
+    i := i + 8
+  if i < n then
+    let last ← Mem.load64 (src + n - 8)
+    Mem.store64 (dst + n - 8) last
+
 /-- `a ++ b`: consumes `a`, borrows `b`. Appends in place when `a` is unique. -/
 def baAppend (a b : UInt64) : IO UInt64 := do
   let rc ← Mem.load64 a
@@ -260,7 +298,7 @@ def baAppend (a b : UInt64) : IO UInt64 := do
   let cap ← Mem.load64 (a + 16)
   let sb ← Mem.load64 (b + 8)
   if rc == 1 && sa + sb <= cap then
-    Mem.copy (a + 24 + sa) (b + 24) sb
+    copyBytes (a + 24 + sa) (b + 24) sb
     Mem.store64 (a + 8) (sa + sb)
     return a
   let need := sa + sb
@@ -280,7 +318,7 @@ def baExtract (b start stop : UInt64) : IO UInt64 := do
     return q
   let n := e - start
   let q ← baNew n
-  Mem.copy (q + 24) (b + 24 + start) n
+  copyBytes (q + 24) (b + 24 + start) n
   Mem.store64 (q + 8) n
   return q
 
@@ -289,6 +327,21 @@ def baEq (a b : UInt64) : IO Bool := do
   let sb ← Mem.load64 (b + 8)
   if sa != sb then
     return false
+  -- two different arrays usually differ at once: look at their first eight bytes before anything slower
+  if sa >= 8 then
+    let x ← Mem.load64 (a + 24)
+    let y ← Mem.load64 (b + 24)
+    if x != y then
+      return false
+    if sa == 32 then
+      -- an address or a hash: three more words
+      let x1 ← Mem.load64 (a + 32)
+      let y1 ← Mem.load64 (b + 32)
+      let x2 ← Mem.load64 (a + 40)
+      let y2 ← Mem.load64 (b + 40)
+      let x3 ← Mem.load64 (a + 48)
+      let y3 ← Mem.load64 (b + 48)
+      return x1 == y1 && x2 == y2 && x3 == y3
   Mem.eq (a + 24) (b + 24) sa
 
 def baIsEmpty (b : UInt64) : IO Bool := do
@@ -323,7 +376,7 @@ def baCopySlice (src srcOff dest destOff len : UInt64) : IO UInt64 := do
   let cap ← Mem.load64 (dest + 16)
   -- in place when the array is ours alone and has the room: overwriting, or appending at its end
   if rc == 1 && total <= cap && d0 == destOff then
-    Mem.copy (dest + 24 + d0) (src + 24 + s0) n
+    copyBytes (dest + 24 + d0) (src + 24 + s0) n
     Mem.store64 (dest + 8) total
     return dest
   -- (room to spare when growing our own array, so that repeated appends do not copy it each time)

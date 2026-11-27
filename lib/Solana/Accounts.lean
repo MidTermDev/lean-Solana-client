@@ -88,6 +88,12 @@ def packZeros (b : ByteArray) (o len : Nat) (out0 : ByteArray) : ByteArray := Id
   return out
 
 /-- Undoes `packZeros` on `b[o, o + len)`. The result has `size` bytes if the input was well formed (and not otherwise). -/
+def zeroRun : ByteArray := Id.run do
+  let mut z := ByteArray.emptyWithCapacity 128
+  for _ in [0:128] do
+    z := z.push 0
+  return z
+
 def unpackZeros (b : ByteArray) (o len size : Nat) : ByteArray := Id.run do
   let stop := o + len
   let mut out := ByteArray.emptyWithCapacity (size + 8)
@@ -102,8 +108,7 @@ def unpackZeros (b : ByteArray) (o len size : Nat) : ByteArray := Id.run do
     else
       if out.size + (c - 127) > size then
         return ByteArray.empty
-      for _ in [0:c - 127] do
-        out := out.push 0
+      out := zeroRun.copySlice 0 out out.size (c - 127)
       i := i + 1
   return out
 

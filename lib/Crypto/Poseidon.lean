@@ -103,6 +103,27 @@ def parameters (width : Nat) : Parameters := Id.run do
       matrix := matrix.push (Mont.inv f (Mont.addMod modulus drawn[i]! drawn[width + j]!))
   return ⟨width, partials, constants, matrix⟩
 
+-- Generating a set of constants takes far longer than hashing with it, so each is made once, when first used.
+def parameters2 : Parameters := parameters 2
+def parameters3 : Parameters := parameters 3
+def parameters4 : Parameters := parameters 4
+def parameters5 : Parameters := parameters 5
+def parameters6 : Parameters := parameters 6
+def parameters7 : Parameters := parameters 7
+def parameters8 : Parameters := parameters 8
+def parameters9 : Parameters := parameters 9
+def parameters10 : Parameters := parameters 10
+def parameters11 : Parameters := parameters 11
+def parameters12 : Parameters := parameters 12
+def parameters13 : Parameters := parameters 13
+
+/-- The constants for a state of 2 to 13 numbers. -/
+def parametersFor (width : Nat) : Parameters :=
+  if width == 2 then parameters2 else if width == 3 then parameters3 else if width == 4 then parameters4
+  else if width == 5 then parameters5 else if width == 6 then parameters6 else if width == 7 then parameters7
+  else if width == 8 then parameters8 else if width == 9 then parameters9 else if width == 10 then parameters10
+  else if width == 11 then parameters11 else if width == 12 then parameters12 else parameters13
+
 def fifth (f : Mont.Field) (x : Mont.Num) : Mont.Num :=
   let x2 := Mont.mul f x x
   Mont.mul f (Mont.mul f x2 x2) x
@@ -152,7 +173,7 @@ def hash (inputs : Array ByteArray) (bigEndian : Bool) : ByteArray := Id.run do
     if Mont.atLeast v modulus then
       return ByteArray.empty
     state := state.push (f.enter v)
-  let out := permute (parameters (inputs.size + 1)) state
+  let out := permute (parametersFor (inputs.size + 1)) state
   return Mont.toBytes (f.leave out[0]!) bigEndian
 
 end Poseidon

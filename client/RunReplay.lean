@@ -47,6 +47,14 @@ def fail (message : String) : IO Unit := do
 structure World where
   shards : Array Accounts.Shard
   overlay : Accounts.Shard
+  /-- Accounts read or written lately, as they are now, found by address (`Sbpf.accountAt`): most of what a
+  block touches was touched by the block before it. -/
+  slots : Array UInt64
+  held : Array Sbpf.Account
+  heldBytes : Nat
+  /-- For each account held: what it adds to the lattice hash as it is now, where that has been worked
+  out (empty where it has not, or the account has changed since). -/
+  hashes : Array ByteArray
 
 def absent (key : ByteArray) : Sbpf.Account := ⟨key, Sbpf.systemProgram, 0, ByteArray.empty, false⟩
 
@@ -56,6 +64,9 @@ def ofRecord (r : ByteArray) : Sbpf.Account :=
 
 /-- The account at `key` as of now: what a replayed block left there, or else what the snapshot holds. `pending` is the unwritten end of the overlay's log. -/
 def World.get (w : World) (pending : ByteArray) (key : ByteArray) : IO Sbpf.Account := do
+  let at_ := Sbpf.accountAt w.slots w.held key
+  if at_ != Sbpf.notFound then
+    return w.held[at_]!
   let (_, loc) ← w.overlay.locate pending key 0
   if loc != Accounts.none_ then
     return ofRecord (← w.overlay.recordAt pending loc)
@@ -65,12 +76,50 @@ def World.get (w : World) (pending : ByteArray) (key : ByteArray) : IO Sbpf.Acco
     return absent key
   return ofRecord (← shard.recordAt ByteArray.empty found)
 
+def heldSlots : Nat := 524288
+
+/-- Remembers an account as it is now. When too much is held, everything is forgotten and it starts over. -/
+def World.keep (w : World) (a : Sbpf.Account) : World :=
+  let ⟨shards, overlay, slots, held, bytes, hashes⟩ := w
+  if held.size >= 150000 || bytes > 3000000000 then
+    let empty : Array Sbpf.Account := Array.emptyWithCapacity 1024
+    let fresh := empty.push a
+    let none : Array ByteArray := Array.emptyWithCapacity 1024
+    ⟨shards, overlay, Sbpf.accountLink (Array.replicate heldSlots 0) fresh a.key 0, fresh, a.data.size, none.push ByteArray.empty⟩
+  else
+    let at_ := Sbpf.accountAt slots held a.key
+    if at_ != Sbpf.notFound then ⟨shards, overlay, slots, held.set! at_ a, bytes + a.data.size, hashes.set! at_ ByteArray.empty⟩
+    else ⟨shards, overlay, Sbpf.accountLink slots held a.key held.size, held.push a, bytes + a.data.size, hashes.push ByteArray.empty⟩
+
+/-- What the account at `key` adds to the lattice hash, if that is known for its present state (else empty). -/
+def World.hashOf (w : World) (key : ByteArray) : ByteArray :=
+  let at_ := Sbpf.accountAt w.slots w.held key
+  if at_ != Sbpf.notFound then w.hashes[at_]! else ByteArray.empty
+
+/-- Notes what the account at `key`, as it is now, adds to the lattice hash. -/
+def World.noteHash (w : World) (key : ByteArray) (c : ByteArray) : World :=
+  let at_ := Sbpf.accountAt w.slots w.held key
+  if at_ == Sbpf.notFound then w
+  else
+    let ⟨shards, overlay, slots, held, bytes, hashes⟩ := w
+    ⟨shards, overlay, slots, held, bytes, hashes.set! at_ c⟩
+
+/-- `get`, remembering what was read. -/
+def World.fetch (w : World) (pending : ByteArray) (key : ByteArray) : IO (World × Sbpf.Account) := do
+  let at_ := Sbpf.accountAt w.slots w.held key
+  if at_ != Sbpf.notFound then
+    let a := w.held[at_]!
+    return (w, a)
+  let a ← w.get pending key
+  return (w.keep a, a)
+
 /-- Files a new version of an account in the overlay. Returns the world and the record, which the caller appends to `pending`. -/
 def World.put (w : World) (pending : ByteArray) (a : Sbpf.Account) (slot : UInt64) : IO (World × ByteArray) := do
   let r := Accounts.record (a.key ++ a.owner ++ a.data) 0 32 a.lamports Accounts.noRent slot a.executable 64 a.data.size
   let (entry, loc) ← w.overlay.locate pending a.key 0
   let overlay ← w.overlay.point entry (loc == Accounts.none_) (Accounts.Shard.keyOf r 0) (w.overlay.flushed + pending.size.toUInt64)
-  return ({ w with overlay := overlay }, r)
+  let filed : World := { w with overlay := overlay }
+  return (filed.keep a, r)
 
 /-- The system calls a program file names that the machine does not provide (for diagnosis). -/
 def missingCalls (elf : ByteArray) (found0 : String) : String := Id.run do
@@ -241,7 +290,7 @@ def main : IO Unit := do
   let overlay ← Accounts.Shard.create s!"{stateDir}/replay" 0 seed
   if overlay.failed then
     fail s!"cannot create the overlay in {stateDir}/replay"
-  let mut world : World := ⟨shards, overlay⟩
+  let mut world : World := ⟨shards, overlay, Array.replicate heldSlots 0, Array.emptyWithCapacity 1024, 0, Array.emptyWithCapacity 1024⟩
   let mut pending := ByteArray.emptyWithCapacity 4300000
   -- ---- what the bank carries from block to block
   let mut slot := manifest.slot
@@ -261,6 +310,8 @@ def main : IO Unit := do
   if first != slot + 1 then
     fail s!"the state is that of slot {slot}: the next block to execute is {slot + 1}"
   IO.println s!"state        slot {slot}, bank hash {Base58.encode bankHash}"
+  let mut rankedOrder : Array Snapshot.Voter := Array.emptyWithCapacity 0
+  let mut rankedEpoch : UInt64 := 0
   for n in [0:count] do
     let parent := slot
     slot := parent + 1
@@ -280,6 +331,9 @@ def main : IO Unit := do
     let mut usKeep : UInt64 := 0
     -- every account this block changes, as it was before the block
     let mut touched : Array Sbpf.Account := Array.emptyWithCapacity 4096
+    let mut touchedSlots : Array UInt64 := Array.replicate 65536 0
+    -- what each of them added to the lattice hash, where the last block to change it left that on record
+    let mut touchedHashes : Array ByteArray := Array.emptyWithCapacity 4096
     -- ---- a new bank: the parent's hash joins the recent slot hashes, and the clock moves to this slot
     let oldHashes ← world.get pending Sbpf.slotHashesSysvar
     let newHashes := { oldHashes with data := slotHashesWith oldHashes.data parent bankHash }
@@ -288,7 +342,9 @@ def main : IO Unit := do
     let newClock := { oldClock with data := clockData slot (Wire.u64 oldClock.data 8) epoch (epoch + 1) (Wire.u64 oldClock.data 32) }
     for a in #[newHashes, newClock] do
       let was ← world.get pending a.key
+      touchedSlots := Sbpf.accountLink touchedSlots touched was.key touched.size
       touched := touched.push was
+      touchedHashes := touchedHashes.push (world.hashOf was.key)
       let (next, r) ← world.put pending a slot
       world := next
       pending := pending ++ r
@@ -324,7 +380,9 @@ def main : IO Unit := do
               keys := keys.push (table.data.extract at_ (at_ + 32))
       let named := accounts.size
       for key in keys do
-        accounts := accounts.push (← world.get pending key)
+        let (remembering, a) ← world.fetch pending key
+        world := remembering
+        accounts := accounts.push a
       if lines then
         IO.println s!"begin {t}"
       if timing then
@@ -371,12 +429,10 @@ def main : IO Unit := do
         if lines then
           balances := if k == 0 then toString now.lamports else s!"{balances},{now.lamports}"
         if !(same was now) then
-          let mut seen := false
-          for b in touched do
-            if b.key == was.key then
-              seen := true
-          if !seen then
+          if Sbpf.accountAt touchedSlots touched was.key == Sbpf.notFound then
+            touchedSlots := Sbpf.accountLink touchedSlots touched was.key touched.size
             touched := touched.push was
+            touchedHashes := touchedHashes.push (world.hashOf was.key)
           let (next, r) ← world.put pending now slot
           world := next
           pending := pending ++ r
@@ -463,7 +519,11 @@ def main : IO Unit := do
       let about := if pass == 0 then certs.rewardSlot else certs.finalSlot
       if about != 0 then
         let stakes := stakesOf manifest (if manifest.slotsPerEpoch == 0 then 0 else about / manifest.slotsPerEpoch)
-        let ranked := Alpenglow.ranks stakes.voters
+        -- (the validators in order: the same for every block of an epoch)
+        if stakes.epoch != rankedEpoch || rankedOrder.size == 0 then
+          rankedOrder := Alpenglow.ranks stakes.voters
+          rankedEpoch := stakes.epoch
+        let ranked := rankedOrder
         -- when the slot in question ended, counted back from when this block was produced (slots are 200 ms)
         let nanos := block.producedAt - 200000000 * (slot - about)
         let inflation ← world.get pending voteRewardAccount
@@ -555,12 +615,10 @@ def main : IO Unit := do
         closing := closing.push (absent incinerator)
     for a in closing do
       let was ← world.get pending a.key
-      let mut seen := false
-      for b in touched do
-        if b.key == a.key then
-          seen := true
-      if !seen then
+      if Sbpf.accountAt touchedSlots touched a.key == Sbpf.notFound then
+        touchedSlots := Sbpf.accountLink touchedSlots touched a.key touched.size
         touched := touched.push was
+        touchedHashes := touchedHashes.push (world.hashOf a.key)
       let (next, r) ← world.put pending a slot
       world := next
       pending := pending ++ r
@@ -571,10 +629,14 @@ def main : IO Unit := do
     let usFooter := (← Sys.nowUs) - mark
     mark ← Sys.nowUs
     -- ---- the lattice hash moves by exactly what changed
-    for was in touched do
+    for k in [0:touched.size] do
+      let was := touched[k]!
       let now ← world.get pending was.key
-      sum := LtHash.mixAccount sum was.lamports was.data was.executable was.owner was.key true
-      sum := LtHash.mixAccount sum now.lamports now.data now.executable now.owner now.key false
+      let before := if touchedHashes[k]!.size == 2048 then touchedHashes[k]!
+        else LtHash.contribution was.lamports was.data was.executable was.owner was.key
+      let after := LtHash.contribution now.lamports now.data now.executable now.owner now.key
+      sum := LtHash.addBytes (LtHash.addBytes sum before true) after false
+      world := world.noteHash now.key after
     if lines then
       for was in touched do
         let now ← world.get pending was.key

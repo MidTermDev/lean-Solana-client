@@ -40,15 +40,45 @@ def accountInput (lamports : UInt64) (data : ByteArray) (executable : Bool) (own
   b := b.push (if executable then 1 else 0)
   return b ++ owner ++ pubkey
 
-/-- Adds to `sum` (or removes from it) the lattice hash of the input whose BLAKE3 root is `node`. -/
-def mixNode (sum : Array UInt64) (node : Blake3.Node) (remove : Bool) : Array UInt64 := Id.run do
+/-- Adds to `sum` (or removes from it) the lattice hash of the input whose BLAKE3 root is `node`. With
+`wide`, the 32 blocks of output are made sixteen at a time. -/
+def mixNodeBy (sum : Array UInt64) (node : Blake3.Node) (remove wide : Bool) : Array UInt64 := Id.run do
   let mut out := sum
+  if wide then
+    let mut f := Blake3.Wide.template
+    for half in [0:2] do
+      f := Blake3.Wide.output f node (16 * half).toUInt64
+      for j in [0:128] do
+        let lane := Fast.le64 f (2560 + 8 * j)
+        let at_ := 128 * half + j
+        out := out.set! at_ (if remove then sub4 out[at_]! lane else add4 out[at_]! lane)
+    return out
   for k in [0:32] do
     let w := node.output k.toUInt64
     for j in [0:8] do
       let lane := w[2 * j]!.toUInt64 ||| (w[2 * j + 1]!.toUInt64 <<< 32)
       let at_ := 8 * k + j
       out := out.set! at_ (if remove then sub4 out[at_]! lane else add4 out[at_]! lane)
+  return out
+
+def mixNode (sum : Array UInt64) (node : Blake3.Node) (remove : Bool) : Array UInt64 :=
+  mixNodeBy sum node remove Fast.quick
+
+/-- What an account adds to the sum: 2048 bytes (1024 sixteen-bit numbers), or nothing at all for an
+account with no lamports. Worth keeping: when the account next changes, this is what has to be taken out
+again, and it need not be worked out twice. -/
+def contribution (lamports : UInt64) (data : ByteArray) (executable : Bool) (owner pubkey : ByteArray) : ByteArray :=
+  if lamports == 0 then ByteArray.empty
+  else (Blake3.rootNode (accountInput lamports data executable owner pubkey)).bytesBy 2048 Fast.quick
+
+/-- Adds a `contribution` to the sum, or removes it. -/
+def addBytes (sum : Array UInt64) (c : ByteArray) (remove : Bool) : Array UInt64 := Id.run do
+  if c.size != 2048 then
+    return sum
+  let mut out := sum
+  for i in [0:256] do
+    let lane := Fast.le64 c (8 * i)
+    out := out.set! i (if remove then sub4 out[i]! lane else add4 out[i]! lane)
   return out
 
 /-- Adds an account to the sum, or removes it. An account with no lamports does not exist, and counts for nothing. -/

@@ -57,7 +57,7 @@ It **replays mainnet blocks** against that state and arrives at the bank hashes 
 
 ## Quick start
 
-**Just run it.** Every release ships the client as a single 879 KB static binary (Linux, x86-64):
+**Just run it.** Every release ships the client as a single 995 KB static binary (Linux, x86-64):
 
 ```sh
 curl -LO https://github.com/MidTermDev/lean-Solana-client/releases/latest/download/leansol-x86_64-linux
@@ -409,7 +409,7 @@ slot 474362832: 250 transactions (45 failed), 281 signatures, 8,798,485 compute 
 
 Those are the 600 mainnet blocks after the snapshot, two minutes of the chain: 204,532 transactions, 7.1 billion compute units of other people's programs (Jupiter, Raydium, Orca, pump, the token programs, zero-knowledge verifiers, passkey wallets, hand-written assembly), every one of them run by a virtual machine written in Lean, and **600 bank hashes out of 600** equal to the ones mainnet's leaders signed. Each depends on the one before it, so the last one vouches for all of it: 825,698 account changes, none of them off by a lamport or a byte.
 
-**It is not yet fast enough.** A block takes about 1.2 seconds on one core, where mainnet makes one every 200 ms: three quarters of that is running the transactions, a tenth the lattice hash. Nor does it check the transactions' signatures while replaying. That is the next piece of work.
+**Almost at the chain's pace.** The 600 blocks, which the chain made in 120 seconds, replay in 168 on one core: 0.28 seconds a block where mainnet takes 0.2. It was 1.2 seconds when the hashes first matched. What changed is told under [How it works](#how-it-works): the compiler learned to keep a loop's busiest values in registers, to store into an array where it lies, and to emit **AVX-512**, with which the lattice hash now runs BLAKE3 sixteen blocks at a time; the virtual machine decodes a program once instead of at every instruction; accounts a block touches are kept in memory with what each adds to the lattice hash; and "is this address on the curve?", asked for every derived address, is answered by a Jacobi symbol instead of an exponentiation. Signatures are not yet checked while replaying, and the rest of the gap is the next piece of work.
 
 What a block does, beyond its transactions, each part of which had to be exactly right for the hash to match:
 
@@ -768,6 +768,22 @@ Destructuring a value you own hands you its fields for free, so the client's has
 -- rotr e 6   compiles to:   mov rax, [rbp-80] ; ror eax, 6
 ```
 
+**Registers, for the few values that matter.** Every local has a slot in the stack frame, and most stay there. The five busiest plain numbers of a function (counted with loops weighing more) live in registers instead, the callee-saved ones, so calls need no care; a value just written is not read back from memory; and `x := x.set! i v` on an array nobody else holds stores the element where it is. A loop with a hundred branches gives use counts that say little, so the program may say which values its inner loop turns on:
+
+```lean
+let mut pc := Fast.hotNat p.entry      -- keep this one in a register
+```
+
+**Vector instructions, defined in Lean.** [`lib/Fast.lean`](lib/Fast.lean) is a short list of functions that `leanc` knows by name and compiles to a few instructions each: reading a number of 2, 4 or 8 bytes from a byte array (one `mov`), the high half of a 64-bit product (one `mul`), and AVX-512 operations on a byte array treated as a file of 64-byte registers:
+
+```lean
+let f := Fast.add32x3 f 0 0 4 16     -- register 0 += register 4 + register 16, sixteen 32-bit numbers at once
+let f := Fast.xorRor32 f 12 12 0 16  -- register 12 := (register 12 xor register 0) rotated right by 16
+-- each compiles to:  vmovdqu64 zmm0,[..] ; vpaddd/vpxord zmm0,zmm0,[..] ; ... ; vmovdqu64 [..],zmm0
+```
+
+Each of them is also *defined* there, in plain Lean, and that definition is what it means: the official toolchain runs it, and [`tests/fast.lean`](tests/fast.lean) requires the instruction and the definition to agree, bit for bit. So the sixteen-way BLAKE3 in [`lib/Crypto/Blake3.lean`](lib/Crypto/Blake3.lean) is Lean like the rest, checked like the rest, and runs as `vpaddd` and `vprord`. Code asks `Fast.quick` whether the processor has the instructions and takes the portable path if not.
+
 ### 2. IPC on a raw futex
 
 The client is several processes (see below). They communicate through single-producer/single-consumer rings in `MAP_SHARED` memory, set up before `fork`. Sending a message is a `rep movsb` into the ring plus one `lock xadd`. **No syscall happens unless the receiver is actually asleep**, and then it is exactly one `FUTEX_WAKE`.
@@ -875,7 +891,7 @@ make oracle        # Agave's runtime must print what five of the tests print  (n
 
 ```console
 $ make lean-check
-Build completed successfully (126 jobs).
+Build completed successfully (128 jobs).
 ok    anchor (official Lean agrees)
 ok    basics (official Lean agrees)
 ok    blake3 (official Lean agrees)
@@ -885,6 +901,7 @@ ok    cpi (official Lean agrees)
 ok    curves (official Lean agrees)
 ok    ed25519 (official Lean agrees)
 ok    erasure (official Lean agrees)
+ok    fast (official Lean agrees)
 ok    footer (official Lean agrees)
 ok    fuzz_wire (official Lean agrees)
 ok    inplace (native only)
@@ -903,7 +920,7 @@ ok    transaction (official Lean agrees)
 ok    txformat (official Lean agrees)
 ok    versions (official Lean agrees)
 ok    zstd (official Lean agrees)
-27 passed, 0 failed
+28 passed, 0 failed
 ```
 
 The tests not marked "official Lean agrees" either use raw syscalls (`fork`, futexes), which exist only as machine code, or check behaviour specific to `leanc` (aborting on a bounds error, in-place updates).
@@ -914,25 +931,26 @@ Measured on one machine (Xeon Gold 5515+), single core unless noted. They are he
 
 | | |
 |---|---|
-| `leanc` source | about 5,800 lines of C |
-| `leanc` binary | 143 KB, static, zero undefined symbols |
-| Lean in this repo | 15,470 lines: runtime 604, libraries 10,590, client 4,290 |
-| Compiling the whole client | **under 30 ms** |
-| `leansol` binary | **879 KB**, static |
-| Full build from a fresh clone | about 40 ms |
+| `leanc` source | about 6,200 lines of C |
+| `leanc` binary | 153 KB, static, zero undefined symbols |
+| Lean in this repo | 16,450 lines: runtime 657, libraries 11,440, client 4,350 |
+| Compiling the whole client | **about 0.1 s** |
+| `leansol` binary | **995 KB**, static |
+| Full build from a fresh clone | about 0.1 s |
 | Ed25519 verification (Lean, compiled by `leanc`) | about 2,950 signatures/s per core |
 | SHA-256 (Lean, compiled by `leanc`) | about 72 MB/s |
 | Zstandard decompression (Lean, compiled by `leanc`) | about 320 MB/s of output on snapshot-like data |
 | Loading a snapshot: decompress, file, hash every account | 3 million accounts (3.65 GB) in 20 s with 16 workers |
 | Mainnet's snapshot, from a validator, verified | 1,245,863,525 accounts (498 GiB unpacked) in 90 minutes; 241 GB on disk |
 | An epoch's leader schedule (432,000 slots, 659 validators) | 15 ms |
-| Replaying a mainnet block (about 340 transactions, 12 million compute units, 1,400 accounts changed) | about 1.2 s |
+| Replaying a mainnet block (about 340 transactions, 12 million compute units, 1,400 accounts changed) | **0.28 s** (the chain: 0.2 s) |
+| The same before the compiler had registers and vector instructions | 1.2 s |
 | Checking a Groth16 proof (four pairings on alt_bn128) | about 0.5 s |
 | Futex ring, two processes | 200,000 messages in 0.16 s |
 | Mainnet, 45 s after start | 4,005 nodes, 40,119 signatures verified, 0 bad |
 | Mainnet, steady state | about 12% of a core per verify tile, 7% for gossip; memory flat |
 
-`leanc` generates simple code: values live in the stack frame, there is no register allocator. It is fast enough for this job with room to spare, and nowhere near a production compiler. The same SHA-256 test takes the official Lean *interpreter* about 200 times longer, which is the only fair comparison available without pulling in a C toolchain.
+`leanc` generates simple code: values live in the stack frame, except the five busiest numbers of each function, which get registers. It is fast enough for this job, and nowhere near a production compiler. The same SHA-256 test takes the official Lean *interpreter* about 200 times longer, which is the only fair comparison available without pulling in a C toolchain.
 
 ## Repository map
 
@@ -942,9 +960,10 @@ leanc/            the compiler's source (C, freestanding)
   lex.c parse.c     Lean's grammar, including the column-sensitive parts
   elab.c            type checker; inlining and constant folding
   live.c            ownership analysis: which uses can move instead of copy
-  gen.c             x86-64 encoder, reference counting, ELF writer
+  gen.c             x86-64 encoder (with AVX-512), registers, reference counting, ELF writer
 rt/Rt.lean        the runtime, in Lean: allocator, arrays, strings, panics
 lib/
+  Fast.lean         what the compiler does in one instruction, defined in Lean: wide loads, vector operations
   Sys.lean          Linux syscalls: sockets, fork, mmap, futex, clocks
   Ipc.lean          futex-backed rings and counters in shared memory
   Crypto/           SHA-256, SHA-512, Ed25519 (field, curve, scalars, sign, verify), Reed–Solomon, BLAKE3,
@@ -978,7 +997,7 @@ lakefile.toml     lets the official toolchain check all of the above
 
 Being straightforward about what this is:
 
-- **Not a validator.** It verifies gossip; it receives and verifies every block; it holds mainnet's state as of a snapshot, verified account by account; and it has replayed the 600 blocks after that snapshot to the bank hashes mainnet's leaders signed. Every block it was given matched, but 600 blocks are two minutes: some system calls no program used in them are still missing (Ristretto, big modular exponentiation, the little-endian and twist forms of the alt_bn128 calls), as are the vote and stake programs' rarer instructions and epoch boundaries. It replays a block in about 1.2 seconds, six times too slowly to keep up, from files rather than from the live feed. It does not vote.
+- **Not a validator.** It verifies gossip; it receives and verifies every block; it holds mainnet's state as of a snapshot, verified account by account; and it has replayed the 600 blocks after that snapshot to the bank hashes mainnet's leaders signed. Every block it was given matched, but 600 blocks are two minutes: some system calls no program used in them are still missing (Ristretto, big modular exponentiation, the little-endian and twist forms of the alt_bn128 calls), as are the vote and stake programs' rarer instructions and epoch boundaries. It replays a block in 0.28 seconds where the chain makes one in 0.2: close, not there, and without checking signatures; and it replays from files rather than from the live feed. It does not vote.
 - **Blocks run, from files.** Signed transactions are applied with fees, budgets, rent checks, every sysvar and every version of sBPF, and programs can be deployed and upgraded through the loader. Blocks of mainnet [replay](#replay) too, from files; the vote program's instructions are still absent (mainnet no longer votes with transactions).
 - **Listen-only.** It answers pings but does not serve pull requests or push records to others.
 - **A simple store.** Records are remembered by hash, up to 400,000; when that fills (every several minutes on mainnet) the hash set is flushed and refilled rather than aged out record by record. The node table survives the flush.
@@ -986,7 +1005,7 @@ Being straightforward about what this is:
 - **The compiler is not self-hosted.** Its source is C. Nothing in the build uses a C toolchain, because a prebuilt compiler is checked in, but changing the compiler does.
 - **A subset of Lean.** No type classes or higher-order functions is a real restriction; the libraries here are written around it.
 - **`Nat` is 64 bits** (overflow traps rather than wraps; see above).
-- **Young code.** The compiler has been exercised by about 15,470 lines of Lean and the test suite, not by years of users. The Ed25519 implementation is variable-time, which is fine for verifying public data and not what you want around long-lived secret keys.
+- **Young code.** The compiler has been exercised by about 16,450 lines of Lean and the test suite, not by years of users. The Ed25519 implementation is variable-time, which is fine for verifying public data and not what you want around long-lived secret keys.
 - **The network moves.** Wire formats follow agave's current gossip code; when the protocol changes, this needs to follow.
 
 ## How this relates to lean-svm
@@ -1003,7 +1022,7 @@ They meet at the `.so` file: lean-svm writes it, the virtual machine here runs i
 Write them with [lean-svm](https://github.com/aeyakovenko/lean-svm), and run them locally with `leansol run`, including ones that use tokens. It can build, sign and apply transactions locally, but it does not send them: deploying needs the standard Solana tools.
 
 **Is this the Lean theorem prover's language, or just "lean" as in small?**
-Both. The client is written in Lean 4, the language of the theorem prover, and the result is also small: an 879 KB static binary.
+Both. The client is written in Lean 4, the language of the theorem prover, and the result is also small: a 995 KB static binary.
 
 **Is there really no C toolchain involved?**
 Not in building or running anything here: `make` uses the checked-in `leanc` binary, which compiles Lean straight to an ELF. The compiler's *source* is C, so changing the compiler itself needs a C compiler (`make from-c`). The remaining step is for `leanc` to be written in Lean and compile itself; its subset is not there yet.

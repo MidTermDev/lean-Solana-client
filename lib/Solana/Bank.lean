@@ -112,11 +112,7 @@ def Bank.set (bank : Bank) (account : Sbpf.Account) : Bank := Id.run do
 def Bank.addProgram (bank : Bank) (id : ByteArray) (program : Sbpf.Program) : Bank :=
   ({ bank with machine := bank.machine.add id program }).set (Sbpf.programAccount id)
 
-def hasProgram (bank : Bank) (id : ByteArray) : Bool := Id.run do
-  for known in bank.machine.ids do
-    if known == id then
-      return true
-  return false
+def hasProgram (bank : Bank) (id : ByteArray) : Bool := bank.machine.find id != Sbpf.notFound
 
 /-- Programs live in accounts. For each of `keys` that is a program account
 of the loader, the code in its program data account is loaded and registered,
@@ -612,9 +608,9 @@ def Bank.process (bank : Bank) (tx : Tx.Transaction) (verify : Bool) : Receipt :
             -- its size: as noted when the program was read, or the account's own if it is at hand
             let mut size := (bank.get holder).data.size
             if find bank.accounts holder == Sbpf.notFound then
-              for k in [0:bank.machine.ids.size] do
-                if bank.machine.ids[k]! == key then
-                  size := bank.machine.programs[k]!.holderSize
+              let known := bank.machine.find key
+              if known != Sbpf.notFound then
+                size := bank.machine.programs[known]!.holderSize
             if size != 0 then
               loaded := loaded + 64 + size.toUInt64
       if loaded > loadedLimit then

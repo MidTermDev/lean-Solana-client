@@ -11,3 +11,5 @@ an account without lamports is no account: true
 each field matters: lamports true, executable true, owner true, data true
 the same from a buffer: true
 as bytes and back: true; nothing hashes to be2a8de3dcf46c94ce85cdc8e07ac308f4d8a95490d956c38d780fd610db0813
+sixteen at a time: 8 of 8 inputs hash the same, to 32 bytes, to 2048 and into the lattice
+what an account adds, kept and taken out again: 2048 bytes; true; nothing for no account: 0 bytes

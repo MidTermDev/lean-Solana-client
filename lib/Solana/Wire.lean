@@ -1,3 +1,5 @@
+import Fast
+
 /-!
 # Bounds-checked wire reading and writing
 
@@ -23,17 +25,15 @@ def adv (b : ByteArray) (o n : Nat) : Nat :=
   else if o + n <= b.size then o + n
   else bad
 
-def u8 (b : ByteArray) (o : Nat) : UInt64 :=
+@[inline] def u8 (b : ByteArray) (o : Nat) : UInt64 :=
   if o < b.size then b[o]!.toUInt64 else 0
 
-def u16 (b : ByteArray) (o : Nat) : UInt64 :=
-  u8 b o ||| (u8 b (o + 1) <<< 8)
+-- Little-endian numbers; bytes past the end read as zero. (`Fast`: one instruction each when compiled.)
+@[inline] def u16 (b : ByteArray) (o : Nat) : UInt64 := Fast.le16 b o
 
-def u32 (b : ByteArray) (o : Nat) : UInt64 :=
-  u16 b o ||| (u16 b (o + 2) <<< 16)
+@[inline] def u32 (b : ByteArray) (o : Nat) : UInt64 := Fast.le32 b o
 
-def u64 (b : ByteArray) (o : Nat) : UInt64 :=
-  u32 b o ||| (u32 b (o + 4) <<< 32)
+@[inline] def u64 (b : ByteArray) (o : Nat) : UInt64 := Fast.le64 b o
 
 /-- Length in bytes of the LEB128 varint at `o`, or 0 if it is truncated or too long. -/
 def varintLen (b : ByteArray) (o : Nat) : Nat := Id.run do
