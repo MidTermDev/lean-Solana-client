@@ -7,6 +7,7 @@ import Solana.Block
 import Solana.Accounts
 import Solana.Snapshot
 import Solana.LtHash
+import Solana.LeaderSchedule
 import RunBlock
 
 /-!
@@ -105,6 +106,43 @@ def slotHashesWith (old : ByteArray) (slot : UInt64) (hash : ByteArray) : ByteAr
 def clockData (slot epochStart epoch leaderEpoch unix : UInt64) : ByteArray :=
   u64 slot ++ u64 epochStart ++ u64 epoch ++ u64 leaderEpoch ++ u64 unix
 
+/-- The (deprecated, still maintained) `RecentBlockhashes` sysvar with a new blockhash at its front: a count, then up to 150 (hash, lamports per signature) pairs, newest first, in a buffer of 6008 bytes. -/
+def recentBlockhashesWith (old blockhash : ByteArray) (lamportsPerSignature : UInt64) : ByteArray := Id.run do
+  let count := (Wire.u64 old 0).toNat
+  let kept := if count >= 150 then 149 else count
+  let mut b := u64 (kept + 1).toUInt64 ++ blockhash ++ u64 lamportsPerSignature
+  b := old.copySlice 8 b b.size (40 * kept)
+  return Sbpf.zeros b (6008 - b.size)
+
+/-- The `SlotHistory` sysvar with one more slot marked as having a block: a
+bit for each of the last 1,048,576 slots, and the next slot expected. Slots
+skipped since the last block are cleared. Layout: a presence byte, the
+number of 64-bit words (16,384), the words, the number of bits, the next slot. -/
+def slotHistoryWith (old : ByteArray) (slot : UInt64) : ByteArray := Id.run do
+  let mut b := old
+  let next := Wire.u64 old 131089
+  if slot > next && slot - next >= 1048576 then
+    for i in [9:131081] do
+      b := b.set! i 0
+  else
+    let mut skipped := next
+    while skipped < slot do
+      let at_ := 9 + 8 * ((skipped % 1048576) / 64).toNat
+      let word := Wire.u64 b at_ &&& ~~~((1 : UInt64) <<< ((skipped % 1048576) % 64))
+      b := Sbpf.storeAt b at_ 8 word
+      skipped := skipped + 1
+  let at_ := 9 + 8 * ((slot % 1048576) / 64).toNat
+  b := Sbpf.storeAt b at_ 8 (Wire.u64 b at_ ||| ((1 : UInt64) <<< ((slot % 1048576) % 64)))
+  return Sbpf.storeAt b 131089 8 (slot + 1)
+
+def recentBlockhashesSysvar : ByteArray := Base58.decode "SysvarRecentB1ockHashes11111111111111111111"
+def slotHistorySysvar : ByteArray := Base58.decode "SysvarS1otHistory11111111111111111111111111"
+def incinerator : ByteArray := Base58.decode "1nc1nerator11111111111111111111111111111111"
+def alpenglowFeature : ByteArray := Base58.decode "A1pengvuM6JEcyNuTnMqepBKhwHE3N6PmUrdATGawhJS"
+
+/-- Where the chain keeps its clock to the nanosecond: an address derived from the Alpenglow feature's. -/
+def nanosecondClock : ByteArray := (Sbpf.findProgramAddress #["alpenclock".toUTF8] alpenglowFeature).1
+
 def main : IO Unit := do
   let argc ← Sys.argc
   let mut stateDir := ""
@@ -179,6 +217,7 @@ def main : IO Unit := do
     if manifest.lastHashIndex - Wire.u64 manifest.queue (56 * k + 40) <= 150 then
       recent := recent ++ manifest.queue.extract (56 * k) (56 * k + 32)
   let mut machine := Sbpf.Machine.create ⟨0, 0, 0, 0, 0⟩ 200000
+  let leaderTable := LeaderSchedule.table manifest
   if first == 0 then
     first := slot + 1
   if first != slot + 1 then
@@ -222,6 +261,8 @@ def main : IO Unit := do
     -- ---- the transactions, in order
     let mut signatures : UInt64 := 0
     let mut fees : UInt64 := 0
+    -- of the fees: what was paid per signature (half of it is burned), the rest being priority fees
+    let mut signatureFees : UInt64 := 0
     let mut failedCount := 0
     let mut units : UInt64 := 0
     for t in [0:block.transactions.size] do
@@ -263,6 +304,13 @@ def main : IO Unit := do
         failedCount := failedCount + 1
       if receipt.charged then
         fees := fees + receipt.fee
+        let mut paidFor := tx.signatures.size.toUInt64
+        for ix in msg.instructions do
+          if ix.program < keys.size then
+            let program := keys[ix.program]!
+            if program == Bank.ed25519Program || program == Bank.secp256k1Program || program == Bank.secp256r1Program then
+              paidFor := paidFor + Wire.u8 ix.data 0
+        signatureFees := signatureFees + 5000 * paidFor
       -- what it changed goes to the overlay
       let mut balances := ""
       for k in [0:keys.size] do
@@ -309,8 +357,54 @@ def main : IO Unit := do
         IO.println s!"    [{receipt.error}] [{receipt.why}] {receipt.units} units"
         for line in receipt.logs do
           IO.println s!"    {line}"
+        for f in receipt.frames do
+          let mut refs := ""
+          for mt in f.metas do
+            refs := refs ++ s!" {mt.index}{if mt.signer then "s" else ""}{if mt.writable then "w" else ""}"
+          IO.println s!"    depth {f.depth} {Base58.encode f.program}:{refs} · {Hex.encode (f.data.extract 0 16)}"
+        for k in [0:keys.size] do
+          let found := Bank.find receipt.bank.accounts keys[k]!
+          IO.println s!"    account {k} {Base58.encode keys[k]!} {accounts[named + k]!.lamports} -> {if found == Sbpf.notFound then 0 else receipt.bank.accounts[found]!.lamports}"
         Sys.exit 0
-    -- ---- the block's end (the footer, the fees, the slot history: not complete yet)
+    -- ---- the block's end
+    let mut closing : Array Sbpf.Account := Array.emptyWithCapacity 8
+    -- the footer says when the block was produced: the clock takes the second, and an account keeps the nanoseconds
+    let clockNow ← world.get pending Sbpf.clockSysvar
+    closing := closing.push { clockNow with data := clockData slot (Wire.u64 clockNow.data 8) epoch (epoch + 1) (block.producedAt / 1000000000) }
+    closing := closing.push ⟨nanosecondClock, Sbpf.systemProgram, 946560, u64 block.producedAt, false⟩
+    -- (votes and their rewards, from the footer's certificates: not applied yet)
+    -- the block's hash joins the recent blockhashes
+    let oldRecent ← world.get pending recentBlockhashesSysvar
+    closing := closing.push { oldRecent with data := recentBlockhashesWith oldRecent.data block.blockhash 5000 }
+    -- the fees: half of what was paid per signature is burned, the rest goes to whoever collects for the leader
+    let burned := signatureFees * 50 / 100
+    let deposit := (fees - signatureFees) + (signatureFees - burned)
+    let leader := LeaderSchedule.leaderAt leaderTable slot
+    if deposit != 0 && leader.size == 32 then
+      let collector ← world.get pending leader
+      if collector.owner == Sbpf.systemProgram then
+        closing := closing.push { collector with lamports := collector.lamports + deposit }
+        if lines then
+          IO.println s!"reward {Base58.encode leader} {deposit} {collector.lamports + deposit}"
+    -- this slot had a block
+    let oldHistory ← world.get pending slotHistorySysvar
+    closing := closing.push { oldHistory with data := slotHistoryWith oldHistory.data slot }
+    -- what was sent to the incinerator in this slot is gone
+    let ashes ← world.get pending incinerator
+    for was in touched do
+      if was.key == incinerator && ashes.lamports != 0 then
+        closing := closing.push (absent incinerator)
+    for a in closing do
+      let was ← world.get pending a.key
+      let mut seen := false
+      for b in touched do
+        if b.key == a.key then
+          seen := true
+      if !seen then
+        touched := touched.push was
+      let (next, r) ← world.put pending a slot
+      world := next
+      pending := pending ++ r
     latest := block.blockhash
     recent := recent ++ latest
     if recent.size > 32 * 151 then

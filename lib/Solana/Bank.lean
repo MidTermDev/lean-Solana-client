@@ -68,6 +68,8 @@ structure Receipt where
   bank : Bank
   /-- on a failure inside a program: the machine's own account of it (a diagnostic, not part of the outcome) -/
   why : String
+  /-- every instruction that ran, calls between programs included, in order -/
+  frames : Array Sbpf.Frame
 
 def u64 (v : UInt64) : ByteArray := Wire.putU64 (ByteArray.emptyWithCapacity 8) v
 
@@ -311,7 +313,7 @@ def verifyEd25519 (datas : Array ByteArray) (current : Nat) : UInt64 := Id.run d
 -- ---------------------------------------------------------------- processing
 
 def refuse (bank : Bank) (why : String) : Receipt :=
-  ⟨why, false, 0, 0, 0, Array.emptyWithCapacity 0, ByteArray.empty, bank, ""⟩
+  ⟨why, false, 0, 0, 0, Array.emptyWithCapacity 0, ByteArray.empty, bank, "", Array.emptyWithCapacity 0⟩
 
 /-- Is this one of the programs that are part of the runtime? They are given a
 smaller default compute budget than programs that run as bytecode. -/
@@ -485,22 +487,22 @@ def Bank.process (bank : Bank) (tx : Tx.Transaction) (verify : Bool) : Receipt :
   let bank := bank.withPrograms keys false
   let payer := bank.get keys[0]!
   if payer.lamports == 0 then
-    return ⟨"AccountNotFound", false, fee, 0, limit, Array.emptyWithCapacity 0, ByteArray.empty, bank, ""⟩
+    return ⟨"AccountNotFound", false, fee, 0, limit, Array.emptyWithCapacity 0, ByteArray.empty, bank, "", Array.emptyWithCapacity 0⟩
   -- the payer is a wallet, or a nonce account, which must keep enough to stay alive
   let payerIsNonce := payer.data.size == 80 && Sbpf.nonceKind payer.data == 2
   if payer.owner != Sbpf.systemProgram || (payer.data.size != 0 && !payerIsNonce) then
-    return ⟨"InvalidAccountForFee", false, fee, 0, limit, Array.emptyWithCapacity 0, ByteArray.empty, bank, ""⟩
+    return ⟨"InvalidAccountForFee", false, fee, 0, limit, Array.emptyWithCapacity 0, ByteArray.empty, bank, "", Array.emptyWithCapacity 0⟩
   if payer.lamports < fee || (payerIsNonce && payer.lamports - fee < minimumBalance bank 80) then
-    return ⟨"InsufficientFundsForFee", false, fee, 0, limit, Array.emptyWithCapacity 0, ByteArray.empty, bank, ""⟩
+    return ⟨"InsufficientFundsForFee", false, fee, 0, limit, Array.emptyWithCapacity 0, ByteArray.empty, bank, "", Array.emptyWithCapacity 0⟩
   if !(rentAllowed bank payer.lamports payer.data.size (payer.lamports - fee) payer.data.size) then
-    return ⟨"InsufficientFundsForRent { account_index: 0 }", false, fee, 0, limit, Array.emptyWithCapacity 0, ByteArray.empty, bank, ""⟩
+    return ⟨"InsufficientFundsForRent { account_index: 0 }", false, fee, 0, limit, Array.emptyWithCapacity 0, ByteArray.empty, bank, "", Array.emptyWithCapacity 0⟩
   -- every program named must exist
   for ix in msg.instructions do
     let program := keys[ix.program]!
     if !(program == Sbpf.systemProgram || program == Sbpf.computeBudgetProgram || program == ed25519Program
         || program == Sbpf.loaderId || program == loaderV1 || program == loaderV2 || hasProgram bank program) then
       let why := if (bank.get program).lamports == 0 then "ProgramAccountNotFound" else "InvalidProgramForExecution"
-      return ⟨why, false, fee, 0, limit, Array.emptyWithCapacity 0, ByteArray.empty, bank, ""⟩
+      return ⟨why, false, fee, 0, limit, Array.emptyWithCapacity 0, ByteArray.empty, bank, "", Array.emptyWithCapacity 0⟩
   -- from here on the fee is paid, whatever happens
   let charged := bank.set { payer with lamports := payer.lamports - fee }
 
@@ -570,6 +572,6 @@ def Bank.process (bank : Bank) (tx : Tx.Transaction) (verify : Bool) : Receipt :
     after := after.withPrograms keys true
   -- for whoever is looking into a failure: how the machine stopped, in its own words
   let why := if error == "" then "" else s!"status {st.status}, r0 {st.r0}: {st.detail}"
-  return ⟨error, true, fee, st.units, limit, st.logs, st.returnData, after, why⟩
+  return ⟨error, true, fee, st.units, limit, st.logs, st.returnData, after, why, st.trace⟩
 
 end Bank

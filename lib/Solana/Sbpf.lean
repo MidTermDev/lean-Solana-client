@@ -493,6 +493,23 @@ partial def execute (m : Machine) (st0 : State) (programId : ByteArray) (metas :
               mem := digest.copySlice 0 mem dest 32
             else
               status := accessViolation
+        else if id == sysSecpRecover then
+          -- the public key behind an Ethereum-style signature: a1 the hash, a2 which candidate, a3 the signature, r4 where to put the key
+          units := units + 25000
+          let dest := writable p inputLen regs[4]! 64
+          match readBytes p mem inputLen a1 32, readBytes p mem inputLen a3 64 with
+          | some hash, some signature =>
+            if !(Wire.ok dest) then
+              status := accessViolation
+            else if a2 > 3 then
+              result := 2
+            else
+              let key := Secp256k1.recover hash a2.toNat signature
+              if key.size != 64 then
+                result := 3
+              else
+                mem := key.copySlice 0 mem dest 64
+          | _, _ => status := accessViolation
         else if id == sysClock || id == sysRent || id == sysEpochSchedule || id == sysEpochRewards || id == sysLastRestart then
           -- a sysvar, copied out the way a Rust program holds it in memory
           let bytes := sysvarInMemory m id
