@@ -1,5 +1,7 @@
 import Crypto.Sha256
 import Crypto.Ed25519
+import Crypto.Keccak
+import Crypto.Blake3
 import Encoding.Base58
 import Encoding.Base64
 import Solana.Wire
@@ -100,6 +102,8 @@ def sysEpochSchedule : UInt64 := 25
 def sysEpochRewards : UInt64 := 26
 def sysLastRestart : UInt64 := 27
 def sysEpochStake : UInt64 := 28
+def sysKeccak : UInt64 := 29
+def sysBlake3 : UInt64 := 30
 def sysUnknown : UInt64 := 255
 
 /-- True when the NUL-terminated string at `b[o ..]` equals `name`. -/
@@ -116,6 +120,8 @@ def syscallId (b : ByteArray) (o : Nat) : UInt64 :=
   else if cstrIs b o "sol_memset_" then sysMemset
   else if cstrIs b o "sol_memcmp_" then sysMemcmp
   else if cstrIs b o "sol_sha256" then sysSha256
+  else if cstrIs b o "sol_keccak256" then sysKeccak
+  else if cstrIs b o "sol_blake3" then sysBlake3
   else if cstrIs b o "sol_get_clock_sysvar" then sysClock
   else if cstrIs b o "abort" then sysAbort
   else if cstrIs b o "sol_panic_" then sysPanic
@@ -230,7 +236,13 @@ def syscallNames : Array String := #["sol_log_", "sol_log_64_", "sol_log_pubkey"
   "sol_invoke_signed_c", "sol_invoke_signed_rust", "sol_log_data", "sol_remaining_compute_units",
   "sol_get_epoch_schedule_sysvar", "sol_get_epoch_rewards_sysvar", "sol_get_last_restart_slot", "sol_get_epoch_stake",
   "sol_get_rent_sysvar", "sol_set_return_data", "sol_get_return_data", "sol_get_stack_height", "sol_get_sysvar",
-  "sol_try_find_program_address", "sol_create_program_address", "sol_get_processed_sibling_instruction"]
+  "sol_try_find_program_address", "sol_create_program_address", "sol_get_processed_sibling_instruction",
+  "sol_keccak256", "sol_blake3"]
+
+/-- Every system call Agave's runtime registers (those above, and those this machine does not provide yet). -/
+def allSyscallNames : Array String := #["sol_secp256k1_recover", "sol_curve_validate_point",
+  "sol_curve_group_op", "sol_curve_multiscalar_mul", "sol_curve_pairing_map", "sol_get_fees_sysvar", "sol_alloc_free_",
+  "sol_alt_bn128_group_op", "sol_alt_bn128_compression", "sol_big_mod_exp", "sol_poseidon"]
 
 /-- The system call a hash names, or `sysUnknown`. -/
 def syscallByHash (hash : UInt64) : UInt64 := Id.run do
@@ -282,7 +294,14 @@ def loadStrict (elf : ByteArray) : Program := Id.run do
     if Wire.u8 elf o == 0x85 && Wire.u8 elf (o + 1) >>> 4 == 0 then
       let id := syscallByHash (Wire.u32 elf (o + 4))
       if id == sysUnknown then
-        return Program.failed elf "the program makes a system call this machine does not provide"
+        -- say which: by name if it is one of the runtime's, by its hash otherwise
+        let mut which := s!"with hash {Wire.u32 elf (o + 4)}"
+        for name in allSyscallNames do
+          if murmur3 name.toUTF8 == Wire.u32 elf (o + 4) then
+            which := name
+        -- (not an error until the call is made: programs import calls they do not always use)
+        if which.length > 60 then
+          return Program.failed elf s!"the program makes a system call this machine does not provide ({which})"
       syscalls := syscalls.set! pc id
   return ⟨elf, textOff, count, 0, roSize, ((entry - programStart) / 8).toNat, syscalls, Array.replicate count 0, "", 32768,
     3, roOff, programStart, 0, 0⟩
@@ -314,6 +333,8 @@ def load (image : ByteArray) : Program := Id.run do
   let text := findSection elf shoff shnum strOff ".text"
   if text.size == 0 || text.size % 8 != 0 then
     return Program.failed elf "no .text section"
+  if text.off > elf.size || text.size > elf.size - text.off then
+    return Program.failed elf "the .text section is not inside the file"
   -- everything read-only that a program can address: code and constants
   let mut roLow := text.off
   let mut roHigh := text.off + text.size
@@ -575,6 +596,8 @@ structure Machine where
   /-- the latest blockhash (32 bytes), or empty if there is none -/
   blockhash : ByteArray
   lamportsPerSignature : UInt64
+  /-- for looking into a transaction: stop it after this many compute units, whatever it asked for (0 = no cap) -/
+  cap : UInt64
   deriving Inhabited
 
 /-- Everything an instruction can change. `status` is `finished` (0) while
@@ -627,7 +650,7 @@ def Sysvars.standard : Sysvars :=
   ⟨rent, schedule, zeros ByteArray.empty 81, zeros ByteArray.empty 8, zeros ByteArray.empty 8, 0⟩
 
 def Machine.create (clock : Clock) (budget : UInt64) : Machine :=
-  ⟨Array.emptyWithCapacity 4, Array.emptyWithCapacity 4, clock, budget, Sysvars.standard, 32768, ByteArray.empty, 5000⟩
+  ⟨Array.emptyWithCapacity 4, Array.emptyWithCapacity 4, clock, budget, Sysvars.standard, 32768, ByteArray.empty, 5000, 0⟩
 
 /-- The smallest balance at which an account with `size` bytes of data is
 exempt from rent: (128 + size) bytes at the rate in the Rent sysvar. -/

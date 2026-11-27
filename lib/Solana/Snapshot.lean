@@ -120,6 +120,10 @@ structure Manifest where
   leader : ByteArray
   /-- recent blockhashes still valid for transactions: count -/
   blockhashes : Nat
+  /-- the queue of recent blockhashes: 56 bytes each (hash, lamports per signature, position, timestamp) -/
+  queue : ByteArray
+  /-- the position of the newest blockhash in the queue's numbering -/
+  lastHashIndex : UInt64
   /-- vote accounts and stake delegations in the bank's current stakes -/
   voteAccounts : Nat
   delegations : Nat
@@ -133,7 +137,7 @@ structure Manifest where
 
 def Manifest.failed (why : String) : Manifest :=
   ⟨why, 0, 0, ByteArray.empty, ByteArray.empty, ByteArray.empty, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, false, 0, 0, ByteArray.empty,
-    0, 0, 0, Array.emptyWithCapacity 0, ByteArray.empty, ByteArray.empty⟩
+    0, ByteArray.empty, 0, 0, 0, Array.emptyWithCapacity 0, ByteArray.empty, ByteArray.empty⟩
 
 /-- Skips a sequence of `count`-prefixed fixed-size elements. -/
 def skipSeq (b : ByteArray) (o size : Nat) : Nat :=
@@ -180,7 +184,10 @@ def parse (b : ByteArray) : Manifest := Id.run do
   else
     o := o + 1
   let blockhashes := (Wire.u64 b o).toNat
+  let lastHashIndex := Wire.u64 b 0
+  let queueAt := o + 8
   o := Wire.adv b (skipSeq b o 56) 8
+  let queue := if Wire.ok o then b.extract queueAt (queueAt + 56 * blockhashes) else ByteArray.empty
   -- ancestors
   o := skipSeq b o 16
   if !(Wire.ok o) || o + 72 > b.size then
@@ -299,6 +306,6 @@ def parse (b : ByteArray) : Manifest := Id.run do
   let counted := if slotsPerEpoch != 0 && slot >= firstNormalSlot then firstNormalEpoch + (slot - firstNormalSlot) / slotsPerEpoch else epoch
   return ⟨"", slot, parentSlot, hash, parentHash, blockhash, blockHeight, (if epoch == 0 then counted else epoch), capitalization, accountsDataLen, transactionCount,
     signatureCount, tickHeight, ticksPerSlot, hashesPerTick, lamportsPerSignature, slotsPerEpoch, leaderScheduleOffset, warmup,
-    firstNormalEpoch, firstNormalSlot, leader, blockhashes, voteCount, delegations, epochStakes, ltHash, blockId⟩
+    firstNormalEpoch, firstNormalSlot, leader, blockhashes, queue, lastHashIndex, voteCount, delegations, epochStakes, ltHash, blockId⟩
 
 end Snapshot

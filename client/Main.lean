@@ -8,6 +8,7 @@ import RunProgram
 import RunTx
 import RunBlock
 import RunSnapshot
+import RunReplay
 import Solana.LeaderSchedule
 import BlockTile
 import TurbineTile
@@ -148,6 +149,9 @@ def main : IO Unit := do
     return
   if argc >= 2 && (← Sys.arg 1) == "block" then
     RunBlock.main
+    return
+  if argc >= 2 && (← Sys.arg 1) == "replay" then
+    RunReplay.main
     return
   if argc >= 2 && (← Sys.arg 1) == "snapshot" then
     RunSnapshot.main

@@ -254,6 +254,8 @@ partial def execute (m : Machine) (st0 : State) (programId : ByteArray) (metas :
   mem := mem ++ input
   let mut regs : Array UInt64 := Array.replicate 11 0
   regs := regs.set! 1 inputStart
+  -- the second register points at the instruction's data in the input (its length sits just before it)
+  regs := regs.set! 2 (inputStart + (inputLen - 32 - data.size).toUInt64)
   -- What the versions of sBPF change. In 1 and 2 a function moves the stack pointer itself. 2 re-encodes
   -- arithmetic and memory instructions. 3 goes back to version 0's instructions and adds 32-bit conditional
   -- jumps, calls that are either relative or name a system call by hash, and the stricter file format.
@@ -469,7 +471,7 @@ partial def execute (m : Machine) (st0 : State) (programId : ByteArray) (metas :
             else
               status := accessViolation
           | _, _ => status := accessViolation
-        else if id == sysSha256 then
+        else if id == sysSha256 || id == sysKeccak || id == sysBlake3 then
           -- hashes a list of byte ranges: a1 points at (address, length) pairs, a2 counts them
           units := units + 85
           if a2 > 20000 then
@@ -487,7 +489,8 @@ partial def execute (m : Machine) (st0 : State) (programId : ByteArray) (metas :
                 | some part => message := message ++ part
             let dest := writable p inputLen a3 32
             if status == finished && Wire.ok dest then
-              mem := (Sha256.hash message).copySlice 0 mem dest 32
+              let digest := if id == sysKeccak then Keccak.hash message else if id == sysBlake3 then Blake3.hash message else Sha256.hash message
+              mem := digest.copySlice 0 mem dest 32
             else
               status := accessViolation
         else if id == sysClock || id == sysRent || id == sysEpochSchedule || id == sysEpochRewards || id == sysLastRestart then

@@ -66,6 +66,8 @@ structure Receipt where
   logs : Array String
   returnData : ByteArray
   bank : Bank
+  /-- on a failure inside a program: the machine's own account of it (a diagnostic, not part of the outcome) -/
+  why : String
 
 def u64 (v : UInt64) : ByteArray := Wire.putU64 (ByteArray.emptyWithCapacity 8) v
 
@@ -122,7 +124,11 @@ def Bank.withPrograms (bank : Bank) (keys : Array ByteArray) (all : Bool) : Bank
     let at_ := find out.accounts key
     if at_ != Sbpf.notFound then
       let account := out.accounts[at_]!
-      if account.owner == Sbpf.loaderId && Sbpf.loaderKind account == 2 && (all || !(hasProgram out key)) then
+      if account.owner == loaderV2 && account.executable && (all || !(hasProgram out key)) then
+        -- the older loader: the account's data is the program
+        let program := Sbpf.load account.data
+        out := { out with machine := out.machine.add key { program with since := if program.error != "" then 0xFFFFFFFFFFFFFFFF else 0 } }
+      else if account.owner == Sbpf.loaderId && Sbpf.loaderKind account == 2 && (all || !(hasProgram out key)) then
         let holder := find out.accounts (account.data.extract 4 36)
         let code := if holder == Sbpf.notFound then ByteArray.empty else out.accounts[holder]!.data
         let program := if code.size > 45 && Wire.u32 code 0 == 3 then Sbpf.load (code.extract 45 code.size)
@@ -305,7 +311,7 @@ def verifyEd25519 (datas : Array ByteArray) (current : Nat) : UInt64 := Id.run d
 -- ---------------------------------------------------------------- processing
 
 def refuse (bank : Bank) (why : String) : Receipt :=
-  ⟨why, false, 0, 0, 0, Array.emptyWithCapacity 0, ByteArray.empty, bank⟩
+  ⟨why, false, 0, 0, 0, Array.emptyWithCapacity 0, ByteArray.empty, bank, ""⟩
 
 /-- Is this one of the programs that are part of the runtime? They are given a
 smaller default compute budget than programs that run as bytecode. -/
@@ -323,9 +329,6 @@ def Bank.process (bank : Bank) (tx : Tx.Transaction) (verify : Bool) : Receipt :
     return refuse bank "SanitizeFailure"
   if verify && !tx.verify then
     return refuse bank "SignatureFailure"
-  if msg.v1 then
-    -- parsed and verified, but applying the newer layout's inline compute budget is not implemented
-    return refuse bank "UnsupportedVersion"
   -- the accounts of the message: its own keys, then those it takes from address tables
   let mut keys := msg.keys
   let mut writable : Array Bool := Array.emptyWithCapacity (keys.size + 8)
@@ -446,6 +449,26 @@ def Bank.process (bank : Bank) (tx : Tx.Transaction) (verify : Bool) : Receipt :
       signatures := signatures + Wire.u8 ix.data 0
   if heapAt != Sbpf.notFound && (heap < 32768 || heap > 262144 || heap % 1024 != 0) then
     return refuse bank s!"InstructionError({heapAt}, InvalidInstructionData)"
+  -- A version-1 message carries its budget itself: a mask saying which settings are present, then the
+  -- settings. What is absent is zero (the heap: the usual 32 KiB), and the priority fee is a sum, not a price.
+  let mut feeGiven : UInt64 := 0
+  if msg.v1 then
+    let mask := Wire.u32 msg.config 0
+    let mut o := 4
+    limit := 0
+    limitSet := true
+    if mask &&& 3 != 0 then
+      feeGiven := Wire.u64 msg.config o
+      o := o + 8
+    if mask &&& 4 != 0 then
+      limit := Wire.u32 msg.config o
+      o := o + 4
+    if mask &&& 8 != 0 then
+      o := o + 4
+    if mask &&& 16 != 0 then
+      heap := Wire.u32 msg.config o
+      if heap < 32768 || heap > 262144 || heap % 1024 != 0 then
+        return refuse bank "InvalidTransactionConfig"
   if !limitSet then
     -- by default: 200,000 units per instruction, 3,000 for those of built-in programs
     for ix in msg.instructions do
@@ -454,29 +477,30 @@ def Bank.process (bank : Bank) (tx : Tx.Transaction) (verify : Bool) : Receipt :
     limit := 1400000
 
   -- 3. the fee: per signature, plus the price offered for every unit of the limit, in millionths of a lamport
-  let priority := if price > 0xFFFFFFFFFFFFFFFF / 1400000 then 0xFFFFFFFFFFFFFFFF else (price * limit + 999999) / 1000000
+  let priority := if msg.v1 then feeGiven
+    else if price > 0xFFFFFFFFFFFFFFFF / 1400000 then 0xFFFFFFFFFFFFFFFF else (price * limit + 999999) / 1000000
   let fee := if priority > 0xFFFFFFFFFFFFFFFF - bank.lamportsPerSignature * signatures then 0xFFFFFFFFFFFFFFFF
     else bank.lamportsPerSignature * signatures + priority
   -- programs deployed through the loader are run from their accounts
   let bank := bank.withPrograms keys false
   let payer := bank.get keys[0]!
   if payer.lamports == 0 then
-    return ⟨"AccountNotFound", false, fee, 0, limit, Array.emptyWithCapacity 0, ByteArray.empty, bank⟩
+    return ⟨"AccountNotFound", false, fee, 0, limit, Array.emptyWithCapacity 0, ByteArray.empty, bank, ""⟩
   -- the payer is a wallet, or a nonce account, which must keep enough to stay alive
   let payerIsNonce := payer.data.size == 80 && Sbpf.nonceKind payer.data == 2
   if payer.owner != Sbpf.systemProgram || (payer.data.size != 0 && !payerIsNonce) then
-    return ⟨"InvalidAccountForFee", false, fee, 0, limit, Array.emptyWithCapacity 0, ByteArray.empty, bank⟩
+    return ⟨"InvalidAccountForFee", false, fee, 0, limit, Array.emptyWithCapacity 0, ByteArray.empty, bank, ""⟩
   if payer.lamports < fee || (payerIsNonce && payer.lamports - fee < minimumBalance bank 80) then
-    return ⟨"InsufficientFundsForFee", false, fee, 0, limit, Array.emptyWithCapacity 0, ByteArray.empty, bank⟩
+    return ⟨"InsufficientFundsForFee", false, fee, 0, limit, Array.emptyWithCapacity 0, ByteArray.empty, bank, ""⟩
   if !(rentAllowed bank payer.lamports payer.data.size (payer.lamports - fee) payer.data.size) then
-    return ⟨"InsufficientFundsForRent { account_index: 0 }", false, fee, 0, limit, Array.emptyWithCapacity 0, ByteArray.empty, bank⟩
+    return ⟨"InsufficientFundsForRent { account_index: 0 }", false, fee, 0, limit, Array.emptyWithCapacity 0, ByteArray.empty, bank, ""⟩
   -- every program named must exist
   for ix in msg.instructions do
     let program := keys[ix.program]!
     if !(program == Sbpf.systemProgram || program == Sbpf.computeBudgetProgram || program == ed25519Program
         || program == Sbpf.loaderId || program == loaderV1 || program == loaderV2 || hasProgram bank program) then
       let why := if (bank.get program).lamports == 0 then "ProgramAccountNotFound" else "InvalidProgramForExecution"
-      return ⟨why, false, fee, 0, limit, Array.emptyWithCapacity 0, ByteArray.empty, bank⟩
+      return ⟨why, false, fee, 0, limit, Array.emptyWithCapacity 0, ByteArray.empty, bank, ""⟩
   -- from here on the fee is paid, whatever happens
   let charged := bank.set { payer with lamports := payer.lamports - fee }
 
@@ -493,7 +517,7 @@ def Bank.process (bank : Bank) (tx : Tx.Transaction) (verify : Bool) : Receipt :
   let mut datas : Array ByteArray := Array.emptyWithCapacity msg.instructions.size
   for ix in msg.instructions do
     datas := datas.push ix.data
-  let machine := { bank.machine with budget := limit, heap := heap.toNat }
+  let machine := { bank.machine with budget := (if bank.machine.cap != 0 && bank.machine.cap < limit then bank.machine.cap else limit), heap := heap.toNat }
   let mut st : Sbpf.State := ⟨accounts, 0, Array.emptyWithCapacity 8, ByteArray.empty, Sbpf.finished, 0, "", Array.emptyWithCapacity 8⟩
   let mut error := ""
   for i in [0:msg.instructions.size] do
@@ -533,14 +557,19 @@ def Bank.process (bank : Bank) (tx : Tx.Transaction) (verify : Bool) : Receipt :
     let account := charged.get keys[nonceAt]!
     let state := Sbpf.nonceState (account.data.extract 8 40) (Sbpf.durableNonce bank.blockhash) bank.lamportsPerSignature
     after := after.set { account with data := state.copySlice 0 account.data 0 80 }
+  let mut loaderTouched := false
   if error == "" then
     for i in [0:keys.size] do
       if writable[i]! && (st.accounts[i]!.lamports != before[i]!.lamports || st.accounts[i]!.data != before[i]!.data
           || st.accounts[i]!.owner != before[i]!.owner) then
         after := after.set st.accounts[i]!
-  if error == "" then
+        if st.accounts[i]!.owner == Sbpf.loaderId || before[i]!.owner == Sbpf.loaderId then
+          loaderTouched := true
+  if error == "" && loaderTouched then
     -- programs this transaction deployed, upgraded or closed
     after := after.withPrograms keys true
-  return ⟨error, true, fee, st.units, limit, st.logs, st.returnData, after⟩
+  -- for whoever is looking into a failure: how the machine stopped, in its own words
+  let why := if error == "" then "" else s!"status {st.status}, r0 {st.r0}: {st.detail}"
+  return ⟨error, true, fee, st.units, limit, st.logs, st.returnData, after, why⟩
 
 end Bank

@@ -244,7 +244,8 @@ def baPush (p v : UInt64) : IO UInt64 := do
     Mem.store8 (p + 24 + size) v
     Mem.store64 (p + 8) (size + 1)
     return p
-  let ncap : UInt64 := if cap < 16 then 32 else cap * 2
+  -- (a shared array that still has room is copied at its size: only a full one grows)
+  let ncap : UInt64 := if size < cap then cap else if cap < 16 then 32 else cap * 2
   let q ← baNew ncap
   Mem.copy (q + 24) (p + 24) size
   Mem.store8 (q + 24 + size) v
@@ -373,7 +374,9 @@ def arrPush (p v isPtr : UInt64) : IO UInt64 := do
     Mem.store64 (p + 24 + size * 8) v
     Mem.store64 (p + 8) (size + 1)
     return p
-  let ncap : UInt64 := if cap < 4 then 8 else cap * 2
+  -- (a shared array that still has room is copied at its size: only a full one grows; doubling a
+  -- shared array on every push would double its capacity each time, whatever it held)
+  let ncap : UInt64 := if size < cap then cap else if cap < 4 then 8 else cap * 2
   let q ← arrNew ncap
   Mem.copy (q + 24) (p + 24) (size * 8)
   Mem.store64 (q + 24 + size * 8) v

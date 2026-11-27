@@ -30,7 +30,7 @@ namespace RunSnapshot
 def usage : String :=
   "usage: leansol snapshot (--file ARCHIVE | --from HOST:PORT | --url URL) [options]\n" ++
   "       leansol snapshot --find [--nodes HOST:PORT]\n" ++
-  "       leansol account ADDRESS [--accounts DIR]\n" ++
+  "       leansol account ADDRESS [--accounts DIR] [--data FILE]\n" ++
   "\n" ++
   "  snapshot            load a snapshot into an accounts store, verifying every account against\n" ++
   "                      the snapshot's lattice hash\n" ++
@@ -850,11 +850,15 @@ def account : IO Unit := do
   let argc ← Sys.argc
   let mut dir := "accounts"
   let mut address := ""
+  let mut dataFile := ""
   let mut i := 2
   while i < argc do
     let a ← Sys.arg i
     if a == "--accounts" && i + 1 < argc then
       dir := ← Sys.arg (i + 1)
+      i := i + 2
+    else if a == "--data" && i + 1 < argc then
+      dataFile := ← Sys.arg (i + 1)
       i := i + 2
     else
       address := a
@@ -892,6 +896,8 @@ def account : IO Unit := do
   IO.println s!"executable   {Accounts.recExecutable r}"
   IO.println s!"rent epoch   {Accounts.recRentEpoch r}"
   IO.println s!"data         {Fmt.thousands dataLen.toUInt64} bytes{if dataLen != 0 then s!" · sha256 {Hex.encode (Sha256.hash data)}" else ""}"
+  if dataFile != "" then
+    let _ ← Sys.writeFileAtomic dataFile data
   IO.println s!"last written slot {Accounts.recSlot r} (store of slot {RunBlock.jsonField state "slot" 0})"
 
 end RunSnapshot

@@ -161,6 +161,7 @@ structure Shard where
   flushed : UInt64
   /-- set when the disk refused a write or memory ran out -/
   failed : Bool
+  deriving Inhabited
 
 -- While a shard is being filled, the end of its log is still in memory:
 -- the functions below that read the log take those `pending` bytes too. The

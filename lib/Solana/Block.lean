@@ -222,6 +222,49 @@ must be the parent's blockhash carried forward. -/
 def follows (parentHash parentRoot firstChained : ByteArray) (firstCount : UInt64) (firstMixin firstHash : ByteArray) : Bool :=
   firstChained == parentRoot && Entry.expectedWith parentHash firstCount firstMixin == firstHash
 
+/-- What a block says, for executing it: its transactions in order, and its footer. -/
+structure Contents where
+  error : String
+  transactions : Array Tx.Transaction
+  /-- the hash of the last entry: the block's blockhash -/
+  blockhash : ByteArray
+  /-- from the footer: the bank hash the leader computed, when the block was produced (nanoseconds), and the certificates that follow -/
+  bankHash : ByteArray
+  producedAt : UInt64
+  certificates : ByteArray
+  deriving Inhabited
+
+/-- Reads a block's transactions and footer out of its data shreds (all of them, in order). Nothing is verified here. -/
+def contents (shreds : Array ByteArray) : Contents := Id.run do
+  let mut transactions : Array Tx.Transaction := Array.emptyWithCapacity 512
+  let mut blockhash := ByteArray.empty
+  let mut bankHash := ByteArray.empty
+  let mut producedAt : UInt64 := 0
+  let mut certificates := ByteArray.empty
+  for batch in batches shreds do
+    if batch.size >= 13 && Wire.u64 batch 0 == 0 then
+      let length := (Wire.u16 batch 11).toNat
+      if Wire.u16 batch 8 != 1 || 13 + length > batch.size then
+        return ⟨"a block marker is malformed", transactions, blockhash, bankHash, 0, certificates⟩
+      if Wire.u8 batch 10 == 0 && length >= 42 then
+        bankHash := batch.extract 14 46
+        producedAt := Wire.u64 batch 46
+        let n := (Wire.u8 batch 54).toNat
+        if 55 + n <= 13 + length then
+          certificates := batch.extract (55 + n) (13 + length)
+    else
+      match Entry.parseBatch batch with
+      | none => return ⟨"the entries do not parse", transactions, blockhash, bankHash, 0, certificates⟩
+      | some parsed =>
+        for e in parsed do
+          let mut o := e.start
+          for _ in [0:e.count] do
+            let (tx, next) := Tx.parseAt batch o
+            o := next
+            transactions := transactions.push tx
+          blockhash := e.hash
+  return ⟨"", transactions, blockhash, bankHash, producedAt, certificates⟩
+
 /-- The Merkle root of the set a shred belongs to. -/
 def rootOf (shred : ByteArray) : ByteArray := Shred.merkleRoot shred (Shred.parse shred)
 
