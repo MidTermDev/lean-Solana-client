@@ -8,6 +8,8 @@ import RunProgram
 import RunTx
 import RunBlock
 import BlockTile
+import TurbineTile
+import FollowTile
 import Net.Dns
 
 /-!
@@ -27,6 +29,10 @@ def usage : String :=
   "  --port N            UDP port to bind (default: chosen by the kernel)\n" ++
   "  --tiles N           number of signature-verification processes (default 4, max 16)\n" ++
   "  --fanout N          peers pulled from every 200 ms, besides entrypoints (default 12)\n" ++
+  "  --tvu-port N        receive every block: advertise UDP port N for shreds and listen on it.\n" ++
+  "                      Both it and --port must be reachable from the internet (validators ping the\n" ++
+  "                      gossip port before they believe a node exists); they may be the same port.\n" ++
+  "  --follow-tiles N    processes that assemble and verify the blocks received that way (default 6)\n" ++
   "  --block-interval S  fetch a recent block from validators and verify it every S seconds\n" ++
   "                      (default 5; 0 = never)\n" ++
   "  --duration SECONDS  exit after this long (default: run until interrupted)\n" ++
@@ -142,6 +148,8 @@ def main : IO Unit := do
   let mut tiles := 4
   let mut fanout := 12
   let mut blockInterval : UInt64 := 5
+  let mut tvuPort : UInt16 := 0
+  let mut followTiles := 6
   let mut duration := 0
   let mut plain := !(← Sys.isTty 1)
   let mut jsonOut := false
@@ -179,6 +187,10 @@ def main : IO Unit := do
         fanout := ← numberArg a v
       else if a == "--block-interval" then
         blockInterval := (← numberArg a v).toUInt64
+      else if a == "--tvu-port" then
+        tvuPort := (← numberArg a v).toUInt16
+      else if a == "--follow-tiles" then
+        followTiles := ← numberArg a v
       else if a == "--duration" then
         duration := ← numberArg a v
       else if a == "--json-file" then
@@ -255,7 +267,7 @@ def main : IO Unit := do
   let cfg : Config :=
     { seed := seed, pubkey := pubkey, publicIp := publicIp, port := boundPort,
       shredVersion := shredVersion, entrypoints := entrypoints, outsetUs := outsetUs, fanout := fanout,
-      cluster := cluster, httpAddr := listen, blockInterval := blockInterval }
+      cluster := cluster, httpAddr := listen, blockInterval := blockInterval, tvuPort := tvuPort, followTiles := followTiles }
   -- the HTTP endpoint is opened here, before forking, so that a port that
   -- is already taken is reported instead of silently missing
   let mut httpFd := noFd
@@ -276,9 +288,23 @@ def main : IO Unit := do
     toGossip := toGossip.push (← Ipc.Ring.create 4096 1536 gossipWaiter)
   let toNet ← Ipc.Ring.create 4096 1536 (← Ipc.Waiter.create)
   let directory ← Directory.create
+  let mut tvuSock := noFd
+  if tvuPort != 0 && tvuPort == port then
+    -- one port for gossip and shreds: the receive tile tells them apart
+    tvuSock := sock
+  else if tvuPort != 0 then
+    tvuSock ← Sys.udpSocket
+    if Sys.isErr (← Sys.bind tvuSock 0 tvuPort) then
+      die s!"cannot bind UDP port {tvuPort} for shreds"
+    Sys.setRecvBuffer tvuSock 0x2000000
+  let mut toBlocks : Array Ipc.Ring := #[]
+  for _ in [0:followTiles] do
+    toBlocks := toBlocks.push (← Ipc.Ring.create 16384 1536 (← Ipc.Waiter.create))
+  let seenBase ← Sys.mmapShared 65536
   let sh : Shared :=
     { metrics := metrics, sock := sock, toVerify := toVerify, toGossip := toGossip,
-      toNet := toNet, gossipWaiter := gossipWaiter, directory := directory, httpFd := httpFd }
+      toNet := toNet, gossipWaiter := gossipWaiter, directory := directory, httpFd := httpFd,
+      tvuSock := tvuSock, toBlocks := toBlocks, seenBase := seenBase }
   let startMs ← IO.monoMsNow
   metrics.set M.startMs startMs.toUInt64
 
@@ -305,7 +331,20 @@ def main : IO Unit := do
   if child3 then
     gossipTile sh cfg
     return
-  if cfg.blockInterval != 0 then
+  if tvuSock != noFd && tvuSock != sock then
+    let (p6, child6) ← spawn pids
+    pids := p6
+    if child6 then
+      turbineTile sh
+      return
+  if tvuSock != noFd then
+    for k in [0:followTiles] do
+      let (p7, child7) ← spawn pids
+      pids := p7
+      if child7 then
+        followTile sh cfg k
+        return
+  if cfg.blockInterval != 0 && tvuSock == noFd then
     let (p5, child5) ← spawn pids
     pids := p5
     if child5 then

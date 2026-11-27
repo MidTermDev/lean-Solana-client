@@ -85,12 +85,16 @@ def signatureRoot (signatures : Array ByteArray) : ByteArray := Id.run do
     level := next
   return level[0]!
 
-/-- The hash an entry must have, given the hash before it and the signatures of its transactions. -/
-def expected (previous : ByteArray) (numHashes : UInt64) (signatures : Array ByteArray) : ByteArray :=
-  if numHashes == 0 && signatures.size == 0 then previous
+/-- The hash an entry must have, given the hash before it and what its
+transactions mix in (the root of their signatures; empty for an entry with none). -/
+def expectedWith (previous : ByteArray) (numHashes : UInt64) (mixin : ByteArray) : ByteArray :=
+  if numHashes == 0 && mixin.size == 0 then previous
   else
     let before := iterate previous (if numHashes == 0 then 0 else numHashes - 1)
-    if signatures.size == 0 then Sha256.hash before
-    else Sha256.hash (before ++ signatureRoot signatures)
+    if mixin.size == 0 then Sha256.hash before else Sha256.hash (before ++ mixin)
+
+/-- The hash an entry must have, given the hash before it and the signatures of its transactions. -/
+def expected (previous : ByteArray) (numHashes : UInt64) (signatures : Array ByteArray) : ByteArray :=
+  expectedWith previous numHashes (signatureRoot signatures)
 
 end Entry

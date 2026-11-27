@@ -73,6 +73,14 @@ def json (sh : Shared) (cfg : Config) (withNodes : Bool) : IO String := do
   s := s ++ s!"\"transactions\": {← m.get M.blockTxTotal}, \"signatures\": {← m.get M.blockSigTotal}, "
   s := s ++ s!"\"shreds\": {← m.get M.blockShredTotal}, \"entries\": {← m.get M.blockEntryTotal}, "
   s := s ++ s!"\"repairRequests\": {← m.get M.blockRequests}, "
+  -- the turbine feed: every block, as its shreds arrive
+  s := s ++ s!"\"following\": {if cfg.tvuPort != 0 then "true" else "false"}, "
+  s := s ++ s!"\"followed\": {← m.get M.blocksFollowed}, \"linked\": {← m.get M.blocksLinked}, "
+  s := s ++ s!"\"onAnotherFork\": {← m.get M.blocksUnlinked}, \"slotsRepaired\": {← m.get M.slotsRepaired}, "
+  s := s ++ s!"\"slotsIncomplete\": {← m.get M.slotsIncomplete}, \"shredsReceived\": {← m.get M.shredsRx}, "
+  s := s ++ s!"\"shredBytes\": {← m.get M.shredBytes}, \"shredsDuplicate\": {← m.get M.shredsDuplicate}, "
+  s := s ++ s!"\"shredsRebuilt\": {← m.get M.shredsRecovered}, \"setsRebuilt\": {← m.get M.setsRecovered}, "
+  s := s ++ s!"\"shredsRejected\": {← m.get M.shredsRejected}, \"shredsDropped\": {← m.get M.shredsDropped}, "
   if checked == 0 then
     s := s ++ "\"last\": null},\n"
   else
@@ -171,6 +179,25 @@ def prometheus (sh : Shared) (cfg : Config) : IO String := do
   s := s ++ sample "leansol_block_signatures_total" "counter" "Transaction signatures verified in blocks."
     (← m.get M.blockSigTotal)
   s := s ++ sample "leansol_block_shreds_total" "counter" "Data shreds of verified blocks." (← m.get M.blockShredTotal)
+  s := s ++ sample "leansol_blocks_followed_total" "counter" "Blocks assembled from the turbine feed and verified."
+    (← m.get M.blocksFollowed)
+  s := s ++ sample "leansol_blocks_linked_total" "counter"
+    "Verified blocks whose first entry and first shred set follow the verified parent block." (← m.get M.blocksLinked)
+  s := s ++ sample "leansol_blocks_other_fork_total" "counter"
+    "Verified blocks that do not follow the block verified for their parent slot." (← m.get M.blocksUnlinked)
+  s := s ++ sample "leansol_slots_repaired_total" "counter" "Slots completed by asking validators for missing shreds."
+    (← m.get M.slotsRepaired)
+  s := s ++ sample "leansol_slots_incomplete_total" "counter" "Slots that began arriving and were never completed."
+    (← m.get M.slotsIncomplete)
+  s := s ++ sample "leansol_shreds_received_total" "counter" "Shreds received over turbine." (← m.get M.shredsRx)
+  s := s ++ sample "leansol_shred_bytes_total" "counter" "Bytes of shreds received over turbine." (← m.get M.shredBytes)
+  s := s ++ sample "leansol_shreds_duplicate_total" "counter" "Shreds received more than once." (← m.get M.shredsDuplicate)
+  s := s ++ sample "leansol_shreds_rebuilt_total" "counter" "Data shreds rebuilt from coding shreds."
+    (← m.get M.shredsRecovered)
+  s := s ++ sample "leansol_shreds_rejected_total" "counter"
+    "Shreds not on a Merkle path to a root signed by a known node." (← m.get M.shredsRejected)
+  s := s ++ sample "leansol_shreds_dropped_total" "counter" "Shreds dropped because a follow tile fell behind."
+    (← m.get M.shredsDropped)
   s := s ++ sample "leansol_signatures_verified_total" "counter" "Records whose Ed25519 signature verified."
     (← m.get M.sigOk)
   s := s ++ sample "leansol_signatures_bad_total" "counter" "Records or pings whose signature did not verify."

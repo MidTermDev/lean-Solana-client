@@ -30,12 +30,14 @@ open Wire
 def clientId : UInt64 := 0x4c4e
 
 def versionMajor : UInt64 := 0
-def versionMinor : UInt64 := 8
+def versionMinor : UInt64 := 9
 def versionPatch : UInt64 := 0
 
-/-- Our `CrdsData::ContactInfo`: identity, software version, and one socket (gossip). -/
+/-- Our `CrdsData::ContactInfo`: identity, software version, the gossip socket
+and, if `tvuPort` is not 0, the socket shreds should be sent to. Naming that
+socket is what makes validators include this node when they relay blocks. -/
 def contactInfo (pubkey : ByteArray) (wallclockMs outsetUs shredVersion : UInt64) (ip : UInt32)
-    (port : UInt16) : ByteArray := Id.run do
+    (port tvuPort : UInt16) : ByteArray := Id.run do
   let mut b := ByteArray.emptyWithCapacity 128
   b := putU32 b 11
   b := b ++ pubkey
@@ -55,11 +57,21 @@ def contactInfo (pubkey : ByteArray) (wallclockMs outsetUs shredVersion : UInt64
   b := b.push (ip >>> 16).toUInt8
   b := b.push (ip >>> 8).toUInt8
   b := b.push ip.toUInt8
-  -- one socket: key 0 (gossip), address 0, port
-  b := b.push 1
-  b := b.push 0
-  b := b.push 0
-  b := putVarint b port.toUInt64
+  -- sockets, in order of port: (kind, address index, port as an offset from the previous entry).
+  -- Kind 0 is gossip, kind 10 is where shreds are received.
+  if tvuPort == 0 then
+    b := (((b.push 1).push 0).push 0)
+    b := putVarint b port.toUInt64
+  else if tvuPort < port then
+    b := (((b.push 2).push 10).push 0)
+    b := putVarint b tvuPort.toUInt64
+    b := ((b.push 0).push 0)
+    b := putVarint b (port - tvuPort).toUInt64
+  else
+    b := (((b.push 2).push 0).push 0)
+    b := putVarint b port.toUInt64
+    b := ((b.push 10).push 0)
+    b := putVarint b (tvuPort - port).toUInt64
   -- no extensions
   b := b.push 0
   return b
@@ -121,6 +133,10 @@ def pullRequest (keys : Array UInt64) (bits : ByteArray) (partition : UInt64) (m
   b := putU64 b mask
   b := putU32 b maskBits
   return b ++ signedContact
+
+/-- `Protocol::PushMessage` carrying one record: the sender, then a list of signed records. -/
+def pushMessage (pubkey value : ByteArray) : ByteArray :=
+  putU64 (putU32 (ByteArray.emptyWithCapacity (44 + value.size)) 2 ++ pubkey) 1 ++ value
 
 /-- The response a ping demands: the hash of its token, signed. -/
 def pong (seed pubkey token : ByteArray) : ByteArray :=

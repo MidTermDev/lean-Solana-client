@@ -1,0 +1,13 @@
+slot 474338900, data shreds 416 to 447, 25 of 32 coding shreds
+shreds on a Merkle path to the same root: 57 of 57
+5 data shreds missing: 32 of 32 data shreds identical to the leader's
+the first 16 missing: 32 of 32 data shreds identical to the leader's
+25 missing, 7 left: 32 of 32 data shreds identical to the leader's
+26 missing, 6 left: could not be rebuilt
+nothing missing: 32 of 32 data shreds identical to the leader's
+no coding shreds: could not be rebuilt
+a data shred altered: could not be rebuilt
+a coding shred altered: could not be rebuilt
+4 of 7 pieces give back all 7: true; the data is sent unchanged: true
+3 of 7 are not enough: true
+elements with an inverse: 255 of 255; 2 to the 255th: 1

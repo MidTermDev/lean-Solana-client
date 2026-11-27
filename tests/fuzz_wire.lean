@@ -35,9 +35,15 @@ def main : IO Unit := do
       rejected := rejected + 1
   -- 2. a valid ContactInfo with random corruption and truncation
   let pubkey := Sha256.hash "fuzz".toUTF8
-  let good := Gossip.contactInfo pubkey 1700000000000 1700000000000000 50093 0x08080808 8001
+  let good := Gossip.contactInfo pubkey 1700000000000 1700000000000000 50093 0x08080808 8001 0
   let c0 := Crds.parseContact good 4
   IO.println s!"pristine: stop {c0.stop} of {good.size}, shred {c0.shredVersion}, client {c0.client}, port {c0.gossipPort}"
+  -- the same node also naming a port for shreds: below the gossip port, above it, and the same port
+  let shredPorts : Array UInt16 := #[7000, 9000, 8001]
+  for tvu in shredPorts do
+    let both := Gossip.contactInfo pubkey 1700000000000 1700000000000000 50093 0x08080808 8001 tvu
+    let c := Crds.parseContact both 4
+    IO.println s!"with a shred port: stop {c.stop} of {both.size}, gossip port {c.gossipPort}, shred port {c.tvu &&& 0xFFFF}, same address {c.tvu >>> 16 == 0x08080808}"
   for _ in [0:6000] do
     rng := next rng
     let mut b := good

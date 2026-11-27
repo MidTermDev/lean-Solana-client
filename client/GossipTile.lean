@@ -115,7 +115,7 @@ random peers, each for a random partition of the hash space. -/
 def pullRound (sh : Shared) (cfg : Config) (st : State) (rng : UInt64) : IO UInt64 := do
   let wall ← Sys.nowMs
   let contact := Gossip.signValue cfg.seed cfg.pubkey
-    (Gossip.contactInfo cfg.pubkey wall cfg.outsetUs cfg.shredVersion cfg.publicIp cfg.port)
+    (Gossip.contactInfo cfg.pubkey wall cfg.outsetUs cfg.shredVersion cfg.publicIp cfg.port cfg.tvuPort)
   let maskBits := maskBitsFor st.prefixes.size
   sh.metrics.set M.maskBits maskBits
   let mut r := rng
@@ -145,6 +145,10 @@ def pullRound (sh : Shared) (cfg : Config) (st : State) (rng : UInt64) : IO UInt
         bits := Gossip.bloomAdd bits keys st.hashes (i * 32)
     let _ ← sh.toNet.push t (Gossip.pullRequest keys bits part maskBits contact)
     sh.metrics.add M.pullsTx 1
+    -- Also tell each of them who we are. A node is only known to the cluster if it pushes its own
+    -- contact info: validators do not learn it from pull requests, and before believing a pushed one
+    -- they ping the gossip address it names.
+    let _ ← sh.toNet.push t (Gossip.pushMessage cfg.pubkey contact)
   return r
 
 /-- Writes the cluster summary into the shared metrics page and the node

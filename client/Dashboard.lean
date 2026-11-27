@@ -169,6 +169,9 @@ def logLine (sh : Shared) (startMs : Nat) (prev cur : Sample) : IO String := do
     s!" sig/s={perSec (cur.sigs - prev.sigs) dt} rx={perSec (cur.rxBytes - prev.rxBytes) dt}B/s" ++
     s!" pulls={← m.get M.pullsTx} pongs={← m.get M.pongsTx}" ++
     s!" blocks={← m.get M.blocksOk} block={← m.get M.blockSlot} txs={← m.get M.blockTxTotal}" ++
-    s!" invalid={← m.get M.blocksBad} unavailable={← m.get M.blocksMissed}"
+    s!" invalid={← m.get M.blocksBad} unavailable={← m.get M.blocksMissed}" ++
+    s!" shreds={← m.get M.shredsRx} data={← m.get M.shredsData} code={← m.get M.shredsCode} badshreds={← m.get M.shredsBad}" ++
+    s!" followed={← m.get M.blocksFollowed} linked={← m.get M.blocksLinked} rebuilt={← m.get M.shredsRecovered}/{← m.get M.setsRecovered}" ++
+    s!" rejected={← m.get M.shredsRejected} dup={← m.get M.shredsDuplicate} dropped={← m.get M.shredsDropped} incomplete={← m.get M.slotsIncomplete} repaired={← m.get M.slotsRepaired} forked={← m.get M.blocksUnlinked}"
 
 end Dash

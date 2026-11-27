@@ -1,4 +1,5 @@
 import Layout
+import Solana.Shred
 
 /-!
 # net-rx and net-tx
@@ -14,6 +15,12 @@ def netRx (sh : Shared) : IO Unit := do
   repeat
     let dg ← Sys.recvFrom sh.sock 1500
     if dg.data.size == 0 then
+      continue
+    if sh.tvuSock == sh.sock && (dg.data.size == Shred.dataPayload || dg.data.size == Shred.codePayload)
+        && Wire.u32 dg.data 0 > 5 then
+      -- Gossip and shreds share this socket. A gossip message starts with its kind, a number from 0 to 5;
+      -- a shred starts with a signature and has one of two exact sizes.
+      routeShred sh dg.data
       continue
     sh.metrics.add M.rxPackets 1
     sh.metrics.add M.rxBytes dg.data.size.toUInt64

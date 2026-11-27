@@ -140,19 +140,24 @@ lacks, one validator per shred, and asks again only for those still missing
 after a while. With `tail` non-zero only the last `tail` shreds are fetched
 (enough to read how a block ends). On return `have_ == wanted` if everything
 asked for arrived. -/
-def fetch (sock : UInt64) (seed pubkey : ByteArray) (peers0 : Array Peer) (slot : UInt64) (tail : Nat) (budgetMs : UInt64)
-    : IO (Fetch × Array Peer) := do
+def fetchFrom (sock : UInt64) (seed pubkey : ByteArray) (peers0 : Array Peer) (slot : UInt64) (tail : Nat) (budgetMs : UInt64)
+    (already : Array ByteArray) (knownLast : Nat) : IO (Fetch × Array Peer) := do
   let mut peers := peers0
   let mut shreds : Array ByteArray := Array.replicate 2048 ByteArray.empty
-  let mut last := Wire.bad
+  let mut last := knownLast
   let mut have_ := 0
+  -- shreds in hand before asking: only the others are requested
+  for i in [0:already.size] do
+    if i < 2048 && already[i]!.size != 0 then
+      shreds := shreds.set! i already[i]!
+      have_ := have_ + 1
   let mut requests := 0
   let mut pings := 0
   let mut nonce : UInt64 := 1
   -- when each shred was last asked for
   let mut asked : Array UInt64 := Array.replicate 2048 0
   let mut first := 0
-  let mut wanted := 0
+  let mut wanted := if knownLast == Wire.bad then 0 else knownLast + 1
   let started ← Sys.nowMs
   let mut round := 0
   let mut turn := 0
@@ -215,7 +220,8 @@ def fetch (sock : UInt64) (seed pubkey : ByteArray) (peers0 : Array Peer) (slot 
                 last := h.index.toNat
                 first := if tail != 0 && last + 1 > tail then last + 1 - tail else 0
                 wanted := last + 1 - first
-                have_ := 0
+                if tail != 0 then
+                  have_ := 0
               if shreds[h.index.toNat]!.size == 0 && (last == Wire.bad || h.index.toNat >= first) then
                 shreds := shreds.set! h.index.toNat p
                 have_ := have_ + 1
@@ -225,6 +231,11 @@ def fetch (sock : UInt64) (seed pubkey : ByteArray) (peers0 : Array Peer) (slot 
       if peers[k]!.state == 0 then
         peers := peers.set! k { peers[k]! with state := 2 }
   return (⟨shreds, last, have_, requests, pings, first, wanted⟩, peers)
+
+/-- `fetchFrom` with nothing in hand. -/
+def fetch (sock : UInt64) (seed pubkey : ByteArray) (peers : Array Peer) (slot : UInt64) (tail : Nat) (budgetMs : UInt64)
+    : IO (Fetch × Array Peer) :=
+  fetchFrom sock seed pubkey peers slot tail budgetMs (Array.emptyWithCapacity 0) Wire.bad
 
 def magic : ByteArray := "LSBLOCK1".toUTF8
 

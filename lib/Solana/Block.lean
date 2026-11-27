@@ -44,10 +44,17 @@ structure Report where
   bankHash : ByteArray
   /-- from the footer: the software that produced the block -/
   producer : String
+  /-- What ties the block to its parent, so that the tie can be checked later if the parent is not
+  known yet: the root its first set of shreds names, and its first entry (hash count, what its
+  transactions mix in, and the hash it claims). -/
+  firstChained : ByteArray
+  firstCount : UInt64
+  firstMixin : ByteArray
+  firstHash : ByteArray
   deriving Inhabited
 
 def failed (why : String) : Report :=
-  ⟨why, 0, 0, ByteArray.empty, 0, 0, 0, 0, 0, 0, 0, false, ByteArray.empty, 0, ByteArray.empty, ByteArray.empty, ""⟩
+  ⟨why, 0, 0, ByteArray.empty, 0, 0, 0, 0, 0, 0, 0, false, ByteArray.empty, 0, ByteArray.empty, ByteArray.empty, "", ByteArray.empty, 0, ByteArray.empty, ByteArray.empty⟩
 
 def printable (b : ByteArray) : String := Id.run do
   let mut out := ByteArray.emptyWithCapacity b.size
@@ -85,8 +92,11 @@ back) and `hint` the offset of the likeliest. `previous` is the blockhash
 of the parent block, or empty if it is not known, in which case the first
 entry's hash is taken on trust and the chain is checked from there.
 `previousRoot` is the Merkle root of the parent block's last set of shreds,
-which this block's first set must name; empty if not known. -/
-def verify (shreds : Array ByteArray) (candidates : ByteArray) (hint : Nat) (previous previousRoot : ByteArray) : Report := Id.run do
+which this block's first set must name; empty if not known. With `checked`,
+every shred has already been verified against the leader's key (the first
+of `candidates`) as it arrived, and only what spans shreds is checked. -/
+def verifyWith (shreds : Array ByteArray) (candidates : ByteArray) (hint : Nat) (previous previousRoot : ByteArray)
+    (checked : Bool) : Report := Id.run do
   if shreds.size == 0 then
     return failed "no shreds"
   let first := Shred.parse shreds[0]!
@@ -105,12 +115,13 @@ def verify (shreds : Array ByteArray) (candidates : ByteArray) (hint : Nat) (pre
     let h := Shred.parse p
     if !h.ok || !h.isData || h.slot != first.slot || h.index != i.toUInt64 then
       return failed s!"shred {i} is malformed or out of place"
-    let r := Shred.merkleRoot p h
+    -- (shreds checked on arrival need only one root per set, for the chain of sets)
+    let r := if checked && h.fecSet == setIndex then root else Shred.merkleRoot p h
     if r.size != 32 then
       return failed s!"shred {i} has an invalid Merkle path"
     if h.fecSet != setIndex then
       -- a new set: its root must be signed by the leader, and it must name the previous set's root
-      let at_ := signer candidates (if leaderAt != Wire.bad then leaderAt else hint) (p.extract 0 64) r
+      let at_ := if checked then 0 else signer candidates (if leaderAt != Wire.bad then leaderAt else hint) (p.extract 0 64) r
       if at_ == Wire.bad || (leaderAt != Wire.bad && at_ != leaderAt) then
         return failed s!"the set starting at shred {i} is not signed by {if leaderAt == Wire.bad then "any known node" else "the leader"}"
       leaderAt := at_
@@ -136,6 +147,9 @@ def verify (shreds : Array ByteArray) (candidates : ByteArray) (hint : Nat) (pre
   let mut parentId := ByteArray.empty
   let mut bankHash := ByteArray.empty
   let mut producer := ""
+  let mut firstCount : UInt64 := 0
+  let mut firstMixin := ByteArray.empty
+  let mut firstHash := ByteArray.empty
   for batch in batches shreds do
     bytes := bytes + batch.size
     if batch.size >= 13 && Wire.u64 batch 0 == 0 then
@@ -170,8 +184,13 @@ def verify (shreds : Array ByteArray) (candidates : ByteArray) (hint : Nat) (pre
            for s in tx.signatures do
              sigs := sigs.push s
            signatures := signatures + tx.signatures.size
+         let mixin := Entry.signatureRoot sigs
+         if entries == 0 then
+           firstCount := e.numHashes
+           firstMixin := mixin
+           firstHash := e.hash
          if hash.size == 32 then
-           if Entry.expected hash e.numHashes sigs != e.hash then
+           if Entry.expectedWith hash e.numHashes mixin != e.hash then
              return failed s!"proof of history breaks at entry {entries}"
            hashes := hashes + e.numHashes
          hash := e.hash
@@ -180,7 +199,12 @@ def verify (shreds : Array ByteArray) (candidates : ByteArray) (hint : Nat) (pre
          if e.count == 0 then
            ticks := ticks + 1
   return ⟨"", first.slot, first.slot - first.parentOffset, candidates.extract leaderAt (leaderAt + 32), shreds.size, sets,
-    entries, ticks, transactions, signatures, hashes, previous.size == 32, hash, bytes, parentId, bankHash, producer⟩
+    entries, ticks, transactions, signatures, hashes, previous.size == 32, hash, bytes, parentId, bankHash, producer,
+    Shred.chainedRoot shreds[0]! first, firstCount, firstMixin, firstHash⟩
+
+/-- Checks a block whose shreds have not been looked at yet. -/
+def verify (shreds : Array ByteArray) (candidates : ByteArray) (hint : Nat) (previous previousRoot : ByteArray) : Report :=
+  verifyWith shreds candidates hint previous previousRoot false
 
 /-- The blockhash of a block, given its last shreds (from the one after the
 last "data complete" mark before the end, to the end): the hash of its last entry. -/
@@ -191,6 +215,12 @@ def lastHash (tail : Array ByteArray) : ByteArray :=
     match Entry.parseBatch all[all.size - 1]! with
     | none => ByteArray.empty
     | some parsed => if parsed.size == 0 then ByteArray.empty else parsed[parsed.size - 1]!.hash
+
+/-- Does a block follow a parent with this blockhash and this last Merkle
+root? The block's first set must name the root, and its first entry's hash
+must be the parent's blockhash carried forward. -/
+def follows (parentHash parentRoot firstChained : ByteArray) (firstCount : UInt64) (firstMixin firstHash : ByteArray) : Bool :=
+  firstChained == parentRoot && Entry.expectedWith parentHash firstCount firstMixin == firstHash
 
 /-- The Merkle root of the set a shred belongs to. -/
 def rootOf (shred : ByteArray) : ByteArray := Shred.merkleRoot shred (Shred.parse shred)

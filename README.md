@@ -57,7 +57,7 @@ It also **verifies real blocks** (see [Verify blocks](#verify-blocks)), **runs o
 
 ## Quick start
 
-**Just run it.** Every release ships the client as a single 479 KB static binary (Linux, x86-64):
+**Just run it.** Every release ships the client as a single 535 KB static binary (Linux, x86-64):
 
 ```sh
 curl -LO https://github.com/MidTermDev/lean-Solana-client/releases/latest/download/leansol-x86_64-linux
@@ -90,7 +90,11 @@ usage: leansol [options]
   --json              print everything learned as one JSON document on exit
                       (status lines go to stderr; runs 30 s unless --duration is given)
   --json-file PATH    rewrite PATH with that JSON document every 5 seconds
-  --block-interval S  fetch a recent block from validators and verify it every S seconds
+  --tvu-port N        receive every block: advertise UDP port N for shreds and listen on it.
+                      Both it and --port must be reachable from the internet (validators ping the
+                      gossip port before they believe a node exists); they may be the same port.
+  --follow-tiles N    processes that assemble and verify the blocks received that way (default 6)
+  --block-interval S  without a shred port: fetch a recent block from validators and verify it every S seconds
                       (default 5; 0 = never)
   --metrics [IP:]PORT serve Prometheus metrics at /metrics and the JSON at /nodes.json
                       (binds 127.0.0.1 unless an IP is given; 0.0.0.0 for all interfaces)
@@ -195,7 +199,7 @@ Like everything else here, the server is Lean: `socket`, `listen`, `accept` by s
 
 ## Verify blocks
 
-The node does not only listen to gossip. Every few seconds it fetches a real block from validators and checks it, and `leansol block` does the same on request:
+The node does not only listen to gossip. Given a reachable port it [follows the chain](#follow-the-chain), receiving and verifying every block; without one it fetches a block from validators every few seconds and checks that. `leansol block` does the same for one block, on request:
 
 ```console
 $ ./build/leansol block
@@ -225,7 +229,7 @@ What is checked, in [`lib/Solana/Block.lean`](lib/Solana/Block.lean):
 5. **The proof of history is unbroken**: every entry's hash is the previous one hashed the stated number of times, with the entry's transaction signatures mixed in, starting from the parent's blockhash.
 6. **Every signature of every transaction** verifies.
 
-The shreds come over the **repair protocol** ([`lib/Solana/Repair.lean`](lib/Solana/Repair.lean)): a small signed request for one shred of one slot, answered with that shred, after the validator has pinged us and received the hash of its token signed back. Repair is how nodes fill gaps; here it is how a node behind a firewall, to which nobody can send anything unasked, gets whole blocks: about 1.3 requests per shred, spread over two dozen validators. That is also why the node *samples* blocks (one every `--block-interval` seconds, 5 by default) rather than following all of them.
+The shreds come over the **repair protocol** ([`lib/Solana/Repair.lean`](lib/Solana/Repair.lean)): a small signed request for one shred of one slot, answered with that shred, after the validator has pinged us and received the hash of its token signed back. Repair is how nodes fill gaps; here it is how a node behind a firewall, to which nobody can send anything unasked, gets whole blocks: about 1.3 requests per shred, spread over two dozen validators. A node with no reachable port works this way all the time: it *samples* blocks, one every `--block-interval` seconds (5 by default).
 
 Mainnet taught this code two things its sources did not: blocks now carry **markers** between their entries (the footer is where the bank hash comes from), and about half of all transactions use a newer **v1 layout** with the message first and the signatures last. Both are parsed; v1 transactions are verified in blocks but `leansol tx` does not execute them yet.
 
@@ -241,7 +245,39 @@ another block's hash as parent: proof of history breaks at entry 0
 another block's last set as parent: the block's first set does not follow the last set of its parent block
 ```
 
-**What this does not establish.** The leader is identified as *whichever node known from gossip* signed the block; that the slot was that node's to lead would need the leader schedule, which comes from stake, which comes from replaying the chain. The bank hash is read, not recomputed, for the same reason. And no block is executed. Verifying a block and replaying it are different things, and this is the first.
+## Follow the chain
+
+With `--tvu-port` the node stops asking for blocks and receives all of them. The public node does:
+
+| in its first 250 seconds on mainnet | |
+|---|---|
+| blocks received, assembled and verified | 1,152 (every slot of the period but one) |
+| failed a check | 0 |
+| linked to their parent block | 1,148 |
+| transactions in them, signatures verified | 320,977 and 363,556 |
+| shreds received | 922,159, of which 322,892 were duplicates |
+| data shreds rebuilt from coding shreds | 177,698 of 455,008 (39%) |
+| slots completed by asking for the last few shreds | 120 |
+
+Validators relay each block's shreds to one another in a tree, **turbine**: the leader sends a shred to one node, which sends it to 200 more, and so on. A node gets into everyone's tree by naming a port for shreds in its gossip contact info. Two things about that are not in any document I found, only in the code:
+
+- **A node must push its own contact info.** Validators no longer learn about a node from the pull requests it sends; this client had been listening to gossip for a day without any validator knowing it existed.
+- **And it must be reachable.** Before a validator believes a pushed contact info, it pings the gossip address the record names and waits for the signed answer. A node behind a firewall that only talks outward is invisible.
+
+Gossip and shreds can share one port (a gossip message starts with its kind, 0 to 5; a shred starts with a signature and has one of two exact sizes), so one open UDP port is enough.
+
+What arrives is not a tidy stream. A node with no stake sits wherever each sender happens to place it, so it receives some shreds three times and about 40% of data shreds not at all. That is what the coding shreds are for:
+
+- **Each shred is checked alone:** its Merkle path must lead to a root signed by the slot's leader. The receive tile computes the root; the first shred of each set costs one signature check.
+- **Sets are rebuilt** ([`lib/Crypto/ReedSolomon.lean`](lib/Crypto/ReedSolomon.lean)): when a slot is ending and a set of 32 is missing data shreds, any 32 of its 64 shreds give the rest back, by inverting a 32 × 32 matrix over the field of 256 elements. A rebuilt shred is not taken on trust: the rebuilt set must hash to the Merkle root the leader signed. The tree's left half is recomputed from the data shreds; the hash of the right half is the last step of every data shred's own path, so the missing coding shreds never have to be recomputed.
+- **What cannot be rebuilt is asked for:** a slot still incomplete a couple of seconds after it ended gets its missing shreds by repair.
+- **Blocks are checked as they complete, and linked when both ends are known.** Slots are spread over several tiles (`--follow-tiles`), so a block is often verified before its parent. Each verified block leaves in a small shared table what its child needs (blockhash, last Merkle root) and what it needs from its parent (the root its first set names, its first entry's hash); whichever of the two is verified second checks the link.
+
+[`tests/erasure.lean`](tests/erasure.lean) takes one set of shreds from mainnet, as received, removes up to 25 of its 32 data shreds, and requires the rebuilt ones to equal the leader's byte for byte, Merkle paths included.
+
+It costs about six cores and 36 Mbit/s of inbound traffic, continuously.
+
+**What this does not establish.** The leader is identified as *whichever node known from gossip* signed the block; that the slot was that node's to lead would need the leader schedule, which comes from stake, which comes from replaying the chain. The bank hash is read, not recomputed, for the same reason. And no block is executed. Receiving and verifying every block and replaying it are different things, and this is the first.
 
 ## Run on-chain programs
 
@@ -700,6 +736,7 @@ ok    block (official Lean agrees)
 ok    builtins (official Lean agrees)
 ok    cpi (official Lean agrees)
 ok    ed25519 (official Lean agrees)
+ok    erasure (official Lean agrees)
 ok    fuzz_wire (official Lean agrees)
 ok    inplace (native only)
 ok    ipc (native only)
@@ -713,7 +750,7 @@ ok    text (official Lean agrees)
 ok    transaction (official Lean agrees)
 ok    txformat (official Lean agrees)
 ok    versions (official Lean agrees)
-19 passed, 0 failed
+20 passed, 0 failed
 ```
 
 The tests not marked "official Lean agrees" either use raw syscalls (`fork`, futexes), which exist only as machine code, or check behaviour specific to `leanc` (aborting on a bounds error, in-place updates).
@@ -726,9 +763,9 @@ Measured on one machine (Xeon Gold 5515+), single core unless noted. They are he
 |---|---|
 | `leanc` source | about 5,800 lines of C |
 | `leanc` binary | 143 KB, static, zero undefined symbols |
-| Lean in this repo | 8,740 lines: runtime 597, libraries 5,961, client 2,184 |
+| Lean in this repo | 9,580 lines: runtime 597, libraries 6,279, client 2,703 |
 | Compiling the whole client | **under 30 ms** |
-| `leansol` binary | **479 KB**, static |
+| `leansol` binary | **535 KB**, static |
 | Full build from a fresh clone | about 40 ms |
 | Ed25519 verification (Lean, compiled by `leanc`) | about 2,950 signatures/s per core |
 | SHA-256 (Lean, compiled by `leanc`) | about 72 MB/s |
@@ -751,18 +788,18 @@ rt/Rt.lean        the runtime, in Lean: allocator, arrays, strings, panics
 lib/
   Sys.lean          Linux syscalls: sockets, fork, mmap, futex, clocks
   Ipc.lean          futex-backed rings and counters in shared memory
-  Crypto/           SHA-256, SHA-512, Ed25519 (field, curve, scalars, sign, verify)
+  Crypto/           SHA-256, SHA-512, Ed25519 (field, curve, scalars, sign, verify), Reed–Solomon
   Solana/           wire formats, all CRDS record layouts, gossip messages, hash tables,
                     the sBPF virtual machine (SbpfBase: loading, memory, accounts; Native: the
                     built-in programs; Sbpf: the interpreter), transactions, and the bank,
-                    shreds, entries and proof of history, the repair protocol, block checking
+                    shreds and their recovery, entries and proof of history, repair, block checking
   Net/              IPv4 helpers and a DNS stub resolver
   Encoding/         hex, Base58, Base64
 client/           the tiles, the dashboard, the JSON/Prometheus export, main
 web/              the public site for a running node (static page + one proxy function)
 deploy/           a systemd unit for a long-running node
 tests/            programs + outputs produced by official Lean
-  blocks/           a block of mainnet, as test input
+  blocks/           a block and a set of shreds from mainnet, as test input
   programs/         on-chain programs as VM test inputs: lean-svm's, the SPL token programs,
                     and an Anchor program and a sysvar probe with their sources
   oracle/           runs the test scenarios on Agave's runtime (3.1), for comparison
@@ -776,7 +813,7 @@ lakefile.toml     lets the official toolchain check all of the above
 
 Being straightforward about what this is:
 
-- **Not a validator, and not yet a replaying node.** It verifies gossip and it verifies blocks (shreds, leader signature, proof of history, transaction signatures), sampling one every few seconds over the repair protocol. It does not receive every block (that needs the turbine feed and an open UDP port), recover missing shreds from the coding shreds, know the leader schedule, hold state, execute blocks, or vote.
+- **Not a validator, and not yet a replaying node.** It verifies gossip, and it receives and verifies every block: shreds, leader signature, proof of history, transaction signatures, and each block's link to its parent. It does not know the leader schedule, hold state, execute blocks, or vote. Those need a snapshot of every account, the vote program and the rest of the runtime, and bank hashes that match the ones in the blocks.
 - **Transactions run; blocks do not.** Signed transactions are applied with fees, budgets, rent checks, every sysvar and every version of sBPF, and programs can be deployed and upgraded through the loader. Replaying mainnet needs more: the vote program, the remaining signature programs and system calls, and a way to get the accounts, which means the ledger.
 - **Listen-only.** It answers pings but does not serve pull requests or push records to others.
 - **A simple store.** Records are remembered by hash, up to 400,000; when that fills (every several minutes on mainnet) the hash set is flushed and refilled rather than aged out record by record. The node table survives the flush.
@@ -784,7 +821,7 @@ Being straightforward about what this is:
 - **The compiler is not self-hosted.** Its source is C. Nothing in the build uses a C toolchain, because a prebuilt compiler is checked in, but changing the compiler does.
 - **A subset of Lean.** No type classes or higher-order functions is a real restriction; the libraries here are written around it.
 - **`Nat` is 64 bits** (overflow traps rather than wraps; see above).
-- **Young code.** The compiler has been exercised by about 8,740 lines of Lean and the test suite, not by years of users. The Ed25519 implementation is variable-time, which is fine for verifying public data and not what you want around long-lived secret keys.
+- **Young code.** The compiler has been exercised by about 9,580 lines of Lean and the test suite, not by years of users. The Ed25519 implementation is variable-time, which is fine for verifying public data and not what you want around long-lived secret keys.
 - **The network moves.** Wire formats follow agave's current gossip code; when the protocol changes, this needs to follow.
 
 ## How this relates to lean-svm
@@ -801,7 +838,7 @@ They meet at the `.so` file: lean-svm writes it, the virtual machine here runs i
 Write them with [lean-svm](https://github.com/aeyakovenko/lean-svm), and run them locally with `leansol run`, including ones that use tokens. It can build, sign and apply transactions locally, but it does not send them: deploying needs the standard Solana tools.
 
 **Is this the Lean theorem prover's language, or just "lean" as in small?**
-Both. The client is written in Lean 4, the language of the theorem prover, and the result is also small: a 479 KB static binary.
+Both. The client is written in Lean 4, the language of the theorem prover, and the result is also small: a 535 KB static binary.
 
 **Is there really no C toolchain involved?**
 Not in building or running anything here: `make` uses the checked-in `leanc` binary, which compiles Lean straight to an ELF. The compiler's *source* is C, so changing the compiler itself needs a C compiler (`make from-c`). The remaining step is for `leanc` to be written in Lean and compile itself; its subset is not there yet.
