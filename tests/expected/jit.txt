@@ -1,0 +1,67 @@
+program 0: success, 81 units, data 2817210669478549338
+program 1: execution ran past the end of the program, 19 units, data 531581752746508381
+program 2: success, 8 units, data 531581752746508381
+program 3: success, 58 units, data 3795876858923179272
+program 4: success, 59 units, data 831833820122827965
+program 5: compute budget exceeded, 42 units, data 531581752746508381
+program 6: unsupported instruction: at instruction 9, 14 units, data 531581752746508381
+program 7: divide by zero, 17 units, data 531581752746508381
+program 8: compute budget exceeded, 45 units, data 531581752746508381
+program 9: execution ran past the end of the program, 10 units, data 531581752746508381
+program 10: success, 22 units, data 17107841171502863450
+program 11: compute budget exceeded, 48 units, data 531581752746508381
+program 12: unsupported instruction: at instruction 32, 28 units, data 531581752746508381
+program 13: unsupported instruction: at instruction 37, 16 units, data 531581752746508381
+program 14: access violation: at address 0x37a2df8e213361a5, instruction 32, 18 units, data 531581752746508381
+program 15: success, 26 units, data 11632141695224116944
+program 16: success, 32 units, data 531581752746508381
+program 17: success, 25 units, data 1808322909740398421
+program 18: unsupported instruction: at instruction 30, 15 units, data 531581752746508381
+program 19: compute budget exceeded, 150 units, data 531581752746508381
+program 20: compute budget exceeded, 57 units, data 531581752746508381
+program 21: success, 183 units, data 9152783901815153743
+program 22: execution ran past the end of the program, 12 units, data 531581752746508381
+program 23: compute budget exceeded, 60 units, data 531581752746508381
+program 24: unsupported instruction: at instruction 26, 18 units, data 531581752746508381
+program 25: success, 15 units, data 9863601210771509106
+program 26: compute budget exceeded, 63 units, data 531581752746508381
+program 27: execution ran past the end of the program, 28 units, data 531581752746508381
+program 28: compute budget exceeded, 150 units, data 531581752746508381
+program 29: compute budget exceeded, 66 units, data 531581752746508381
+program 30: success, 42 units, data 16231272327968672803
+program 31: unsupported instruction: at instruction 26, 12 units, data 531581752746508381
+program 32: unsupported instruction: at instruction 49, 27 units, data 531581752746508381
+program 33: unsupported instruction: at instruction 39, 16 units, data 531581752746508381
+program 34: call depth exceeded, 92 units, data 531581752746508381
+program 35: access violation: at address 0xc77a64df873dcc8e, instruction 13, 8 units, data 531581752746508381
+program 36: unsupported instruction: at instruction 75, 28 units, data 531581752746508381
+program 37: unsupported instruction: at instruction 9, 10 units, data 531581752746508381
+program 38: execution ran past the end of the program, 25 units, data 531581752746508381
+program 39: unsupported instruction: at instruction 1, 85 units, data 531581752746508381
+program 40: divide by zero, 58 units, data 531581752746508381
+program 41: compute budget exceeded, 78 units, data 531581752746508381
+program 42: unsupported instruction: at instruction 21, 10 units, data 531581752746508381
+program 43: unsupported instruction: at instruction 23, 18 units, data 531581752746508381
+program 44: program error 0xd008dd781385d4fa, 26 units, data 531581752746508381
+program 45: divide by zero, 53 units, data 531581752746508381
+program 46: compute budget exceeded, 150 units, data 531581752746508381
+program 47: unsupported instruction: at instruction 25, 11 units, data 531581752746508381
+program 48: success, 8 units, data 531581752746508381
+program 49: compute budget exceeded, 150 units, data 531581752746508381
+program 50: unsupported instruction: at instruction 9, 9 units, data 531581752746508381
+program 51: divide by zero, 27 units, data 531581752746508381
+program 52: access violation: at address 0x2fffffd3a, instruction 68, 40 units, data 531581752746508381
+program 53: compute budget exceeded, 40 units, data 531581752746508381
+program 54: success, 72 units, data 4091472985165605371
+program 55: compute budget exceeded, 150 units, data 531581752746508381
+program 56: custom error 65535, 22 units, data 531581752746508381
+program 57: unsupported instruction: at instruction 1, 40 units, data 531581752746508381
+program 58: success, 11 units, data 531581752746508381
+program 59: unsupported instruction: at instruction 54, 39 units, data 531581752746508381
+1500 programs: 330 finished, 369 ran out of budget, the rest failed otherwise
+all outcomes, units and data together: 16977448983368104643
+machine code and interpreter differ on 0
+translated exactly where it should be: true
+mov r0, 0; exit: 422 bytes of machine code, entered at 010000
+  its last 64: 00100000488b841568020000e933ffffff48c7455802000000e941ffffff4983ef0248c7455800000000e930ffffff4983ef0148c7455801000000e91fffffff
+counter.so: 115 instructions, 5519 bytes, e26dbb253c1649fcc099808f4ed67bcdcaf0d32404bd8920e9feb2a8d0c17dd1, blocks d8d1f8e9fd0d3ed10d6d7217ecc994c004c76b5a3e6838c05bcd603e3264c6b9

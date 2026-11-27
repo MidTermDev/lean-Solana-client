@@ -249,7 +249,9 @@ partial def execute (m : Machine) (st0 : State) (programId : ByteArray) (metas :
   let mut mem := Fast.zeroed (stackBytes + p.heap) (stackBytes + p.heap + (if p.packed then packedInput.size else serializedSize accounts metas data) + 64)
   mem := if p.packed then mem ++ packedInput else serializeOnto mem accounts metas data programId
   let inputLen := mem.size - (stackBytes + p.heap)
-  let mut regs : Array UInt64 := Array.replicate 11 0
+  -- The registers, and after them what the program's translation into machine code keeps (`Jit`: the
+  -- layout of `cpu`), which includes the saved registers of every call in progress inside the program.
+  let mut regs : Array UInt64 := Array.replicate Jit.cpuWords 0
   regs := regs.set! 1 inputStart
   -- the second register points at the instruction's data in the input (its length sits just before it)
   regs := regs.set! 2 (inputStart + (inputLen - 32 - data.size).toUInt64)
@@ -260,10 +262,10 @@ partial def execute (m : Machine) (st0 : State) (programId : ByteArray) (metas :
   let v2 := p.version == 2
   let v3 := p.version >= 3
   regs := regs.set! 10 (stackStart + (if ownStack then stackBytes else frameBytes).toUInt64)
-  -- saved r6..r9, frame pointer and return address of every active call
   -- how much of the heap the old allocation call has handed out
   let mut allocated : UInt64 := 0
-  let mut frames : Array UInt64 := Array.replicate (maxDepth * 6) 0
+  -- (saved r6..r9, frame pointer and return address of every active call are in `regs` from `frames` on)
+  let frames := Jit.cFrames
   let mut calls := 0
   let mut pc := Fast.hotNat p.entry
   let code := p.code
@@ -273,7 +275,26 @@ partial def execute (m : Machine) (st0 : State) (programId : ByteArray) (metas :
   let mut status := finished
   let mut r0 : UInt64 := 0
   let mut detail := ""
+  -- The program's translation into machine code, if it has one and may be used. It does what the loop
+  -- below does, for as long as nothing unusual comes up, and comes back naming the instruction that it
+  -- left undone; the loop carries that one out and hands back. Reads of the program's file are limited
+  -- to what the file really holds: the loop reads zeros beyond it, the translation must not go there.
+  let native := if m.interpret then 0 else p.native
+  let starts := p.starts
+  if native != 0 then
+    let held := if p.elf.size > p.roFile then p.roLow + (p.elf.size - p.roFile) else p.roLow
+    regs := Jit.prepare regs budget heapSize inputLen p.roRegion p.roLow (if p.roHigh < held then p.roHigh else held) p.roFile
   repeat
+    if native != 0 then
+      if pc < count then
+        if starts[pc]! != 0 then
+          regs := ((regs.set! Jit.cPc pc.toUInt64).set! Jit.cUnits units).set! Jit.cCalls calls.toUInt64
+          let (cpu, memory) := Fast.run native regs mem p.elf
+          regs := cpu
+          mem := memory
+          pc := regs[Jit.cPc]!.toNat
+          units := regs[Jit.cUnits]!
+          calls := regs[Jit.cCalls]!.toNat
     if units >= budget then
       status := budgetExceeded
       break
@@ -443,9 +464,9 @@ partial def execute (m : Machine) (st0 : State) (programId : ByteArray) (metas :
         -- return from a call inside the program
         calls := calls - 1
         for k in [0:4] do
-          regs := regs.set! (6 + k) frames[calls * 6 + k]!
-        regs := regs.set! 10 frames[calls * 6 + 4]!
-        next := frames[calls * 6 + 5]!.toNat
+          regs := regs.set! (6 + k) regs[frames + calls * 6 + k]!
+        regs := regs.set! 10 regs[frames + calls * 6 + 4]!
+        next := regs[frames + calls * 6 + 5]!.toNat
       else if opc == 0x8d || (opc == 0x85 && p.syscalls[pc]! == 0) then
         -- call a function of the program: by symbol, by relative offset, or (callx) through a register,
         -- which the instruction names in a different field in each version
@@ -457,9 +478,9 @@ partial def execute (m : Machine) (st0 : State) (programId : ByteArray) (metas :
           else if !v3 && p.calls[pc]! != 0 then p.calls[pc]! - 1
           else next.toUInt64 + imm
         for k in [0:4] do
-          frames := frames.set! (calls * 6 + k) regs[6 + k]!
-        frames := frames.set! (calls * 6 + 4) regs[10]!
-        frames := frames.set! (calls * 6 + 5) next.toUInt64
+          regs := regs.set! (frames + calls * 6 + k) regs[6 + k]!
+        regs := regs.set! (frames + calls * 6 + 4) regs[10]!
+        regs := regs.set! (frames + calls * 6 + 5) next.toUInt64
         calls := calls + 1
         if calls == maxDepth then
           status := callDepthExceeded

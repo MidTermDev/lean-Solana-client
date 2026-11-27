@@ -366,6 +366,7 @@ static const struct {
     {"leanc_cas32", IN_CAS32},     {"leanc_cas64", IN_CAS64},     {"leanc_xadd64", IN_XADD64},
     {"leanc_xchg32", IN_XCHG32},   {"leanc_pause", IN_PAUSE},     {"leanc_rdtsc", IN_RDTSC},
     {"leanc_ptr", IN_PTR},         {"leanc_ofptr", IN_OFPTR},     {"leanc_forget", IN_DROPPED},
+    {"leanc_call", IN_CALL},
     {NULL, 0}};
 
 static void resolve_sig(Func *f) {
@@ -480,6 +481,8 @@ static Builtin builtins[] = {
     {"Fast.push64", "Yq>Y", B_RT, 0, "Rt.baPush64", NULL, 0, true},
     {"Fast.pushZeros", "YN>Y", B_RT, 0, "Rt.baPushZeros", NULL, 0, true},
     {"Fast.zeroed", "NN>Y", B_RT, 0, "Rt.baZeroed", NULL, 0, true},
+    {"Fast.codeLoad", "Y&>q", B_RT, 0, "Rt.codeLoad", NULL, 0, true},
+    {"Fast.run", "qQYY&>P", B_RT, 0, "Rt.codeRun", NULL, 0, true},
     {"Fast.hot", "q>q", B_OP, OP_HOT, NULL, NULL, 0, true},
     {"Fast.hotNat", "N>N", B_OP, OP_HOT, NULL, NULL, 0, true},
     {"String.append", "SS&>S", B_RT, 0, "Rt.baAppend"},
@@ -585,6 +588,8 @@ static Type *sig_type(char c) {
   case 'c': return ty_char;
   case 'S': return ty_string;
   case 'Y': return ty_bytes;
+  case 'Q': return ty_array(ty_u64);
+  case 'P': return ty_prod(ty_array(ty_u64), ty_bytes);
   case 'U': return ty_unit;
   case '!': return ty_never;
   }

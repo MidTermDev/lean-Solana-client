@@ -310,6 +310,7 @@ enum {
   IN_STORE8, IN_STORE16, IN_STORE32, IN_STORE64,
   IN_COPY, IN_FILL, IN_MEMEQ,
   IN_CAS32, IN_CAS64, IN_XADD64, IN_XCHG32, IN_PAUSE, IN_RDTSC,
+  IN_CALL,    // call the machine code at an address, with three arguments (rdi, rsi, rdx)
   IN_PTR,     // address of heap object (borrowed arg)
   IN_OFPTR,   // reinterpret raw address as heap object (takes ownership)
   IN_DROPPED, // forget a value without releasing it

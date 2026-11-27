@@ -37,6 +37,7 @@ def usage : String :=
   "  --lines        print one line per transaction: its outcome, fee, compute units and balances\n" ++
   "  --follow       after a block whose hash differs, continue from the block's own hash\n" ++
   "  --timing       say where each block's time went\n" ++
+  "  --interpret    run every program with the interpreter, none as machine code\n" ++
   "  --signatures N check every transaction's signatures, in N other processes (default 3; 0 = not at all)\n" ++
   "  --trace N      print the log of transaction N of the first block\n"
 
@@ -254,6 +255,7 @@ def main : IO Unit := do
   let mut follow := false
   -- say where each block's time went
   let mut timing := false
+  let mut interpret := false
   let mut checkers := 3
   let mut trace := Sbpf.notFound
   let mut cap : UInt64 := 0
@@ -269,6 +271,9 @@ def main : IO Unit := do
       i := i + 1
     else if a == "--timing" then
       timing := true
+      i := i + 1
+    else if a == "--interpret" then
+      interpret := true
       i := i + 1
     else if a == "--help" then
       IO.print usage
@@ -359,7 +364,7 @@ def main : IO Unit := do
   for k in [0:manifest.queue.size / 56] do
     if manifest.lastHashIndex - Wire.u64 manifest.queue (56 * k + 40) <= 150 then
       recent := recent ++ manifest.queue.extract (56 * k) (56 * k + 32)
-  let mut machine := Sbpf.Machine.create ⟨0, 0, 0, 0, 0⟩ 200000
+  let mut machine := { Sbpf.Machine.create ⟨0, 0, 0, 0, 0⟩ 200000 with interpret := interpret }
   let leaderVotes := LeaderSchedule.table manifest 1
   let leaderCollectors := LeaderSchedule.table manifest 2
   if first == 0 then

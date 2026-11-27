@@ -792,6 +792,10 @@ static void gen_intrin(Expr *e) {
     truncate(RAX, 32);
     return;
   case IN_PAUSE: b1(0xF3), b1(0x90); return;
+  case IN_CALL: // address, then what it finds in rdi, rsi, rdx; it must keep rbx, rbp and r12-r15
+    pop_r(RAX), pop_r(RDI), pop_r(RSI), pop_r(RDX);
+    b1(0xFF), b1(0xD0);
+    return;
   case IN_RDTSC:
     b1(0x0F), b1(0x31);
     shift_ri(1, 4, RDX, 32);

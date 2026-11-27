@@ -107,6 +107,26 @@ def compiled : Bool := false
 
 def quick : Bool := compiled && wide
 
+/-- The shifts whose count is in any register (`shlx`, `shrx`, `sarx`: BMI2). -/
+def anyShift : Bool := cpuBits &&& 0x100 != 0
+
+-- ------------------------------------------------------- machine code made while the program runs
+--
+-- A program can write machine code into a byte array and have the processor run it. These two functions
+-- are the whole of that door. Plain Lean has no such door, and here they do nothing: `codeLoad` answers
+-- 0 ("this machine will not run it") and whoever asked carries on the way it would on such a machine.
+
+/-- Makes `code`'s bytes executable: the address of a copy of them that the processor may run, or 0 if it
+may not. -/
+def codeLoad (code : ByteArray) : UInt64 := if code.size == 0 then 0 else 0
+
+/-- Calls the code at `entry` (an address inside something `codeLoad` returned) with the addresses of the
+words of `cpu` and of the bytes of `mem` and `ro`, and returns `cpu` and `mem` as that code left them.
+What the code does is up to whoever wrote its bytes; all this promises is that nothing but `cpu` and
+`mem` is changed. -/
+def run (entry : UInt64) (cpu : Array UInt64) (mem : ByteArray) (ro : ByteArray) : Array UInt64 × ByteArray :=
+  if entry == 0 || ro.size == 0 then (cpu, mem) else (cpu, mem)
+
 /-- Its argument. Written where a local is defined (`let mut pc := Fast.hotNat 0`), it tells `leanc` that
 this is one of the few values an inner loop turns on, to be kept in a processor register rather than in
 memory; `leanc` otherwise picks by counting uses, which says little about a loop with a hundred branches. -/

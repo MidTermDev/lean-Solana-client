@@ -47,6 +47,9 @@ namespace Mem
 /-- The `pause` spin-loop hint. -/
 @[extern "leanc_pause"] opaque pause : IO Unit
 @[extern "leanc_rdtsc"] opaque rdtsc : IO UInt64
+/-- Calls the machine code at `addr`, which finds `a`, `b` and `c` in rdi, rsi and rdx, and must leave
+rbx, rbp, rsp and r12-r15 as it found them. Returns what it leaves in rax. -/
+@[extern "leanc_call"] opaque call (addr a b c : UInt64) : IO UInt64
 
 end Mem
 
@@ -472,6 +475,34 @@ def arrUnique (p isPtr : UInt64) : IO UInt64 := do
     incElems q size
   Mem.store64 p (rc - 1)
   return q
+
+/-- `Fast.codeLoad`: a copy of an array's bytes in memory that may be executed (and no longer written);
+its address, or 0 if the system will not give such memory. -/
+def codeLoad (code : UInt64) : IO UInt64 := do
+  let size ← Mem.load64 (code + 8)
+  let len := (size + 4095) &&& errorFloor
+  let p ← Sys.syscall 9 0 len 3 0x22 0xFFFFFFFFFFFFFFFF 0
+  if size == 0 || p >= errorFloor then
+    return 0
+  Mem.copy p (code + 24) size
+  let r ← Sys.syscall 10 p len 5 0 0 0
+  if r != 0 then
+    return 0
+  return p
+
+/-- `Fast.run`: calls the code at `addr` with the addresses of the contents of `cpu` (64-bit words),
+`mem` and `ro` (bytes). The code may change the first two, so each is first made the only reference
+to its array. Returns the pair of them. -/
+def codeRun (addr cpu mem ro : UInt64) : IO UInt64 := do
+  let cpu ← arrUnique cpu 0
+  let mem ← baUnique mem
+  let _ ← Mem.call addr (cpu + 24) (mem + 24) (ro + 24)
+  let pair ← alloc 32
+  Mem.store64 pair 1
+  Mem.store64 (pair + 8) 0
+  Mem.store64 (pair + 16) cpu
+  Mem.store64 (pair + 24) mem
+  return pair
 
 def arrPush (p v isPtr : UInt64) : IO UInt64 := do
   let rc ← Mem.load64 p

@@ -8,6 +8,7 @@ import Crypto.Blake3
 import Encoding.Base58
 import Encoding.Base64
 import Solana.Wire
+import Solana.Jit
 
 /-!
 # The parts of the virtual machine that do not execute anything
@@ -21,13 +22,7 @@ on this, and `Solana.Sbpf` the interpreter.
 
 namespace Sbpf
 
--- The virtual address space of a program.
-def programStart : UInt64 := 0x100000000
-def stackStart : UInt64 := 0x200000000
-def inputStart : UInt64 := 0x400000000
-def frameBytes : Nat := 4096
-def maxDepth : Nat := 64
-def stackBytes : Nat := 262144
+-- (The virtual address space of a program, `programStart` to `stackBytes`, is laid out in `Solana.Jit`.)
 def heapBytes : Nat := 32768
 /-- How deep programs may call one another (the top-level instruction is 1). -/
 def maxInstructionDepth : Nat := 5
@@ -209,6 +204,10 @@ structure Program where
   code : Array UInt64
   /-- No instruction names a register above 10 (so running one need not check). -/
   tidy : Bool
+  /-- Where the program's translation into machine code starts (`Solana.Jit`), or 0 if it has none. -/
+  native : UInt64
+  /-- For each instruction, whether the translation can be entered there. -/
+  starts : ByteArray
   deriving Inhabited
 
 /-- The `count` instructions at `textOff`, each as one little-endian word. -/
@@ -225,7 +224,7 @@ def tidyWords (code : Array UInt64) : Bool := Id.run do
   return true
 
 def Program.failed (elf : ByteArray) (why : String) : Program :=
-  ⟨elf, 0, 0, 0, 0, 0, Array.emptyWithCapacity 0, Array.emptyWithCapacity 0, why, 32768, 0, 0, 0, 1, 0, false, 0, Array.emptyWithCapacity 0, false⟩
+  ⟨elf, 0, 0, 0, 0, 0, Array.emptyWithCapacity 0, Array.emptyWithCapacity 0, why, 32768, 0, 0, 0, 1, 0, false, 0, Array.emptyWithCapacity 0, false, 0, ByteArray.empty⟩
 
 /-- Where a section sits in the file, and the address it asks for. Size 0 means "absent". -/
 structure Section where
@@ -353,11 +352,12 @@ def loadStrict (elf : ByteArray) : Program := Id.run do
       else
         syscalls := syscalls.set! pc id
   return ⟨elf, textOff, count, 0, roSize, ((entry - programStart) / 8).toNat, syscalls, Array.replicate count 0, "", 32768,
-    3, roOff, programStart, 0, 0, false, 0, instructionWords elf textOff count, tidyWords (instructionWords elf textOff count)⟩
+    3, roOff, programStart, 0, 0, false, 0, instructionWords elf textOff count, tidyWords (instructionWords elf textOff count),
+    0, ByteArray.empty⟩
 
 /-- Parses and relocates an sBPF ELF file as written by Solana toolchains. Versions 0 to 2 share
 this loader; version 3 has its own. -/
-def load (image : ByteArray) : Program := Id.run do
+def parse (image : ByteArray) : Program := Id.run do
   let mut elf := image
   if elf.size < 64 || Wire.u32 elf 0 != 0x464c457f then
     return Program.failed elf "not an ELF file"
@@ -441,7 +441,21 @@ def load (image : ByteArray) : Program := Id.run do
           syscalls := syscalls.set! pc (syscallId elf (names.off + nameOff))
   return ⟨elf, text.off, count, roLow, roHigh, ((entryAddr - text.addr) / 8).toNat, syscalls, calls, "", 32768,
     version.toNat, roLow, programStart + text.off.toUInt64, 1, 0, false, 0, instructionWords elf text.off count,
-    tidyWords (instructionWords elf text.off count)⟩
+    tidyWords (instructionWords elf text.off count), 0, ByteArray.empty⟩
+
+/-- Translates a program into machine code where that can be run (`Solana.Jit`): on a processor that has
+what the translation uses, for the versions whose instructions it knows (0 and 3), and never under the
+official Lean toolchain, where `Fast.codeLoad` declines. The program is otherwise unchanged, and means
+the same either way. -/
+def Program.translated (p : Program) : Program :=
+  if !Fast.compiled || !Fast.anyShift || p.error != "" || !p.tidy || (p.version != 0 && p.version != 3) then p
+  else
+    let (code, starts) := Jit.compile p.code p.syscalls p.calls p.count p.entry (p.version == 3) p.textAddr p.roRegion
+    let at_ := Fast.codeLoad code
+    if at_ == 0 then p else { p with native := at_, starts := starts }
+
+/-- Loads a program: parses it, and translates it if this machine can run the translation. -/
+def load (image : ByteArray) : Program := (parse image).translated
 
 -- ------------------------------------------------------------------- memory
 --
@@ -711,6 +725,8 @@ structure Machine where
   cap : UInt64
   /-- where each address in `ids` is (see `keyAt`); the latest registration of an address is the one found -/
   index : Array UInt64
+  /-- run every program with the interpreter, even one that has been translated into machine code -/
+  interpret : Bool
   deriving Inhabited
 
 /-- Everything an instruction can change. `status` is `finished` (0) while
@@ -759,7 +775,7 @@ def Sysvars.standard : Sysvars :=
 
 def Machine.create (clock : Clock) (budget : UInt64) : Machine :=
   ⟨Array.emptyWithCapacity 4, Array.emptyWithCapacity 4, clock, budget, Sysvars.standard, 32768, ByteArray.empty, 5000, 0,
-    Array.replicate 64 0⟩
+    Array.replicate 64 0, false⟩
 
 /-- The smallest balance at which an account with `size` bytes of data is
 exempt from rent: (128 + size) bytes at the rate in the Rent sysvar. -/
