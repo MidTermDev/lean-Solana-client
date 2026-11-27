@@ -86,12 +86,19 @@ def ingest (st : State) (v : ByteArray) : State := Id.run do
         nodes := nodes.set row Nodes.fShred c.shredVersion
         nodes := nodes.set row Nodes.fRepair c.repair
         nodes := nodes.set row Nodes.fTvu c.tvu
+        nodes := nodes.set row Nodes.fRpc c.rpc
   else if info.kind == Crds.kindSnapshotHashes then
     let slot := Crds.snapshotSlot v info.body
     let (ns, row) := rowFor nodes v info.origin
     nodes := ns
     if row != Nodes.notFound && slot > nodes.get row Nodes.fSnapshot && slot < 0x10000000000 then
       nodes := nodes.set row Nodes.fSnapshot slot
+    -- the full snapshot it announces, and that snapshot's hash
+    let full := Crds.fullSnapshotSlot v info.body
+    if row != Nodes.notFound && full != 0 && full >= nodes.get row Nodes.fFullSlot && full < 0x10000000000 then
+      nodes := nodes.set row Nodes.fFullSlot full
+      for i in [0:4] do
+        nodes := nodes.set row (Nodes.fFullHash + i) (Wire.u64 v (info.body + 40 + 8 * i))
   return ⟨seen, prefixes, hashes, nodes, kinds, fresh + 1, dups⟩
 
 end State

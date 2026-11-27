@@ -1,0 +1,19 @@
+text-1: 26015 bytes to 60000: the original
+text-19: 22539 bytes to 60000: the original
+code-3: 10859 bytes to 37678: the original
+code-22: 9522 bytes to 37678: the original
+binary-9: 429 bytes to 1256: the original
+skewed-3: 116768 bytes to 332000: the original
+skewed-long: 105301 bytes to 332000: the original
+zeros: 34 bytes to 300000: the original
+random: 50014 bytes to 50000: the original
+empty: 13 bytes to 0: the original
+one-byte: 14 bytes to 1: the original
+fast: 40046 bytes to 61256: the original
+no-checksum: 10418 bytes to 37678: the original
+two-frames: 26444 bytes to 61256: the original
+skippable: 26030 bytes to 60000: the original
+15 of 15 give back the original; 15 also when fed in pieces
+cut short at 40 places: 40 refused
+not Zstandard at all: not a Zstandard stream
+400 damaged streams: 351 refused, 49 decoded, digest 13090959328887791298

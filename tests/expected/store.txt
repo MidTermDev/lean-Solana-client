@@ -1,0 +1,9 @@
+filed 20000 accounts, replaced 6667; the index holds 20000 in a table of 32768
+closed: failed false
+reopened: failed false, table of 32768
+found 20000 of 20000, each its newest version
+addresses never filed: 5000 of 5000 not found
+account 9: 1010 lamports, executable true, 344 bytes, slot 6, rent epoch 18446744073709551615
+opened with the wrong seed: 2000 of 2000 not found
+a shard that is not there: failed true
+which shard: 0 7 8 of 16

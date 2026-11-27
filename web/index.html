@@ -241,7 +241,7 @@
     </div>
 
     <div class="facts">
-      <div class="fact"><strong>535 KB</strong><span>the whole client, one static binary</span></div>
+      <div class="fact"><strong>675 KB</strong><span>the whole client, one static binary</span></div>
       <div class="fact"><strong>40 ms</strong><span>to build it from source</span></div>
       <div class="fact"><strong>0</strong><span>dependencies to build or run</span></div>
       <div class="fact"><strong id="f-uptime">—</strong><span>this node's uptime</span></div>
@@ -388,6 +388,7 @@ account   vaultB   data 5a60e8a6…   <i>(changed)</i></pre>
             <div class="def"><h3>Runs every sBPF version</h3><p>v0 through v3: one program compiled four ways gives the same answers at four different costs, each matching Agave.</p></div>
             <div class="def"><h3>Deploys and upgrades programs</h3><p>The program loader, the system program with nonce accounts, and the stake, config and lookup-table programs, as transactions.</p></div>
             <div class="def"><h3>Follows the chain</h3><p>Receives every block over turbine, rebuilds the shreds that do not arrive from the coding shreds, and checks each block and its link to the one before.</p></div>
+            <div class="def"><h3>Loads and verifies state</h3><p>Streams a snapshot from a validator, decompresses and unpacks it, files every account in a store, and checks them all against the lattice hash the snapshot is named after.</p></div>
             <div class="def"><h3>Enforces the account rules</h3><p>Only an owner changes an account's data or spends its lamports, read-only stays read-only, and lamports are conserved.</p></div>
             <div class="def"><h3>Exports what it learns</h3><p>A JSON snapshot of every node, a JSON file that stays fresh, and Prometheus metrics over HTTP.</p></div>
             <div class="def"><h3>Keeps a stable identity</h3><p>An optional key file makes a long-running node the same node after a restart.</p></div>
@@ -406,7 +407,7 @@ account   vaultB   data 5a60e8a6…   <i>(changed)</i></pre>
         <h2>What it is not</h2>
         <div class="stack">
           <div class="defs">
-            <div class="def"><h3>Not a validator</h3><p>It does not download blocks, replay transactions or vote. It observes and verifies the gossip plane.</p></div>
+            <div class="def"><h3>Not a validator</h3><p>It does not execute blocks, vote or produce anything. It observes and verifies: gossip, every block, and state from a snapshot.</p></div>
             <div class="def"><h3>Listen-only</h3><p>It answers pings but does not yet serve or push records to other nodes.</p></div>
             <div class="def"><h3>Checks blocks, does not replay them</h3><p>Blocks are fetched and verified down to every signature, but not executed against the ledger: the bank hash in each block is the leader's, not recomputed.</p></div>
             <div class="def"><h3>Follows, does not decide</h3><p>It receives and verifies every block, but which key should lead a slot comes from stake, and stake comes from replay. Until then a block is accepted if a node known from gossip signed it.</p></div>
@@ -444,12 +445,13 @@ account   vaultB   data 5a60e8a6…   <i>(changed)</i></pre>
                 <li><b>Built-in programs</b>System with nonces, the program loader, stake, config, lookup tables.</li>
                 <li><b>Block verification</b>Real blocks fetched as shreds: Merkle paths, leader signature, proof of history, every transaction signature.</li>
                 <li><b>Every block</b>The turbine feed, Reed–Solomon recovery of missing shreds, and each block linked to its parent.</li>
+                <li><b>Snapshots</b>Zstandard, tar, BLAKE3 and the lattice hash: a snapshot's accounts loaded into a store and verified against its name.</li>
               </ul>
             </div>
             <div class="stage next">
               <h3><i></i>Next</h3>
               <ul>
-                <li><b>State</b>A snapshot of every account, downloaded, unpacked and verified.</li>
+                <li><b>Mainnet's state</b>Load mainnet's snapshot with the loader, and compute the leader schedule from its stakes.</li>
                 <li><b>Replay</b>State from a snapshot, the vote program, the remaining system calls, and bank hashes that match.</li>
                 <li><b>Full gossip participant</b>Serve pull requests and push records, not only listen.</li>
                 <li><b>Record ageing</b>Expire old records one by one instead of flushing the store.</li>

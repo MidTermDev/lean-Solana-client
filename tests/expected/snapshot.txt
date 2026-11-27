@@ -1,0 +1,26 @@
+archive: 386729 bytes, unpacked 1885696
+format 1.2.0 · slot 1200, parent 1199 · block height 1200 · epoch 18
+bank hash HT3c3xPs5BFiYvjFaPWfuvt7LjgDmninabeSgvMQwTy9 · parent's 7XWioau1D1prDJFUTkQS4TtoybVZTeGtiPa2fuPtXkpT
+blockhash BU1kXYGZFfCv3EsCMFCeN2yGtXknh6Lp3bZDhMybTCDV (301 kept) · leader E3BdbTnv1aBDcJQjQybYzKc476d2psgFB6HaaKfX1qdV
+supply 503000582023076742 lamports · 1585787 bytes of account data · 1218 transactions so far, 2 signatures in this slot
+ticks: 8 per slot, height 9608, 0 hashes each · 5000 lamports per signature
+epochs: 64 slots, leader schedule 64 slots ahead, warm-up false, first normal epoch 0 at slot 0
+stakes: 1 vote accounts, 1 delegations
+  epoch 17: E3BdbTnv1aBDcJQjQybYzKc476d2psgFB6HaaKfX1qdV votes with 4y5juuSiEeuoDq5FbDNH9j7h3GkQSCrApskB9zKDcjVs, stake 1000058144880310 of 1000058144880310
+  epoch 15: E3BdbTnv1aBDcJQjQybYzKc476d2psgFB6HaaKfX1qdV votes with 4y5juuSiEeuoDq5FbDNH9j7h3GkQSCrApskB9zKDcjVs, stake 1000050391925660 of 1000050391925660
+  epoch 16: E3BdbTnv1aBDcJQjQybYzKc476d2psgFB6HaaKfX1qdV votes with 4y5juuSiEeuoDq5FbDNH9j7h3GkQSCrApskB9zKDcjVs, stake 1000054268403002 of 1000054268403002
+  epoch 19: E3BdbTnv1aBDcJQjQybYzKc476d2psgFB6HaaKfX1qdV votes with 4y5juuSiEeuoDq5FbDNH9j7h3GkQSCrApskB9zKDcjVs, stake 1000065897834824 of 1000065897834824
+  epoch 18: E3BdbTnv1aBDcJQjQybYzKc476d2psgFB6HaaKfX1qdV votes with 4y5juuSiEeuoDq5FbDNH9j7h3GkQSCrApskB9zKDcjVs, stake 1000062021357584 of 1000062021357584
+block id recorded: false
+accounts: 304 in 10 files, 298 addresses · 503000582023076742 lamports · 1585787 bytes of data
+lattice hash 9r67SHZcBSFAZhBiAw2cgPsB5TsArx9nHqasU2regDhs
+  the manifest's: true · the archive's name: true · supply: true · data: true
+result: verified
+one bit of one account's data changed: the accounts are not the ones the manifest describes
+one lamport more in one account: the accounts are not the ones the manifest describes
+one account given another owner: the accounts are not the ones the manifest describes
+a file's name altered: bad header at 87040
+the newest account file missing: the accounts are not the ones the manifest describes
+300 damaged manifests: 59 refused, 241 read, digest 8163432141824223669
+2000 records read at arbitrary offsets: 488 looked whole, none read past the end
+file names: true false false false false

@@ -14,7 +14,7 @@ ORACLE=0
 [ "${1:-}" = "--oracle" ] && ORACLE=1
 # Tests that use raw syscalls only exist as machine code: the official
 # interpreter has no implementation of the leanc_* intrinsics.
-NATIVE_ONLY="ipc panic inplace"
+NATIVE_ONLY="ipc panic inplace store"
 mkdir -p build/tests
 pass=0
 fail=0

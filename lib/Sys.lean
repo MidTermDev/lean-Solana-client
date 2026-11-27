@@ -318,4 +318,128 @@ def recvFrom (fd : UInt64) (max : Nat) : IO Datagram := do
   let ip := (a0 <<< 24) ||| (a1 <<< 16) ||| (a2 <<< 8) ||| a3
   return ⟨buf, ip.toUInt32, ((p0 <<< 8) ||| p1).toUInt16⟩
 
+-- ---------------------------------------------------- large files and pipes
+
+/-- Opens a file. `flags`: 0 read, 0x42 read and write, creating it, 0x241 write, creating and emptying it, 0x242 the same and readable,
+0x441 write at the end, creating it. Returns the descriptor, or an error (`isErr`). -/
+def openFile (path : String) (flags : UInt64) : IO UInt64 := do
+  let cpath := path.toUTF8.push 0
+  let p := Unsafe.addr cpath
+  syscall 2 (p + 24) flags 0x1a4 0 0 0
+
+/-- Writes `len` bytes starting at address `addr`, all of them. -/
+def writeFrom (fd addr len : UInt64) : IO Bool := do
+  let mut off : UInt64 := 0
+  while off < len do
+    let r ← syscall 1 fd (addr + off) (len - off) 0 0 0
+    if isErr r || r == 0 then
+      -- (an interrupted call is simply made again)
+      if errno r != 4 then
+        return false
+    else
+      off := off + r
+  return true
+
+/-- Writes all of `data`. -/
+def writeFully (fd : UInt64) (data : ByteArray) : IO Bool :=
+  writeFrom fd (Unsafe.addr data + 24) data.size.toUInt64
+
+/-- Reads exactly `len` bytes at offset `off` of a file. Returns fewer only at the end of the file or on error. -/
+def readAt (fd off : UInt64) (len : Nat) : IO ByteArray := do
+  let buf := scratch len
+  let p := Unsafe.addr buf
+  let mut got : UInt64 := 0
+  while got < len.toUInt64 do
+    let r ← syscall 17 fd (p + 24 + got) (len.toUInt64 - got) (off + got) 0 0
+    if isErr r || r == 0 then
+      break
+    got := got + r
+  setSize buf got
+
+/-- The size of an open file. -/
+def fileSize (fd : UInt64) : IO UInt64 := do
+  let st := scratch 144
+  let p := Unsafe.addr st
+  let r ← syscall 5 fd (p + 24) 0 0 0 0
+  if isErr r then
+    return 0
+  Mem.load64 (p + 24 + 48)
+
+/-- A pipe: what is written to the second descriptor is read from the first. -/
+def pipe : IO (UInt64 × UInt64) := do
+  let fds := scratch 8
+  let p := Unsafe.addr fds
+  let r ← syscall 22 (p + 24) 0 0 0 0 0
+  if isErr r then
+    IO.eprintln "pipe failed"
+    exit 1
+  let reading ← Mem.load32 (p + 24)
+  let writing ← Mem.load32 (p + 28)
+  return (reading, writing)
+
+/-- Asks for a pipe that holds `bytes` before a writer has to wait. -/
+def setPipeSize (fd bytes : UInt64) : IO Unit := do
+  let _ ← syscall 72 fd 1031 bytes 0 0 0
+  pure ()
+
+/-- Writing to a pipe nobody reads then fails with an error instead of ending the process. -/
+def ignoreBrokenPipes : IO Unit := do
+  let act := scratch 32
+  let p := Unsafe.addr act
+  Mem.fill (p + 24) 0 32
+  Mem.store64 (p + 24) 1
+  let _ ← syscall 13 13 (p + 24) 0 8 0 0
+  pure ()
+
+/-- Creates a directory; it is no error if it exists. -/
+def mkdir (path : String) : IO Unit := do
+  let cpath := path.toUTF8.push 0
+  let p := Unsafe.addr cpath
+  let _ ← syscall 83 (p + 24) 0x1ed 0 0 0 0
+  pure ()
+
+def unlink (path : String) : IO Unit := do
+  let cpath := path.toUTF8.push 0
+  let p := Unsafe.addr cpath
+  let _ ← syscall 87 (p + 24) 0 0 0 0 0
+  pure ()
+
+/-- Bytes free for an ordinary user on the filesystem holding `path`; 0 if that cannot be told. -/
+def freeSpace (path : String) : IO UInt64 := do
+  let cpath := path.toUTF8.push 0
+  let p := Unsafe.addr cpath
+  let st := scratch 120
+  let q := Unsafe.addr st
+  let r ← syscall 137 (p + 24) (q + 24) 0 0 0 0
+  if isErr r then
+    return 0
+  let blockSize ← Mem.load64 (q + 24 + 8)
+  let available ← Mem.load64 (q + 24 + 32)
+  return blockSize * available
+
+/-- Private zeroed memory, straight from the kernel: for tables too large for the heap. Returns 0 on failure. -/
+def mapMemory (len : UInt64) : IO UInt64 := do
+  let p ← syscall 9 0 len 3 0x22 0xFFFFFFFFFFFFFFFF 0
+  return if isErr p then 0 else p
+
+/-- Maps a whole file for reading. Returns 0 on failure. -/
+def mapFile (fd len : UInt64) : IO UInt64 := do
+  let p ← syscall 9 0 len 1 2 fd 0
+  return if isErr p then 0 else p
+
+def unmap (addr len : UInt64) : IO Unit := do
+  let _ ← syscall 11 addr len 0 0 0 0
+  pure ()
+
+/-- Waits for a child to exit. Returns its pid and how it ended (0 = normally, with success), or pid 0 if there are no children. -/
+def waitChild : IO (UInt64 × UInt64) := do
+  let st := scratch 8
+  let p := Unsafe.addr st
+  Mem.store64 (p + 24) 0
+  let r ← syscall 61 0xFFFFFFFFFFFFFFFF (p + 24) 0 0 0 0
+  if isErr r then
+    return (0, 0)
+  let status ← Mem.load32 (p + 24)
+  return (r, status)
+
 end Sys

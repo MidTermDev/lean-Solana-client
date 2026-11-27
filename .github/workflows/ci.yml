@@ -18,6 +18,10 @@ jobs:
         run: examples/amm.sh | grep -q 'units     4,690 of 200,000'
       - name: a block of mainnet verifies offline
         run: ./build/leansol block --file tests/blocks/mainnet-474319150.block | grep -q '203 signatures, all valid'
+      - name: a snapshot written by Agave loads, verifies and answers lookups
+        run: |
+          ./build/leansol snapshot --file tests/snapshots/snapshot-1200-9r67SHZcBSFAZhBiAw2cgPsB5TsArx9nHqasU2regDhs.tar.zst --accounts build/state --workers 4 | grep -q '= the hash the snapshot is named after'
+          ./build/leansol account TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA --accounts build/state | grep -q 'lamports     1141440'
       - name: a signed transaction is applied, from the command line
         run: examples/transaction.sh | grep -q 'fee          5,120 lamports'
       - name: the outputs are static and freestanding

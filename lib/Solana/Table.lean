@@ -60,7 +60,7 @@ structure Nodes where
 
 namespace Nodes
 
-def fields : Nat := 8
+def fields : Nat := 14
 def fWallclock : Nat := 0
 def fVersion : Nat := 1
 def fClient : Nat := 2
@@ -71,6 +71,11 @@ def fSnapshot : Nat := 5
 def fRepair : Nat := 6
 /-- where the node receives shreds, packed the same way -/
 def fTvu : Nat := 7
+/-- The node's RPC port, as `ip <<< 16 ||| port`; 0 if it advertises none. -/
+def fRpc : Nat := 8
+/-- The newest full snapshot the node announces: its slot, and its hash in the four words that follow. -/
+def fFullSlot : Nat := 9
+def fFullHash : Nat := 10
 
 def notFound : Nat := 0xFFFFFFFF
 

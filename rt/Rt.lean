@@ -319,10 +319,14 @@ def baCopySlice (src srcOff dest destOff len : UInt64) : IO UInt64 := do
   let tailLen : UInt64 := if tailStart < dsz then dsz - tailStart else 0
   let total := d0 + n + tailLen
   let rc ← Mem.load64 dest
-  if rc == 1 && total == dsz && d0 == destOff then
+  let cap ← Mem.load64 (dest + 16)
+  -- in place when the array is ours alone and has the room: overwriting, or appending at its end
+  if rc == 1 && total <= cap && d0 == destOff then
     Mem.copy (dest + 24 + d0) (src + 24 + s0) n
+    Mem.store64 (dest + 8) total
     return dest
-  let q ← baNew total
+  -- (room to spare when growing our own array, so that repeated appends do not copy it each time)
+  let q ← baNew (if rc == 1 && total > dsz && cap * 2 > total then cap * 2 else total)
   Mem.copy (q + 24) (dest + 24) d0
   Mem.copy (q + 24 + d0) (src + 24 + s0) n
   Mem.copy (q + 24 + d0 + n) (dest + 24 + tailStart) tailLen

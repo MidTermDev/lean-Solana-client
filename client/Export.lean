@@ -143,6 +143,17 @@ def json (sh : Shared) (cfg : Config) (withNodes : Bool) : IO String := do
       s := s ++ s!"\"version\": \"{versionString (snap.field row Nodes.fVersion)}\", "
       s := s ++ s!"\"shredVersion\": {snap.field row Nodes.fShred}, "
       s := s ++ s!"\"wallclockMs\": {snap.field row Nodes.fWallclock}, "
+      let rpc := snap.field row Nodes.fRpc
+      s := s ++ (if rpc == 0 then "\"rpc\": null, " else s!"\"rpc\": \"{Ip.toString (addrIp rpc)}:{addrPort rpc}\", ")
+      -- the full snapshot the node announces: a snapshot is named after its slot and this hash
+      let full := snap.field row Nodes.fFullSlot
+      if full != 0 then
+        let mut hash := ByteArray.emptyWithCapacity 32
+        for i in [0:4] do
+          hash := Wire.putU64 hash (snap.field row (Nodes.fFullHash + i))
+        s := s ++ s!"\"fullSnapshot\": \"{full}-{Base58.encode hash}\", "
+      else
+        s := s ++ "\"fullSnapshot\": null, "
       s := s ++ (if snapshot == 0 then "\"snapshotSlot\": null}" else s!"\"snapshotSlot\": {snapshot}}")
       first := false
   s := s ++ "\n  ]\n}\n"

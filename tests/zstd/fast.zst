@@ -1,0 +1,449 @@
+(µ/ıdHîãüd<h1 align="center">lean-solana-client</h1>
+
+<p
+  <b>A Solana client written in Lean 4, compiled by its own zero-dependency Lean&nbsp;â†’&nbsp;machine-code compiler,<br>
+  with processes that talk over nothing but shared memory and a raw futex.</b>
+</pa href="https://github.com/MidTermDev/lean-Solana-client/actions/workflows/ci.yml"><img src/badge.svg" alt="ci"></a>
+</pleansvm.com"></a></b>: a node running this code, live on mainnet#quick-start">Quick start</a> Â·
+  #how-it-works">How it works</a> Â·#the-lean-you-can-write">The Lean subsetchecked-against-the-real-lean">Verificationnumbers">Numberslimits-and-roadmap">LimitsInspirtoly's remarka Leanould be easy once you have your own -free Leanr and a raw futex for IPC. This repository takesliterally:
+
+| the idea | what is inrepo |
+|---|---|
+| a| `client/` â€”joins's gossip network and verifiest hears,**Lean 4** |
+| itsâ†’ machin | `leanc/` â€” **4 in, static x86-64 ELF out**. No LLVM, no C backend, no assembler, no linkbc |
+|ib/Ipc.lean` â€” lock-free ring;only kernel object is **one futex word** |
+
+And since toly then published [lean-svm](aeyakovenko/vm), whichsinto on-chain programs, there is a fourth piece: an **sBPF virtual ** (`lib/Solana/Sbpf.lean`), also in,runs those programs, includinges that callreal SPL tokeand runs Rust built with Anchor too. on both sides of the bytecode.docs/dashboard.svg" alt="The client's dashboard after 45 seconds: 4,005 nodes discovered, 40,119 signatures verified, 0 bad" width="860"<sub>Arun: on mainnet-beta. Every  on that screen comes from records wEd255 was  by code.</sub>## What it does
+
+`ol` is a **gossip **: the kind of nodealls a *spy*. Run it andill
+
+1. resolve an entrypoinDNS resolvsk it for the cluster's shred version,
+2. generate an identity, bind a UDP socket and start sending signed pull requests,
+3. answer the ping challenges peers send back, proving it owns its address,
+4. receivereplicated data store (who theare, what they run, which snapshots they hold),
+5. **check thon every single record** before believing it,
+6. drawas learned.
+
+All of it â€” SHA-256, SHA-512, Ed25519, the bloom filters,wire formathash tableDNS query, the terminal UI, the memory allocator underneath â€” isd to code by th in.
+
+It also **verifies real blocks** (see [y blocks](#verify-blocks)), **** locally with  run`,pplies wholeed **transactions** tx`: Run](#run--).
+
+**Wis not:** a validator. It does not download, replay transactions, vote, or produce anything. It observesthe plane. See [L and ](#limits-and-roadmap) for exactly wthe line is.Quick start
+
+**Jus it.**release ship as a single 535 KB static binary (Linux,):
+
+```sh
+curl -LO s/latest/download/-x86_64-linux
+chmod +x . # joins-beta gossip
+```
+
+**Or build it.** You need Linux on`make`. No C, no Lean installation, nothing elsegit clone MidTermDev/lean-S
+cd make# sourceELF out: about 40 milliseconds
+./build/Within a fewyou shsee nodes pouring in. `ctrl-c` quits. `--cluster testnet` anddevnet` worksame way.
+
+```
+usage:  [options]
+  NAME      mainnet (default), testnet or devnet
+  --entrypoint HOST   gossip to join through (host or host:port; repeatable)
+  --port NUDP porbind: chosen by the kernel)
+  --tiles Nfature- processes 4, max 16)
+  --fanout Npulled from e200 ms, besidess (default 12)
+  --duration SECONDS  exitlong:until interruptedlain one status line per second instead of FILE     keep's key in FILE so its survivs
+(created on first use; a freshrun)
+  --json   print ever learned as one JSON document on exitstatus lines go to stderr; runs 30 s unless --duris give-file PATH    rewrite PATH withJSON docume tvu: advertiseN forlisten on it.Both--port must be reachablethe internet (validators ping the
+  portbelieve a node exists);may beport.ollow-tilesassemble andys received that way6-val S out a: fetch a recent block from validatoriS sec 5; 0 = nevermetrics [IP:]PORT  Prometheus at /nd theat /nodes.json
+ (binds 127.0.0.1an IP; 0.0.0.0 for all faces)help       text
+
+PROGRAM.so [options]   execute  locally
+ run --help`)tx TRANSACTION [options]   apply a to accounts,tx [SLOT] `)
+```
+
+Piped or redirected, it switches to logautomaticallyconsole
+$ ./build/5 | cat
+[00:00:01]s=157 tip=474244559ied=882 bad=0 malformed=0 stored=313 sig/s=882 rx=168967B/s pulls=29 pongs=10
+[00:00:02606 t1872 bad=0 malformed=0 stored=1129 sig/s=990 rx=192508B/s pulls=83 pongs=37
+[00:00:03] nodes=1263 tip=474244559d=26902387818 rx=15592137 pongs=66
+...
+```
+
+It needs outbound UDP, andTCP toentrypoint's gossip port (8001)itial "s my address" request. Nhas to be opened inbound: peery to the address your requests come from.
+
+Other targets:
+
+```sh
+make test# compirun the test suiteleanc-seed  # optional: rebuilits Cand compare outputs
+make al: type-checkfficial Lean tooltoo
+```Use the data
+
+T is for people. Forelse taree-readable outputs,describing:shas it.
+
+**A JSON snapshot.** Listen for a while, print one,json20 >.json
+$ jq -c .clients{"Agave":2232,"Jito":854,Bam":352,"Firedancer":150,"HarmonicAgave":101,"HarmonicFiredancer":49,"FireBAM":21,"other":17,"Rakurai":12,"Raiku":4,"Franken1}
+$ jq '.nodes[0]'{
+  "": "HBNYZTJWrCjjm38MR1c5vpua1E2w1GPiKL9QhKsVgHaN",
+  "": "37.72.171.250:8000",
+  "client": Id": 3": "4.4.1",
+  "shredV50093,
+  "wallclockMs": 1795719432671snapshotSlot": 474237159
+-r '.nodes[] | select(. == ) | . | head -3
+PKb1GJrwtu1zuCQNS8SwPUwowSDbBbvPGsHj7ynTB9y
+VQwCCSfW3o5NDx7n5FBr9SoYiLXVgetstHvaWBvv2YH
+4Ha5nncB2reFpQW6SEjbEAfrbXHp3crCeUz5u7zSRBYa
+```he summary (`nodeCount`, `tipSlot`, `sied`, â€¦), the `s` and `versions` breakdowns ordered by popularity, and on per node. Twenty finds most of mainnet; a minute finds essentiall of itA filestays fresh.** For a long-running node, `` rewrites. The write is atomic (temporary filen `rename`), so readers never see half a file.
+
+**nd JSON over HTTP.** `--9184` adds a smallr &
+$ curl -s9184/| grep -E '^leansol_(nodes |tip_slot||_by_client)'
+ 3793tip_slot 474256571_ied_total 16286bad_total 0{=} 2232Jito"} 854} 35} 150
+... | jq .
+| path | what |
+|---|---|
+| `/` | Prometheu format: counters,tip, `â€¦}`,__by_{versionrecords_total{type summary` | totals an/: a kilobyte or so, cheap to poll |
+| `plusnode: t`` prints, generated on |
+
+Its on `127.0.0.1` unlesay otherwise (`--:9184`)re is no authentor TLS, so pubehind someif you expose it. A scrape config isline: `- targets: ['localhost:9184']`.
+
+###a public node[vm.co) is this binary under systemd, with a keyso it keepsacrossh
+.key --8001 --tiles 23 [`deploy/leansol.service`](e unit[`web/`](web/site:ic pagmall proxy functionfetches `/summary.the nodlets a CDN cache itanyvisitors costonecouple. Responses carry `Cache-Control` and CORS headers forpurpose.
+
+Lik here, the server i: `socket`, ``, `accept` by syscall, an HTTPparser of a dozena tiles ownreadspagesdisturs ydoes not only to gossip. Given ait [followshain](#follow-the-), receivingyblock;out one isfewchecks.` doesame for,
+slot 474318686 (710)
+asking 24 of 3150with a repair; 4026 keys cbe the leader
+fetched      4161892 ms Â· 569Â· 21ed Â· 21 ping
+  AEHqTB2RtJjegsR2ePjvoJSm6AA5pnYKWVbcsn6kqTBD
+parent 685, blockhash CS1RSgGcd3av6JJ4SZqWjMsF2ovKcT7FWvVwbT36jhYC
+ 416 in 13 s Merkle,set signed byained to the firstentrie297 (1 ticks) Â· 298,170 bytes
+historyhashes recomputed: is unbroken
+s 302 Â· 328s, all
+hash    BeY3dkUgp2kP9gzLDRkoKbYkeQRSdX5yco9C9tQgiAu3
+bank hash    6JhQqAHwm78zBgAqDzbJUX4YaWCtPoU1CXNX4xLkGQB4 (ascomputed it; not rehere)
+produc agave/4.4.1 (src:aab2c913; feat:9fd5a0b5, :JitoLabs)
+in 879 ms
+```
+
+Atravel cuts it into **shreds**bkilobyne UDP packet eachfor every 32 of them adds 32 more man 64 rerTves of a Merkle tree whose rootigns:hred,, proves it c. Each set oflso names thseit, which chains a's sets together and each to its parent.
+
+What isn [`lib/Solana/Block.lean`]():
+
+1. **Every shred's Merkle path**s to aame set agree on it.
+2. **Each is signed** by tkey, the slot's leader.
+3. **Each set follows th**,last se.
+4. **The',ed in order,s** as and block markers: a header nam, a footer's bank hashthe software produced th.
+5proof of history is unbroken**'s hashprevious onestatedtimes,s mixed in, starting's .
+6. ** of every** verifies.come over the **repair protocol** ([`lib//Repair)): arequest of on,at shred, aftator has pinged ustokenback.  is how fill gaps; ta behind a firewall, to which nobody can send anunasked, gets whols1.3s, spread over twos. A node with no reachable port works this way all the time: it *samples* blocks, on `` (5 by ).
+
+Mtaughtcode two things its sources did not: now**markers** between their(the footer is whecomes from),half ofs use a newer **v1 layout**e message first ans last. Both are parsed; v1are in blocks buttx`executm yet.
+
+` --save` keep`--filies oneno network. [`tests/btests/)at with (slot 474,319,150: 320s, 183)damageight ways, each of which must be caughtmeant for ia of shred 7 changed:belongset
+ on shred 64erting  64 is not
+ 3 and 4 swapped:  3 is or ouplace
+ast shred missing:e slot
+ unknown0any known node
+anoa: proof of history 0ettheset## F `--tvu-port`stops askingsmpublicdoes:
+
+| in its first 250on m|d,dd | 1,152 (lot ofperiod but one) |
+| failed a| 0 |
+| linktheir48 |
+| in them,320,977363,556 | 922,159,322,892 were duplicates |
+| databuilt from coding| 177,698 of 455,008 (39%) |
+|pleted by asking forfew20 |
+
+Validators relay eachto one anotha tree, **turbine**s a shrone node, whinds it to 200 moreso on. A node gets intoone's tree by naming a port foitscontact info. Two s aboutare noanyI found, only code:
+
+- **must push** Validators no longerullit sends; this client had been listening tofor a day without any knowexisted.
+- **And it.** Bas a pu, it ptheaddres nameswaitsanswera firewatalks outward is invisibGhare one port (a gmessagrtskind, 0 to 5; a shredahas one of two exact sizes), sopen UDP porenough.
+
+What arrives ia tidy streamno stake sitver eaer happens to placstimes40% oft all. That codingare for:
+
+- **Each alone:** itslead to a rolot's. Theoot;of eachcosts oneSets are rebuilt** ([`lib/Crypto/ReedSolomonCrypto/ReedSolomon): when a slendingaof 32 is missing, any 32 of its 64est back, by inve 32 Ã—atrixfield of 256 elements. Anrust:set must hashtree's left half id from;tep of'pathe missinghave to beWhat cannois askeslot still in a couple ofied getsmissings by rBareylinked when both re known.** Sare spread ovveral (`--follow-tiles`), so a is ofteninhared tits child needs (,) needsset names,'s hash); whicheverhe two is.
+
+[`erasure)mainnet, asd, removes u25 of its 32requireones to equal's byte for byte,paths included.
+
+Isix cores and 36 Mbit/s of inbound traffic,inuously.
+
+stablish.** The lis identified as *knowngossip* sign;node's to lead wou schedule, stakreplaybank hash is read, not,ame reason. And noexecuted. Rplaying it are differentRun on- programs
+
+SolanasBPF bytecode (versions 0 to 3). run` loads one and executes i virtual machine writtenoader,pretermap, the system calls,-unit metere runtime's rulesccountforcalling otheritested on arselvesLean.[Lean 4 to sBPF; seven ofexamplin under /), unmodified$ run er.so --data 01 \
+ --account ::1000000:e70300000:w
+program  Â· 1,256 bytes Â· 115 instructions
+result    success
+units     50 of 200,000
+   counter      lamports 1,000,000  e803   ()holding 999 (`e703â€¦` little-endian) being incrementby lean-svm,machine wric`. Anis `KEY:OWNER:LAMPORTS:DATAHEX[:FLAGS]`;ebe Base58, ``, `system`, or any wordbecometand-in.vault.so --data e06735000 \
+authority:system:0::s \
+ 0:8f76fd501bb68ef71f4e276bc28f29bce1003b0c2c9d9478de81b5bfc0cde1e9:wdest20::w195 of 200,000
+log-svm:fer ok
+  vaullamport6,500,8f76fd50â€¦dest 5,500(no data)**It meters exactly like.**test runnerson Agadrts theirsproducinputs,it exercises | (Agave = this VM)---|
+| Noop |y| 2 |
+| Count,ed arithmetic | 45 / 50 / 52 (init / / addV|s, lam, `sol_log_` | 195HashC`ha256`,Csysvar, stack buffers | 413 |
+| Amm |Tand Token-2022; signs fors | 292 / 4,690 / 4,690 / 4,708 (ini / swap / remove) |
+| BoCurve | miburn-2022 e | 227980 / 3,701buy / sell) |
+| DutchAuc|NFT escrow, SOL throug3,296 / 4,672 (create / buy) |
+
+Gettre means matcc's quirks, such as 32-bit add, subtract and multiply sign-extendir resin sBPF v0 whileoperatextend. [`tests/ssbpf.lean) alsofailur: overflow, a missing, a foreign owner, an exhausted budget.
+
+`makes` rebuilds the seven at a pinned commit ()compam bytebyteed-in files.
+
+### Ping
+
+Almost notuseful on i. Moving a tmeanthe tok; paying someonethis: **cross-program invocation**lastrowsmovokensys: [` holds the SPL **** (1.4 MB of Rust-dcode) and **p-token**, t classic Toke, exactly as [LiteSVMLiteSVM/litesvm) shipsyunmodified, calledcpi    # ,AMM scenario
+loaded: amm 1350 instructions, 1180553702
+pool authority founbump 255: on curve false
+user A andB
+init pool: success, 292
+add liquidity: success, 4690
+s 10000swap10000909339 B; user holds 1090661 B
+remove liquidity470855454670 B
+```
+
+One swap involveAMMtrade,to takuser's A, thento payB out'll of them add up to theAgave, 4,690takes:
+
+- **A real r.** Pthe Rust toolchainposition-independent the wayare: the loader appliesls (`R_BPF_64_RELATIVE`, `R_BPF_64_64`, 32`) and resolvesmbol,a s deployed.
+- **The itselfsol_invoke_signed_c`; the Rust convenis [below](#anchors)). its own viewach. Before runs,r's changeopiedthe store; afterture's cbackresizedPrivileges.** Agwhatr has: aress it. Asking for stopsa-derived.** T owned by a made by hass,chosen *not* to be a point on the Ed25519no private key exists for it. Onlyign forby presenting. This isfor gossip gets ajob: deciding wheapointTrules.** Only aner may data or spend;- stay unchanged;neither created nor destr Theycall)ree hand-assembledsbreak them, and must be stoppedT**, n rathan bytecode:,ign, ale's price list.** A946 unlus a per 250ofhanded Rent124; deriving,500 per attemptmatch if every ones.
+
+Fcomme, `-- ADDRESS=FILE` loadmain one to call, and `--full` printsin full so onfeed the next. [`s/amm.sh`]() builds twos, a deposiway, from no
+$  amm.so --=â€¦ -01â€¦ (add 1,000,000 A +B)
+Â· 11,728,350log       I: TransferC
+  1001ff06091e000000â€¦vaultA412d497fa453fec3ââ€¦
+```
+
+### Anchors
+
+Moarin Rust, usually with [A](https://www.anchor-lang)anvention, rust`. It describeRustures: lists as vectors,'s balance ann `Rc<RefCell<â€¦>>`, soafollowers throughheap to findwrite ad length backa slice headere. Bothimplemented/anchor-vault/src/lib.rs), sourcluded. Crea that five 
+ â”€â”€â–¶ault's state,
+â”‚”–¶ Associated Account  (a Rust )â”œâ”€â”€â–¶how big?   (answer comes back as retur er immutable”â”€âinitialise it
+**Cgainst , notpublished.** [`oraclemain.rs) is a small (via [/litesvm)) and prinreport. [`tests/anchor)Lean. `make oracle` requirestwo to be identical,$ 
+ agree
+ EWFZJuFzfx1bdWH5wa67KL1joEvYhGF5m6cL9mjHp1V
+vault 2j3hCg7jxGDmmQRdhbz3m7S5zjhxEisNfDGPPEHs7DsJ ()
+vault AFfWTiLfBi1r4d9euES5UFsxNdBcGhwA8XAXevcxNwMM
+initialize: su, 26599
+  log:Ize
+  log: Create
+  logassocit: 81 bytes, 1454640 lamports, owned: true: 165203928tokenze again: custom error 0, 6130107913Ddata: cjJHpFFzMIAZoSBDyJN7vrD5Jg1jgS2k8+t5CRyBVdoDZur02FwxZWDjFgAAAAAAYOMWAAAAAAA=,3ed 1500000
+withdraw 45â€¦20000006001, 6841AEthrown in src/lib.rs:50. Code: TooMuch. Error Number: 6001. M:not hold that much.
+â€¦stranger2006, 6995caused by:ConstraintSN: 2006A seeds constrainviolated.result, everytotal (failing paths), every logthe Base64 event emits, boes andpaid for each new. Agreeat level is unforgiving.first run was off br out of 26,599, nowas 6,96 peashold of 1.0 older documentation says 3,4802.0:amount, but takes a slightly diffeth toit.
+
+### Whols
+
+An is not what sensend a ****:ss invol listtake effect together or,fee paid whether they do or noTthe wirmat (legacy and version 0taken lookup tables): build, serialize, parse,yBank) applies a to ahe way.sh  # = tx <><payer>:system:5000:
+ 5SMtZuEK1Tmw7YLMBbPAxSRUPScz5UVDPCFmUZAah7d1xPKPdBrjqntqsv4PH8SwfwjQDL59afdNHa1yBCzsyqmD
+Â· 1 Â· 4
+yer    ECbPvoRPTunYYuu6iCP8gK4GzGX4nc5rPsUpAKoT6vV4
+ 0: CBudget1 Â· 0 Â· 9
+  1: 1111 Â· 212 bytes
+result         5,12
+   300 of 6   ECbPvoRPTunYYuu6iCP8gK4GzGX4nc5rPsUpAKoT6vV4  5,000,000,000 â†’  3,499,994,880   FPP21sbqhr2LPjSnJkw5NBetPubeFG4PsQFBxHj8noTq1,500,000,00tx` takas wallnd RPC nodes pass it around, ts it touches ey wer it (`calls (`--`). What happin order, each stepof failing:
+
+1. **Well formed** Every is checkedhatb.** A setsl: how many units, what price pe,uch heap. Without them it gets 200,000 units per, 3,000built-i, at most 1,4.
+3. **The fee.**, plusice tiunit ** (id), takenranything runs. Above: 5,000 + 2micro-Ã— 6= 5,120.
+4**,each previous onethem, all onRent.** No may enholding lessits size, unlnothing.
+6. **All or noIf any step4 on fails,ropped excep fee. Anoceases to exire howhain arhem, and allmere: Clock, Rent, EpochSchedule, EpochRewards, SlotHashes, SlotHistory, StakeHistory, RecentBlockhashes, Fees, LastRestartSlotI,readipart of. Prways (a system call,genericby address, or ass)vided. A program can also askran before itget_processed_sibling_`T** is the one built-iniing: its sto check, socan "a mthis key" and findproof i'spay to verifyncode. 's feenoC,.** [`enty smreal keys, andm;oracle's SDKapplie's runtime. `make ` requirescaltart with each', so the two sidesagree on every bytwas
+
+| | result on| fee ||
+|---ferpriority fee | success | 5,7500 |
+|an account, hand it,times (twos) | | 10,000 | 295 |
+|last one overflows | `I(2, ArithmeticOverflow)`, earlier changes undone | 551 |
+| belowminimumufficientFundsForRent {_index: 1 }`150 |
+| checkthen read by1| 6,410, Custom(2))` twice | `DuplicateI(1)` | not charged a 64 KiB heap;extra heap87,632exceeds1, ProgramFailedToComplete)`2,000oo small forf1, ComputationalBudgetExceeded0a payern/little | `ANotFound` / `InsufficientFundsForFee` | not chargamper| `SFit hasno longer ex
+way that counts, byseess/sysvar-probe`](lib.rsasks for every sysvar inovalues SHA-256 of the bytes forbig ones ( is 131,097 bytes). Its logs are parport, soooverisontxformat.lean)srun: version 0 mssaar fed truncated, corrupted and random inpu# Everyof sBPF
+
+are sBPF v0the ihas moved on sincef it:
+
+|
+| v0 original: fixed 4 KiB stack frs founis loaded |
+| v1 | functions mostackselves |
+| v2 |s re-encoded; explicitand undivision, remainderhigh multiplication; 32-bited; no two-slot constant3 | v0 set again, plus 32-bit conditional jumps;namedhash i; a stricter file to res0code at 2Â³Â² |s)iles one Rustfourfour: 64-bit, 32-bit, signed, unsign128-biton numbersis folded away byrmisat its own cost:sBPF v0, a: success, fee 5000, 12784 units
+sBPF v1, arithmetic:, fee 5000, 127712, ar1597 3, ar3712 u64: 2465395958572223728 18364703450382 713574 81621149086635842i64: -81985283260 -637116 -364380129851053
+  â€¦The Anchoris alsov3 and putits whole scenarioing v0 v3 code. Both4.3,to run v3: -next/Cargo.tomluiltit,s .
+
+One worth knowing if you read older material: v3 changedibeing specified. The sBPF cratide Agave 3.1a v3 that kept v2'sput code; today's4 implne above. Thlows wrs emit.
+
+###starts
+
+A fewdeployanyony. Somenativerein Lean ([`N)). Others us bebytecode today; those rules in [`p/`](/),runs.
+
+||S||ss, moves lamers;es derivedbase key and a senc|
+| Loader (upgradeable)uploadsto buffs, upgrades, extendcloses; hands themnotheror mak immu|
+| Cnit limit,rice, heap size |
+| Ed25519s|
+| Stake |, `` | s:,ze, split, withdraw, delegate |
+| Athe tables  0s takenfig |s guard of |
+
+Twoest can do:
+
+- **Noutlivhash. Anormally namrecent s dead a minute later. Onnames the value stored in a n,advancsis valid whesent, once. Iit failfee inthe nonce still moit cannot beThe loader** means, asdo on:ins) uploads a 90time,to dift,it. Acallablthe slot aftthe bank runits, 2520s
+write piece 0 into2371 int670 ued345 units
+upgrad152 units
+hliceld authorityit: I0, IncorrectAty)alicetest is 49 acrosfig,s (pa table, refusedaddedccepted in), staklineto matc. `s/` make byteones available fromcommand lineL.**
+vote here.** It ilargone a local needs least; staks can be cresplitndelegata votexercisNot here either:**secp256k1 anp256r1 zero-knowledge proof v4 (witched off)calls:** SHA-256hash; Keccak, BLAKE3, theoperations and Poseidon are missing,aione is refuseSysvarsin at rest**you sem: one slot hash, no stake history. re-entrancy:** aback ins already running mostly woulThe rece** for wholeis LiteSVM, a harness buil's ownsrehin layer of aroum;at layer are. Where LiteSVM and a (it letsbe calllot ited), t.
+- Execulocal: or se### C your own Lean
+
+`leanc` is a generaliler for its [subLean](#the-lean-you-can-write),a one-trick:lean
+-- hello
+def greet (name : String) : String := s!"hello, {name}"
+
+def : IO Unit := do
+  IO.println (greet "world")
+```leanc -I rt -o hell && ./
+, world
+$ file : ELF LSB executable, x86-64,1 (SYSVticallked, no section header
+$ strace ./hello
+execve("./hello", [], ...)     = 0
+mmap(NULL, 4194304, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_ANONYMOUS, -1, 0) = 0x7ef55fc(1, world\n", 13= 13
+exit_group(0)     = ?
+```
+
+Four syscalls, to finishdynamicsationrunningyou did How it works1. `leanc`:â†’in between
+
+```mermaid
+flowchart LR
+    A[""] --> B["lexer +r"]
+    B --> C["elaborator<br/>(typr)"]
+    C --> D["inlining +<br/> folding"]
+    D --> E["hip analysis<br/>(last-use moves)"]
+    E --> F["x86-64 encoder"]
+    F --> G["ELF writer"]
+    G --> H["static"]
+```oal LeanC C, which brings LLVM, a linkeribc along. `` skipsat: it readsnd wrianings, jump fix-ups,hsall. No C is generatedt any"No dependencies" is meant literally:T binary is **freestanding**: built with `-nostdlib -ffreestan-static`, itzero undefined symbolsaches the kernelseven raw syscalls (`read`, `write`, `open`, `close`, `unlink`, `mmap`, `exit_group`Iput is **** too. There C runtime underneaths.
+- T** ([`rt/Rt)) andd along: the allocator, growable arrays, string, panics.
+- **Build.** A prebuiltis checked ibootstrap/`]()), so` goesinstalled.is C; verify-seed`whatever Cr you haves-identicalfor gccclang, as C99, C11 or C23.
+
+Undsit a handfu**intrinsics** thastraight into is. Inare ordinary `opaque` declarations@[extern "leanc_"] opaque  (n a b c d e f : UInt64)load64"]  oload64 (addr-- mov rax, [rax]copy"]    ocopy (dst src nnit -- rep movsbxadd6xadd6delta-- lock xaddEveryithose. `mallothirty`mmap`Functional code, in-place updatimmyet `arr.set! i v` mustopy a megabyt on every write. Lean's answer is foldupdate happens in.ame idea. A backward liveness pass finds use ofvariablia *move*, soop like this mutatecopies:for i in [16:64] do
+  w := w.set! i (w[i - 16]! + s0 + 7]! + s1)
+```
+
+Deuue youyou its fiefree, so the client's hash tabre plain immanonethelessinplacinplacfails if tha regresses into copying.
+
+**Smings that matter for crypde.** `@[inline]` helper-foldclassic rotate idiom beone inion def rotr (x32) (n := (x >>> n) ||| (x <<< (32 - n))
+-- rotr e 6  s to:  bp-80] ; ror eax, 6### 2. IPC on a raw futexclient is several processes (see below). Tommunicingle-producer/single-consumer rings in `MAP_SHARED` memory, set up before `fork`. Se a message is a `rep movsb` intplus one ``. **Norctually asleep**,hen it is exactly one `FUTEX_WAKE`.
+
+ pipes, sockets, eventfds, semaphores or mutexes single kernel service futex,def futexWaitexpected timeoutMs64) : IO Unit := do
+  ...
+  let _ â†202 addr 0(p + 24) 0 0-- FUTEX_WAIThardany such design is not losing a wake-upconsumer decides to sleep at publishes. Both sfollow a Dekker-style handshakwhichside's *locked*at least one of them always see oth
+
+--------
+xchg ing := 1lock xadd  head += 1   ()
+seq := loadWord  if load!= 0:
+if rings still empty:+= 1
+  _wait(Word, seq)_wake(Word)
+0
+If the lands's emptiness, is guaranteed to see `= 1`; it bump workernels to sleep onnow-stale `seq`. Ibefore findswhole mechanism is 180 lines:Ipc).
+
+### 3. Tient: tiles
+
+Borrowing Firedancvocabulary,job is a *tile*: oncess, one responsibilitynto its neighbours by rings.NET(("UDP socket")) --> RX["net-rxRX ----> V1["verify2["ve3 Ã— NV1G["gossip2 -- 3 -- GTtx"]
+    TX --> NET. "coupage" .-> S["supervisor + dashboard|| what it does | f**net-rx** |`recvfrom`, fans datagrams out  | [`/NetTiles) |
+| **verify** Ã—N | splitss, runs Ed25519 on each, forwards onlied | [`client/VerifyTilVTilegossip** |tocol: ty, CRDS store,, pongGnet-txs on its futex, sends what gossip queuehttp** (optional) | serves `/metrics``/nodes.json`Httsupervisor** | fork, watches them, draws theerMain)he spl security boundaryty keytate, only ever sees input thatify tisted.
+
+Tde table liv. Other processes read iough amapping**seqlock**:r bumps an odd, copi in, and bump;adout and retries if changed meanwhilwaitsiproperty you want when(Directory)).
+
+**Joining the cluster**, step by step:
+
+1. **Find out who we are.** Entrysan "IP echo"ice on theirport. OTCP ex returns ourc's *shred* (50093 on mainnetof writing)matchIntroduce our carrie`ContactInfoa bloom filtscrib we already hold, so peers sendis missing. Tord-hash space is split into partitions; each request covers one.
+3. **Get challenged.** Banswering, a peera `Ping` withndom token. We reply with a `Pong`: theavipoofed.
+4. **Listen.** Prive:, `SnapshotHashes`, `EpochSlots`, votes, duplicate-shred proofs. Each is a `CrdsValue`, adata, owned by whichever keyit.
+5. **Verify, then believe.** The t self-delimiting, so [`Crds) knowlayoutll 14 types well enough'er's key. Thename strict rus use.
+
+**Whe numbers ondashboard mean, and how far to them:**
+
+- *Nodes in gossip*s distincties with a validly. Eachvoucheelf.
+- *Chain tip ()* ihird-highestamongnapshot announcements seentagreeis at leastfar. In practice it trailreal tip by a few hundredmost. Icorroborated hearsay, **not**ied ledger position.
+- *Bads* should sizero. During development it briefly did not: 0.3% ofs failed, alone type. Python'one ofed at this repo's SHA-512had a padding bug fors whose lengt112â€“119 mod 128. An all-lengths test nowit. Real trafficood fuzzer.
+
+## Thecan write
+
+a deliberately small, first-order fragment4. Everythingpository stays inside it.
+
+| | supported
+| **Definitions** | `def`, `partial def`, `structure` (withs), `inductive` (enumsructors with fieldabbrev` for, `namespace` / `open` / `import`, `@[inline]`, `]` |
+| **Types** | `Nat`, `UInt8/16/32/64`, `USize`, `Bool`, `Char`, `String`, `ByteArray`, `Array Î±`, `Option Î±`, `Î± Ã— Î²`, `Unit`, es, `IO Î±` Expressionsfunction applicaimatch` (nested, multi-scrutinee, alternatives), `let`e, `âŸ¨â€¦âŸ©`, `{ x := â€¦ }`, `{ s#[â€¦]`, `a[i]!`, `s!"â€¦{e}â€¦"`, `x.f` method `.ctor`, `|>.`, `<\|` |
+| **`do` notl†`, `(â† e)`, rement, `if`/``, `for x in [a:b]` / arrays /``, `repeat`, `breacontinuboth `IO` and `Id.Libraryinteger, bitconver basics`.sleepmonoMsNow`, `IO.getRandomBytes`, â€¦ |
+
+Not:es, polymorphic or higher-order functlambdas, dependents, tactics, `List`,and mostandarrary. Declarshas no use for (`theorem`, `instance`, ``) aredskipped, so can carry proofs aances for tWhere c`*64-bit machine worLean's is unbounded.silently wrapaddition,hiftswould overflow *trap*, and subtraction truncates. So if awithout a "Nat overflow" panic, itresultnes Lean woul*No tail calls.** Recursion usstackturneda looplong-loops should be `while`/`for`/`repeat`.
+- **Panics abort.** `a[i]!`of bounds stoaand lin. (Ologtinue.)
+- **.** Itt a kernel. Whether a file is valid Lean is to say; keepone command away.
+
+## CLean
+
+A home-madea subseesting if itis *also* an ordinary Lakject:
+
+```sh
+make lean-   # = lake build && tests/run.sh --oracle()fivetestsRust)- **`lake build`** makes4typefil,ies, clientby both compilourcDential.** Eachin `tests/` is compiled byand run; its output must equal `tests/expected/`was genuy cover semanticsaliasttern control flow, integer edge cases, SHA-2 ylength00,signingverif, lean-svm's-, threthemthe SPL, an Anchor (as sBPF v03), ond, twentyand 49 morethe built-ins, all of whose output must also equal whattransacfuzzinga fuzzthrows 16,000rruptedparsers (which must neither crash nor disagree). Continuouslainpush.
+-ternal referencescryptoally cPython's `hashlib``graphy`, RFC 8032 vectorsly, mainnet.
+Buildleted successfully (62 jobs).
+oa()
+ok   uiltincpieerasurefuzz_wire (nativipc (abortedsamsbpfshaha_lengthstablestextx20 passed, 0The tests not marked "" either use raws (`fork`, f)existas machine code, or behavipecific toing onerror, in-place updates).
+
+## Ns
+
+Measured on one(Xeon Gold 5515+), single core  notedare here to give a sense of scale, not as a benchmark suite.
+
+| || about 5,800 lines of C binary | 143 KB, static,fined symbolean in| 9,58 597,ies 6,279,2,703 |
+| Compiling| **under 30 ms** |
+| `leansol**535 KB**, Full clon40 ms |
+| (Lean,)2,950 signatures/s per core |
+|72 MB/Frtwo processes | 200,000s in 0.16 s |
+| M, 45 | 4,005s, 40,119badsteady state12% of a core, 7% for gossip; memory flat |
+
+`leanc`s simple code: values liv, there registlocator. It is fast enough forjob with roompare,near a produsametest t**200 times longerfair comparisonwithout pulling in a CRory map
+   ther, prebuilt:uses
+leanc/'s source (C, )
+  lex.c parse.c     Lean's grammar, includinglumn-sensitivelab.ctyper; inliningfolding
+  live.c:uses can movtead of copy
+  gen.c    x86-64 encoder,
+rt/RtLean:,strings, panics
+lib/
+  Sys.lean    Linux: sockets, fork, mmap, futex, clocks
+  Ipc-backedunters in
+  Crypto/   SHA-256,Efield, curve, scalars, sign,), Reedâ€“Solomon
+  Solana/ CRDSs,s, hash tables,
+(SbpfBase: lo, memory, acs; Natthe
+s; Sbpf),bank,
+shredsir recovery, entrieof history,,checking
+  Net/IPv4 helpera DNS stub resolver
+  Encoding/hex, Base58, Base64
+clienJSON/Prometheus export, main
+web/   public siterunning node (static page + one proxy)
+deploy/a systemd unit forng-runnode
+tests/ + outputs
+  blocks/    aset ofinput
+on-cha as VMs:n Anchorprobs
+  oracle/runs t scenarios on Agave's (3.1),-next/ 4.33
+ that are bytecode today: stakefig,
+exampleshell scriptdrivesol runtx`
+lakefile.tomltall ofabove## Limits and roadmap
+
+Being straight aboutis:
+ELF          ÷    x@  (   @ 8  @         x˜    y      ¥n¿           q ÿ   ¿             yXg(  W  øÿÿÿC      ¿4   ÿÿÿÿ     qC ÿ   ¿C      yCP  øÿ¿4       óÿyB      q
+N     ¿C #      y0y6      ·     e·      ]e8     y6         y6yH     y3 ·      5 ·  ¿      ¿7  0X     U1    5    (qC     #       q	      z`     ·   •    5 	yB	     y`2      -# {!`     ·   y`     ¿#      ½2   • {1¿   •   •   • .text .shstrtab                  ¨tÍÅ`Á!Y‡ƒòÃ"‘Ã–23c€@€ T,QKÔz ˆŞ†nL«YŒ!Cdf D0 €  Ú1ŠËC(Ú#9¼Bw=å	#SÂ¸°z\ ;aÃßæ`ÿ-Šâ¾÷¶ï?Oc©bmR1ãÛ  >ºŒ!,£V­m2jâLÓË @F¨}İá¢†,Çê1«p*%5Pp“„øf ÀrË³ğÅpŒÔ
+âş>™\Àº–1&LlëMÆx¥\J§e`eû£õø™·oå×¨`Ş@½tÎ£Ì‰¡cV—S‡E,t2yEmş ÜË–A+uó°3DÅdLoUI;½a	LğÌ3
+èÒ’5$–´|
+¯À«Š®Ï-‰_â{P³í“¶ XZçõnälÿ¿Á˜—«QIˆETª—öÚ]c[ÒXj.—]Ò?_ÃARl³J7ÄB°&…ØébğŒ˜P´¿¼Š4ZR-e‚tLÿÁ·[xİA€=°ë´ä¾h
+jí•½˜Æ¬¥Ks¡ÕyÜ©m ¤!§U‘ıS2‹LWå˜Ï™oûÂszH—“ŸLäÍŸ'‚!EÉ}º:Öä¤æÓ%B4?$é?çÈ;ïó	Â¶æ&‚[%“Ñ_@lx?E)†{w¦½Êà¡„BFÛFTÇÄPÉ\UN&£vÓÃGƒ‚†×VÌ²é3A^ãA Í(36ù	œlK‡í”3¹Rb®ĞëC±FEğNÛÎéL®W,KüBpãÍ7I_Ş‚ÈŒaÂ#‘3Õ*‚ï®US{––I}¯ú¯ºbL†nY3ùØ9_Ù”Xp¹Q=Küûå	-õ£¡ZG§ u®ä©ÕeVŠ;Í/ãºB$±•V}Æõ&ûKòËkhm°:h}ïñ¨NÕd ÈVnÌã{~®uI†¹ãÔj‚”wun7@‡ÙÓ
+Tì¨Æ‡¾¤Aæ¯ıÒÙª¯7úT£Şï‘Ì‡‡PÖ,9 ‡×åqò¤AG‚îig¤ĞÌ„.¼i5¸G\ğ±ísv´Å^%÷ _9ğ95K~­—¯Œºì{¶€'£üı(4†jóºõaäŒ;†¶ìYšıíwü‡[‚Ë³	ïÎö,z`AÀañQo“@— ŸÆ/[;s¬ânzû²z=]zÑÒïÏÜam6OD—]cjoKNcse‡hQ/p{X©DÈÏ‡z¹Û½¾'AÆ9Kåô:öhbPCÖ˜k”h ¸×_ùµO—˜®ÔÎ}¨£Ğ:’EÀ‚$«á/¦OĞµÙ ]Sšüago¥ƒ†,&Xş9¬l¶*äƒ:¾–ñ‰:s ^ØÀd‰›‡3S]–ÍyhÔc&çhts§§|şÿ’»„Ä©öÇ¤ïŠ'Ô‰À#‚´¯whè3Äù4»\{JË:4[H m×2øn¨0´Æ%=Å;|€ñ8¿pÀ½ñ©ª¹[©¨®h¾e D„¬¬‚øİ£:êYÜp*Eë4ÑÓÍ	/â‡â.åİ=°1äª‰ˆ
+lõ­—@ìkÍÃ’1§— öE¶¨AÀë§LÇ˜rW/¢Š(¾ì6Çº}Ußï·ùˆnP<@HS1®ğ†ö¦c›°<±rDò™P¦)$qÑêq# ‡ÖÈNß.¨ÜJ€”Í´ÛÎÙãw‚B.†-ÎÕºÜbˆÃéj‚\eŠÿ™	Ì%>ıQ21ÜÑçÕ[D¡=“İş?œVº„%#à!X'ôE²z+h&äã—vÈÔ"ÎXİqápÁÃò¯=«è#àeŒ áı¬Ü¤‹ø‚©Š3+Hœzë›ÕNĞ­R’]ÅÑ½áHp+Å_şÔBÀ³f´î›÷2€H°¯ŒÁ¨Ì" Vóá"ö
+´‘Xg‘àåv…0'Ğt§äFlÃCIïêŸ„®ó‹£ó6¼ñ#şÔHåós–eôõ×ı`Ğ0¢bšÖÉôÀÂ¦"rõæşƒZ}C#Lş=úë® ÎD&8G$<	¹’5Â´âo…NŸĞR¡|¹¥QUÑ;4|jÚ÷ÆÓš@’!´ê¹v<Õ2üøµz—>,×HÇÁnrfŠ¤NAŒ4	EşÑÈx'–Ô0mü&Wó­$ØE„sñ©Š}ú²Õ™‘Ye@qÙu;g>Æ›p÷%€hãÙ–N‚ûª˜å#E²Z£¯÷QÜf0õØ)ÕOK7	ïôHEÔŸZá*‚¶ô–Ğ84u†;¿)’dzU -OX!×–šÆ#5°è/|£EÄÔ8EÃÇï®·×ŒKˆòRIÃßÃ?~ÇİS:L ÚÓĞõÉOîÏIÏhM_ œ´SåƒŠœ™Ï(ÃÑçÀãk‘*éÂé|âIù5Ê&ıl£0D=d¡F¤èœŞ–VYØm"Ÿ†ÓàG©õ>?j§€¹[Æ½{ÏÈ+G.ØTY³²uçJŒï˜,!‰¨É•rrx®Ù¦*¨pÃ×¾WnÁå%ïm³š{ÕƒOÏÏıgK¬kQªrÁÆ¹(Å¦ö_Á´($=£2>ÕÇC¿µË:ÉÿÃµJÚ0”-`VÉÍÇô`%ã¦M¥H«¼µ/í!$@ù+»¥o4~ô%ø&D>@,úbmC€“¡¸ˆ?Ñtô!IŒ/ÃÉ:¬ø~	ôku0E#)äßµIü¾æIÄÖù%èˆÀÙ“N%R¾Œòvîøª&¶~¾"_]	_P&Y«JÓ³şè¹:©„áÚoNW·!ê|Ÿò §8ìŠ'äÑ_Æğs±B5‰¸ˆOï•ç›ß‚añ˜âçd•àrÁ†t1È¨åˆù‘
+rT>k~^fıĞ6Ç—É¸;¸¬y<tWÓ€¹Ñ+İÂ8zh†päP5fv‘óQ0ÁEO‘™Ó9€Çƒ?h:¬šåCgÎiò‡•(4ªcÙØk-?:’(vÑÙ»^Pc¬>V‰nşN†íÖ‘Ğ\Ã­äfE­Ã¡Cè¼1P(ZÈ™ÜÙ²È˜E!ˆ&ÆlYXT‘HPã0ØtcòÛ9síÆöµ!™Ù*t_€Ê·®~(Áf¤úÖè“rAæ¸t§iö”aMQz:Qwì¼âu{»O5x×¢€C$ßCrg–qdÙJÉ^£ av|r‚o‚"Èñ¦ëŞgås‹d6“ú!·²9àãaGwKôh¢.°ÜyÕÂDş¬«#4ƒ/c‰Jqù˜äìËb^Q¥»^†­¦«>}²‰¶„g’·¶?ÃIâq¤‡ˆÿV±x•ì:OŸ†±Yv´*:$\é‘´ŒBˆW³-ö˜ÇN>èCŒÊô&tâ°–4P³ƒPù‡2Ğ)FÛc.ÇIŠ$6sX©aYK«Ò9—œ¯ » 5	³ğÑ÷½æ†y+š¿õ¬?°½-cÁwÌËµ.ª¼ŞÜ^¾hİ_k³ïO,.Ø><¤ZùYç«ÑWtY$Ğ%²’„D(Št Râ.FÒa„l ÈÉK ƒƒl¬öIÆ¶Z`(0+x3ã»°9: ¶>ÃG‘{3KæjMé|ÀY](´m &"nQ20¬úĞ ì¯Ì]|ÑPY€v7Öd”§Éh…äÛc:¡*bî©Å@åAªò˜jK¾Ö)ÕkPQdïÇÈi¿R˜g½äS+?¹~á‡-®rY§û/âw¡¤r kÇ rƒR‚Õ™ n‹ò¸)Ó¹ßg ´eÎ6”ªÒª'I§†ù©`åHm>k×0Bº®§YÌ]Ù›X]ª“¯€#
+Ì¼gĞÔP_´ÁANQ`0L“œ[€4Py‡Ó€ m…²C„C=±ÈÇ¤×ê6 GcÊÆØ®ğÅW&íìÉ},{(¤'Ê{«ùíaœ›÷18«fØÕp¨ÏJÖ2|jdSÕKIË@µùM ¡âİ"9Ô£íòá|n]ŒUV'€ÛRo}\ÒüV™Å"Àë£;œ‹ p !9›7²Ô¼›¿Ÿ:ßÿ7`ğƒ2nØî‡\.Ÿü†¿D‘½Øÿù—B£[úqVGènJå•«Mš¿ÈçãpT˜Asy^e¸j`äıçBÜ®e+¿DSoù#ªGºI97y%0w0Úöf™(CUïQQ¼,Eo6 "
+ùšÈæb5ÕËV…úzĞÊí™öÙğUdÀK˜^£#+Ù+÷ßËÍ¨A2°¡0¬Húê¨„±^,Øf€$ömçœ|ÅydËµ÷.,²Âse$!o–kÄä^âˆ¼Y<•õƒ¡xÈĞ‡R´JİÜ½ùùê•zG¤ş®Ú¾K·¹>l\€³¢Ú#Ö ¤i°¸mZ¡&âş—Ù„TÍ“@J‹‹ˆrª!¡8´Q‘˜4øåPèØ{ƒÔ“‰B§nX9–—,ì—íùã”òø8=İ6¢¦íyïñIßÜÀ%	»n&6ë‘ãL`¾ Â¦) Hô;wVÿ”çRÁîä³§‰O©G&6Íà¶ŸFx×c&
+ã—ô&Aû¬obÙd3á[Š,şÏD(íÀ8¡‚}æ©­ıñ.¾6´¤OßÔ€‰ó@v¢>1û°«›5¦n”ÔGºkâL¯(kû’”Çù;1lç·Æ¯Ş„Ÿ"z€‚®úÈÌ¹ÿîy5N.N¶¿±™?;wÍ¿}­3â;XBï¯/Ö1/DÇ(cæ%Èä—R¢#zú.À¼VÚøçŠƒÏ’\nXb›lc´¼È‡¢ótÔ§SpÌÕã%gæÃ´KØö!”æeuŒèªÍ¢ªÄ!UO§œ»+MüK¥	k¬E8¹¤{ÿæ~©ØI¬¥“¤1pİsoàUë’­ŸOÙËÌFüÔ•æï¨lXñp ´¶Y€õØY”Eßm×İw^}u<¦6É¼Å^ÂğßV…ï}¼«:(?5ìıv]¬H.ée7²ì«…(É'¹j
+ñäWÄu†‹…æ“¨‰µ¶:!|%%D©7şu.‹r‡n¡F5Ÿçc#Çt½İ›#w 0HLö­Fğ‰ò„á‡´ öäFíÕÌpbÕî4%M±˜–&ƒæaˆ7ë§¸é3x=eòfrÎ.ˆ¸).X&şNã¦°Fr7ò7=¬.­p¾\ü
+.0-½­µš’6àQEb*n3ÀÛÿ[.?ıxï¨şâ¡9mó¡´úöóÊCÛŸÏ“ÇE/	º¯‹_Ûø9t’„(Ï8XæxO6c6: ˆ4buáaåo#/—äá&‚#\áÃ‰ƒ:–ŸQ×ÔºqçP¡ÅL2ØˆÒ‘vö¥Øô(s%ÊDÏßK@“RxæÈ,O“E)41â¿Ã–z'YUæò·µK%YºÊéí´"}e“›º:D	jío³ú•ët¹5ªvhHK†ÆVƒKhÑ¢èA© ù!ÊzæH?…O|ï+.­ÈŸµşıÖŸà¬¾¿nì€Ew§’Gí:‚¾SÛâ†uÛ>K‹(sßõÏ&•Tš¯[>Ô¬*×TÎ,˜Q™ÏÔ‰ÂÖÏ(ŒiJßDï„ŠAå|x'ÜÂmË¤Ğ=7j¤ĞdÓ§d}í‡Î|7Â2<«Ñ×cQêé`…¥ÆÎ‡°Æ&ôxrxi*Ì&3Íº‚ÿN×‹# œf t˜y~ZÛ•§—@ñ ©u!zˆş¶‰´;Á‡yÜÎİußqœx!…fYúS¶s³rßøü2S²Òn÷L£® (Q|u
+ÂÉGyZ‚´íO°ÛrÅ$º`ê™9½ çù4HôïÄêÍ­ƒá5á ÀW„¶mêò¢G…$U¾)3ìæëbà¸f÷bï3\¼äHj´Ù_
+şlé Zí~–Ø½	ø9–0J¸!¯6ßi-ôÊ5æö#©üàêİÕb\ù±òšèüú·CÜÇô…¸v¨Re¼}õ› .¸Æ|$í_à‚ˆdÈÇ’J\,Pb÷5g5C‡­+ÜaàåïùE7ÀûåĞ7ƒlÖ É¡Şuº¶J;Òy4aú3,ƒ½£ÈuŠZJ	)è¡Š¬+¾ëÏ ÆÑƒSôøMB™lù«˜ó#À\ú£¶GŸğÁª!p=ˆ šœ1è2»8"O:‡9Ò´…ÛW¬Ü\ß‘È£@§DàIå…øGê|aóŞ\5%ÀMAÙJĞAóó°rª¿©„ç=çÊòk»³çv=Ÿµè¤TŞT@òDJ½¶ëÿX.B‹q ş<+ëŞë"Ô5+IyÏÖ4|A‹b%-Ğ;O†Y¢M)*—óªL‚ƒ™w\¥¬W1ÒùàœğZ,–RÁP;3¸‰½¹ÿEõ¸¦®BAv(LgX/ü*Z¤ÛÑ‹¾3CŞ9ÂjŸŸÃE™ ¡ì±…9üb‘ |¸øAĞ‚´I[Ú¥HX˜œ=*«V*ğE<"†–ApáJ(zßíbĞ—I¢‘ˆÅx¸5¢Ø£5aêÉ?§‹ÄYÇÎİJ@&­Wé†Í@¿ß„=‡|RºëI§ûSˆ×®Kv^–ÔòªtŞßòÑfíEa¾éYJú$ØjÌ“£%J=›»_uË+:ÅË\á^}c%ç¹ï=¥,H#¯7hG²IJ%IoÍV´æƒÏàôÅŒššn”ª¨¿ĞÓÜñj·3=- æåÀí*X¿_˜ÖVV%·»š´Š\l‘Íƒqú¿¤3xNŸzÓM’Á½#Ïª=ÍùšS¾É1k^±ká•ø2‹áà'ş˜o©¢o 8jK2!Èû?xğÎœ™÷:äÑh¯¶LÑ˜6'w1³^xiH-Ô¹–ç%·¦˜5xæíl?	‡¦Ğ‚Ê6…$,>L3Ÿl©·ÙĞJv*›2ñ©RÃúÉÜ·	Û»+A˜++ˆfe÷ÖzÉ¡Ûã•ãPâ?’˜ğ.µE+?"Ş$°;=¯` zÎXÀBøİ}˜œ‹ÿÅ¤ÑóBTBG	ÖÚ0L×?i]´‡×µÃÈ0ñh_Ë·¨´¸:–êEÊÖ á4SÃ°8tZ–I&¡Yve\H2ÉÂ¢¼@8{Òğña¾|FU„êÀD'Yº>2ªà’.¢ADCñ]®zqã¤²ƒ¸ıëÙ9còäÛz/¶2TÏtˆÂG|÷±²<«ï'©j'@R¥>Pó O w­b¼3|¬gÆÅæ "}8;a9Í{x@“x¥È%õ`f]]mn£¢—Åãõİ–X®!}÷4ˆm³.d±ƒ="9é!áé¸Éƒ©fº
+Íòo 1È?¿MàæŞçOÂ§Îã"Qš¤UµU(|vê’
+Qš_ÓÛ‰ qï"4S“ÎÌç¶&[Å$P7f6ÍÙŒ
+½éØ
+şJ#qzœ9¥O
+©ü°+{Ap°Éˆå…Å¢K²yi
+,Xğ\ß¿ò%DÅÓŸÆF_JÓu#Â–<PcØÄğO¤rBZ]ì¦dÛ\›@w	â½5™/\®’–£È˜Jˆ@¤C™öêÊ’Ü|ïN1³×å+F‰!%HîÑ$¹¤K «ŒÂûÆ>ˆ+›x/!SÓá'T,7ãŠq,ÍYß|Á„8dÁ=drõ@Ùjö’ÿc}Ûø¶èMu …É¥@xÙˆtç&³C=”ãÒ=¨À*á“ñ€˜zK”½Ò,èºÊñŸOÄ†˜SÆ8µ¾?:r<G¾ÓÖ¨ÌªÊí¥@¾À.½Àö$XûF âöd}Ø“	ª;CœÖA¨DÀ±jïD8Ã¶»j'ÕÔsªÏôhÂ­1¼©‰Ô‰Íõì,yáv1¸ûåP/™VyºB	1fÑ	-&$í4ÍNÚ[TƒÒßŸ¼”p-<`X›Çå»{LÌÅˆîÍàAŠ‘+Æç¯êô¿²ŸTÈ?pEå”ÄÊ¦1Ù•ü>X=¦zXÌúµD\M0{–;TOSU«ù›¡ïÙ“ÀEÆ2oNÁ:şµÈ6¦t–Åı¢O&Y<œˆè+xo ü:Õ~S(¤0¦™…‚Å'[ÏPö-l£a–±û_ä |#ŸØÇòv4vñ»kBX}ÍŠ@êzL$ìBÓjôªá/­¶‰­rp2‚Š²!ÇJ¹7®ŠÉ®Ø*ó¾#Œï&ö¸Ûå ÎløıŒë’¹Nüi•Œh÷…H¤`Ùêı­~YÅãN¿LîWŠ”î
+"=$‹ êlkú‹pŠÈO…ß@Ëšfi}-Â)mpšº1NåÙH¥%‰%ãÙ·7† b¹é!Õ•Å^x7‹b‚D)ƒ;É«c™eMŞÓqGHÏœg?€¬ Ñ|tå8,çöƒƒ°—}É<E7ıàV…ZA4U6F¹êTÚ0©¤å ’UÇ;ãšoGÃÙ|\‘Ø‡®Š™uˆG¬+Då2µP¦¬®Û	‚Ô}ÿ"Eğ:Pë˜*WÊàËçÓz%4d•LæoÀõh1‡î¿	ót»ò¾ÔrMß˜…[ï éÏK}:Ñ¬óıünîÎ$.rrı·³ÀW) §Ødy~.VKÖ²ÒÉ3V%˜jk	€'T9VÕakã½øœÖ<G*Hÿæ@q÷† ¬µ×Ûğ¡tì¯xßß€DˆxO#[8ÔM`_øSF%&,ĞT±]z_<	¦ë@ìŸ ÔŞªnËŠ¥2ºRÏ>Í¬Yµxyã—P´d)Úö-ÆX]P‘´o‡D†eì•qRİÂ÷<&FêÍ§Ñ½; ’7è#¼J„µSE„xÅõ+yÚH¹³ZÂFÂ´å£ş$Ñƒ¢7>òKZÜnD9ĞµOñ¤¶”‰ßgx:V”^â\&|ÓÉÃ]’=± Şp‡kz@²àeî"ê½†½úØ5Å±Hš¯…Ò>¼«0òÆ¥é?¬¤$MÄ‰mˆô÷~g¥şëğ²Ğ`†€6ºí1ŒX‡ªJÄk@j*­¸ÅÃq¦•Ò€ €®	QN0Ú'£"N¶øªÅ\Ç2§ªÉâ¸•a99ï¥&	® ÏåÍ0Šb¸¾z‰)Ì»G"ÊÑ)BC¦+–w Lèó·İÆ÷Px:zöPôW¡¬Ñ¯ø„NXs—"İH'ûàR”ñ'yfv@ô%Âë}sDx¼maßµ°?{Å­x[ˆCx>Òºl|äÒ¯¾ƒ0æL5åı6Uˆ‰ÄT0pPç¨H”!û”ïÉğÉÅt;v,L‘5ë°ÁYı\[dˆ\ÆXîaÛ‚—Xv=aÈy$Ä³îTTƒzÉ´\6A<Ÿ§x×Uì£„÷®]¢U„ôfÁZ‹oîúOp“P>Æ&@%Wß6FQ,ø´ZüÑ=øø%º"}€4»F¾à0şË<3öW{ã(›Lül¼äÏ¶§oQPvŞî}zòRLP9Tr·M˜y3lÈCë-›rW™RÒD¼/cç}*®æSâˆápùÿ:¹)äâ±³*ı´@!ğQ\x·ÏÂ±º'öÈ7KŒ‚gĞî+ŞPY÷GŠ½6-ÛÓå3¼ß7>âq·¥J¨> ~ûFØáæ2í®^6¥¯§1‹”*LQªèqÜ
+@JGunŒá$œØzC2i'"²ä`cxd^j-¹‘ÀÑï°‹º)©9È›>L.‰µr¯Çƒ€İ(=F¥ª& *èšM` ':…[û¶N‘‘[°£m<Ë<Í‘ä—ıF®NŸı¦9é÷·\`jp
+6P?$‚ÄŸW®U?He„$1˜«.x V =aåq´ú!°È¸¬ l)ªE¦–FÖÚßöZ¾~Œ6¹5BfgQíÉ8h“¥iŞõ5q—c2[T.˜"Š_bÜqïnB¨#ğK@´«"ò:ú&0¥ñÿ¨³¤s4ç_–<¤Y‰¥([’¬<#än‹g<NN@vÿ$¯…<ˆL—ÉìXN¡¤ä‘>a¿B6xD!éÒÊìÄDşi{ºj­d<E–Ü¬±šifi¡¤Ùœ£¡U¨²ä¹-ZIÀ&×óRsê³]ë\ìä8Óè1^‰ÙÓEÁcŠC*ëñIåÆÅ1^Üe‚¨Z¼Èln“A‚_¨]“Ì ì àƒĞºAòFjwcüf9f9äåß!-)~²›3#âqbNğ¿ .’)ú™mãNYĞÙ?UØÙ˜Ù< .lƒe©htÃµ¹-¼ÎyOös \æ/,1_‚.‘7…2ä`³ìG˜W¨ ûÜô—1ƒÆô ƒÛÖîxºM3#¯/ú¸àM¤µç½Òµ’ÄÃQŞZ
+T }ùNC0\ĞÙKêŠ/X1•.¯
+¤£÷ŞN-Rºè=drhÑ¨ûÿì/ùK]¸üÖã_ü¬1#Æ7( r¥8bÁ„Üƒ¶½\Å5m›<ô«“k¨q•Â×Prs†–Âı™¬PideÈˆ£SNt™ !m˜bAêd‚ ­ôR ğ‰¥¡Xg{:.HğÀÕr‹ @§K·`)N{¡#!èÑ« =#¶"×ˆNÖzÿ˜$!UZA].XHÖ²™»ãÂ×>³½ªMK8tôì€ëÄ{--qÎR4ı^öJùîÎ Š¤6jÄ¥ÆæµJØòø}‚ôÃ• nMø˜0C¹Àê,Üä-Ô#¹Øqæ{¬†·a€1PYÍ54^Êû ÚNRAµ#¡Ÿ7¥É­#6õ4‚+ã•u ÑU×eİ˜…Aˆ/­~õ°LŠr•½É¸Gı6â9¤üK	õliÍØ¢î†Ê•5MYüNA—¥/Ø­e£[ôŒ$Œÿ¤üÃuºª©	ÉÅÊ <¶´wùƒ«ˆ¿Öí'òÔ
+Êé}«Áz§Wâ²Sì;cSÚÃ/’
+TÃÇÄu¥ÁÀüBÓ8æY™XÏ›.pÌƒ@LF³üŞÁ*yNQæî‚4ÒLmdïS‹#”R™’G„X»­Ø¸.œ"¸¦gRr‰ 9^äRÙª¤nÌŠ¬™2]@Ãôñ|´~Õğa
+‘­kµ§<oYÈ”Š/Î|ğÚğQÒEfº!.Ú°» z50Ï]h^éİÓ‹ÎŒÄWUí]–ŞÕ4Ñø×)¨$F./;ĞX€êæTÓ8?G‘Ñé=?R2)£Õµôn?T¯Ê•¢‘ùâÊWÍÔàõú¥Ô( Ç÷,š¶ˆ”~¡3qç‡¾±Ä3å®Œ†ú’-‚m(f¸ûBóÂ·"&–¢µ}ù¡xQ&¥^–ÆL~ÇTb¯Š:«{…Y@[‚Æı€r·gyNÎbÀÄ‚eª:$f>ïœŠñ§…t+ÿ’ôòe	é‹%‘„‡U¹”v·H×½²°b3ût£ _eÎ¾ú¨î…—è iòRkŠrt¥¯Ö—dâOÎÏy£T wµ¢fP³]%S]«1Ò¥–5vuÙ¶ÃMì \9Œôi¹ú"Io›ÍˆYÄq©:}¸5Î[¢ˆÎ×tçY†^Y†„@IñıÉ˜×Ñ ;ı×Ñ›Uwx3G MÑ'(Nlhõ2’‡%]ã5ha[5’yÉzÔ~»,À_î%%å`øèe§p<¯‘ñ@¤˜z\šz­ñúª†"_±	>[d^ö_¼®{‡¥®|¡è’­K?HJ”×NW½ÌuO°Nã®	(@âÉ†“ BÆ¯l!Œ]Yôl¼òÔxŠK‰µ¾²*™§«FHàsÛƒìp—Çİf$t°;6˜ †¤‚²İ#Ì
+æR³OÜY]|O)3zÂúébş¹4ÂdÈîeV°IøØ_‹3¶#lvf:é_º–[Ë38èJø¦:7/2˜è«úŞŠèGjˆ”V\¯SªäS÷3»Q</·»O¸&œ ÙÚLúÄx¾±äÄîSØïrƒèuâhü?ªÓ"}Ó.fÛ#`;iôE¦2M;3O*¶ÂĞ
+=ËïWL*y'®û/\åöâ°r[:?ü•†TPik—ÃW:át›+ÎŞ*u
+K)EøµáêEˆ…Ÿ“$<I~?§³È,»Ä)6¶Ekk¡}Íƒî^x–Xë¼Â"€,ğÏ¿†÷Ğ$gQ«0{l6œS”¾9³®i•ˆœK»è†JëOqz^Dö.h¦ºòb/Lêú‹,ÆæÇà,”¬e2Šhn±+·aªàçbÁ"8šè äo¯î¾Û+ä¨®ÎÈ„*»ß¶ŠFñŸZ(Å9ş¸É{>WèÌqŠ5×{€uë%5š8ËÅğÈ‘³„eB!” g–2Û•»¹3½M›Ió,g\ÃuŞëaè‘_`F•n&åÂªlDO%ßzV]™šd‚XŒ/¦d	ZBJ+¥ğ{ù3f0ÂÂÿÉ½x$âÕ+ûb7F/ÿ ¤ºjÓ9ÿÚª>,xş™hy§†8´öu@	Å›˜7Xb%¿W³œcÿv`¸`É	î

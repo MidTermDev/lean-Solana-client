@@ -18,8 +18,10 @@ namespace Directory
 
 def capacity : Nat := 32768
 def keysAt : UInt64 := 4096
+/-- Bytes of one row of fields. -/
+def row : Nat := Nodes.fields * 8
 def infoAt : UInt64 := 4096 + 32768 * 32
-def bytes : UInt64 := 4096 + 32768 * 32 + 32768 * 64
+def bytes : UInt64 := 4096 + 32768 * 32 + 32768 * row.toUInt64
 
 def create : IO UInt64 := Sys.mmapShared bytes
 
@@ -33,7 +35,7 @@ def write (base : UInt64) (nodes : Nodes) : IO Unit := do
   let kp := Unsafe.addr keys
   let ip := Unsafe.arrayAddr info
   Mem.copy (base + keysAt) (kp + 24) (n * 32)
-  Mem.copy (base + infoAt) (ip + 24) (n * 64)
+  Mem.copy (base + infoAt) (ip + 24) (n * row.toUInt64)
   Mem.store64 (base + 8) n
   Mem.store64 base (seq + 2)
 
@@ -57,10 +59,10 @@ def read (base : UInt64) : IO Snapshot := do
     let kp := Unsafe.addr keys
     Mem.copy (kp + 24) (base + keysAt) (n * 32)
     let keys ← Sys.setSize keys (n * 32)
-    let info := Sys.scratch (n.toNat * 64)
+    let info := Sys.scratch (n.toNat * row)
     let ip := Unsafe.addr info
-    Mem.copy (ip + 24) (base + infoAt) (n * 64)
-    let info ← Sys.setSize info (n * 64)
+    Mem.copy (ip + 24) (base + infoAt) (n * row.toUInt64)
+    let info ← Sys.setSize info (n * row.toUInt64)
     let s2 ← Mem.load64 base
     if s1 == s2 then
       return ⟨n.toNat, keys, info⟩
@@ -68,6 +70,6 @@ def read (base : UInt64) : IO Snapshot := do
 
 /-- One field of one row of a snapshot. -/
 def Snapshot.field (s : Snapshot) (row field : Nat) : UInt64 :=
-  Wire.u64 s.info (row * 64 + field * 8)
+  Wire.u64 s.info (row * Directory.row + field * 8)
 
 end Directory

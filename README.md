@@ -51,13 +51,13 @@ And since toly then published [lean-svm](https://github.com/aeyakovenko/lean-svm
 
 All of it — SHA-256, SHA-512, Ed25519, the bloom filters, the wire formats, the hash tables, the DNS query, the terminal UI, the memory allocator underneath — is Lean, compiled to machine code by the compiler in `leanc/`.
 
-It also **verifies real blocks** (see [Verify blocks](#verify-blocks)), **runs on-chain programs** locally with `leansol run`, and applies whole signed **transactions** with `leansol tx`: see [Run on-chain programs](#run-on-chain-programs).
+It also **verifies real blocks** and follows the chain (see [Verify blocks](#verify-blocks)), **loads the chain's state** from a snapshot, checking every account (see [Hold the state](#hold-the-state)), **runs on-chain programs** locally with `leansol run`, and applies whole signed **transactions** with `leansol tx`: see [Run on-chain programs](#run-on-chain-programs).
 
-**What it is not:** a validator. It does not download blocks, replay transactions, vote, or produce anything. It observes and verifies the gossip plane. See [Limits and roadmap](#limits-and-roadmap) for exactly where the line is.
+**What it is not:** a validator. It does not execute the blocks it receives, vote, or produce anything. It observes and verifies. See [Limits and roadmap](#limits-and-roadmap) for exactly where the line is.
 
 ## Quick start
 
-**Just run it.** Every release ships the client as a single 535 KB static binary (Linux, x86-64):
+**Just run it.** Every release ships the client as a single 675 KB static binary (Linux, x86-64):
 
 ```sh
 curl -LO https://github.com/MidTermDev/lean-Solana-client/releases/latest/download/leansol-x86_64-linux
@@ -106,6 +106,9 @@ usage: leansol [options]
                                           (see `leansol tx --help`)
        leansol block [SLOT] [options]     fetch a block from the cluster and verify it
                                           (see `leansol block --help`)
+       leansol snapshot [options]         load the chain's state from a snapshot, verifying it
+       leansol account ADDRESS            look an account up in the loaded state
+                                          (see `leansol snapshot --help`)
 ```
 
 Piped or redirected, it switches to log lines automatically:
@@ -278,6 +281,73 @@ What arrives is not a tidy stream. A node with no stake sits wherever each sende
 It costs about six cores and 36 Mbit/s of inbound traffic, continuously.
 
 **What this does not establish.** The leader is identified as *whichever node known from gossip* signed the block; that the slot was that node's to lead would need the leader schedule, which comes from stake, which comes from replaying the chain. The bank hash is read, not recomputed, for the same reason. And no block is executed. Receiving and verifying every block and replaying it are different things, and this is the first.
+
+## Hold the state
+
+Blocks say what changed. To replay them a node needs what they changed: every account, as of some slot. Validators publish that as a **snapshot**, and `leansol snapshot` loads one, from a file or straight from a validator, checking it as it goes:
+
+```console
+$ ./build/leansol snapshot --from 127.0.0.1:8899 --accounts state
+snapshot     snapshot-1200-9r67SHZcBSFAZhBiAw2cgPsB5TsArx9nHqasU2regDhs.tar.zst · 386,729 bytes · from 127.0.0.1:8899
+slot         1200 · block height 1,200 · epoch 18
+bank hash    HT3c3xPs5BFiYvjFaPWfuvt7LjgDmninabeSgvMQwTy9
+blockhash    BU1kXYGZFfCv3EsCMFCeN2yGtXknh6Lp3bZDhMybTCDV (301 recent ones kept)
+supply       503,000,582.023076742 SOL
+account data 1,585,787 bytes
+stakes       1 vote accounts, 1 delegations · recorded for epochs 17, 15, 16, 19, 18
+             this epoch: 1 validators with stake, 1,000,062.021357584 SOL in all
+accounts     304 in 10 files · 298 addresses · 298 hold lamports, 0 are closed
+             6 were older versions of an account that appears again, and were dropped
+lattice hash 9r67SHZcBSFAZhBiAw2cgPsB5TsArx9nHqasU2regDhs, from every account
+             = the manifest's, all 2048 bytes
+             = the hash the snapshot is named after
+lamports     503,000,582.023076742 SOL in the accounts = the supply the manifest records
+data         1,585,787 bytes = the manifest's count
+store        state: 16 shards, 1,778,248 bytes
+result       verified and stored in 0.0 s
+
+$ ./build/leansol account TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA --accounts state
+address      TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA
+lamports     1141440 (0.001141440 SOL)
+owner        BPFLoaderUpgradeab1e11111111111111111111111
+executable   true
+```
+
+That one is from a local test validator (Agave 3.1), and what the store returns was compared with what the validator's own RPC says. **A mainnet snapshot has not been loaded yet**: it is about 127 GB compressed, and everything below has so far been exercised on snapshots written by Agave's test validator and on synthetic ones of up to three million accounts. Mainnet's manifest is written by a newer Agave and is far larger; the reader refuses what it does not understand rather than guess.
+
+**What is checked.** A snapshot is named after a hash, and that hash is not a hash of the file. Solana summarises all of its state in a *lattice hash*: every account is hashed, with BLAKE3, to 2048 bytes, read as 1024 sixteen-bit numbers, and the state's hash is the sum of all of them. The snapshot's name is the BLAKE3 checksum of that sum; validators announce the same value in gossip. So the check is the real one: hash every account, add them up, and compare. One bit of one account, one lamport, one owner, one account missing: the sum is different ([`tests/snapshot.lean`](tests/snapshot.lean) tries each). The lamports must also add up to the supply the manifest records.
+
+It is a check against the *name*. Whether the name is the chain's is a different question: with a node of ours running, the loader reports how many validators announce that slot and hash in gossip, and `leansol snapshot --find` lists what is on offer:
+
+```console
+$ ./build/leansol snapshot --find
+2918 validators announce a full snapshot in gossip: 299 different ones. The chain is at slot 474359932.
+Those that some validator offers over HTTP, newest first:
+
+slot 474337214 (22,718 slots ago) · hash HL4vErNnysMfUviq17KiXe62HNDxig3HgP85NTFCP19B · announced by 141 validators
+    45.154.33.14:8899 serves it, 126.6 GiB:
+      leansol snapshot --url http://45.154.33.14:8899/snapshot-474337214-HL4vErNnysMfUviq17KiXe62HNDxig3HgP85NTFCP19B.tar.zst
+    5.187.38.41:8899 serves it, 109.1 GiB:
+      ...
+slot 474287194 (72,738 slots ago) · hash CWh1AVAJusM4A79RCBfKToVPQxA29GzKPVu9JhVHmv26 · announced by 1389 validators
+```
+
+(Two archives of one snapshot differ in size because each validator compresses its own; the hash is of the accounts, so it is the same.) A count of validators is not stake, and stake is in the state being downloaded, so this is corroboration, not proof. The proof comes with replay: blocks built on a wrong state do not produce the bank hashes their leaders signed.
+
+**How.** Nothing is stored that is not needed, and the archive never touches the disk:
+
+    bytes → Zstandard → tar → accounts → one of several processes, by address
+
+- **Zstandard** ([`lib/Encoding/Zstd.lean`](lib/Encoding/Zstd.lean)), from the format's specification: Huffman-coded literals, the three FSE-coded sequence tables, repeat offsets, windows up to 128 MiB, any number of frames. It is a stream: feed it bytes in pieces of any size. [`tests/zstd.lean`](tests/zstd.lean) decodes files compressed by the reference `zstd` at settings chosen to reach every corner of the format, and requires the originals back byte for byte; damaged streams are refused or decoded to garbage, never a crash. (Frame checksums are skipped: the accounts are checked by something much stronger.) About 320 MB/s of output on snapshot-like data.
+- **tar** ([`lib/Encoding/Tar.lean`](lib/Encoding/Tar.lean)): headers with their checksums, and GNU's binary sizes, since an account file can exceed the 8 GiB that octal digits can say.
+- **The manifest** ([`lib/Solana/Snapshot.lean`](lib/Solana/Snapshot.lean)): the bank as Agave serialises it. From it come the slot, the bank hash, the blockhash queue, the supply, the epoch schedule, the lattice hash, and the stakes of the epochs around the snapshot, which are what a leader schedule is computed from.
+- **Account files**: named for the slot they were written in. An account can appear in several, and the newest slot wins; an account whose newest version holds no lamports is closed and counts for nothing, but must still displace its older self.
+- **BLAKE3** ([`lib/Crypto/Blake3.lean`](lib/Crypto/Blake3.lean)), with its extendable output, against the official test vectors; and the lattice hash ([`lib/Solana/LtHash.lean`](lib/Solana/LtHash.lean)), which adds four of the 1024 numbers at a time in one 64-bit word.
+- **The store** ([`lib/Solana/Accounts.lean`](lib/Solana/Accounts.lean)): a directory of shards, one per worker process, chosen by address, so the processes never share anything. A shard is an append-only log of accounts (96 bytes and the data, each) and a hash index of 16-byte entries: eight bytes of the address and a position in the log. Eight bytes are not the address, so a lookup confirms it in the log; entries are placed by a hash with a random seed, so nobody can mint addresses that pile up in one spot. When a newer version of an account arrives, its worker reads the old one back from the log, takes its lattice hash out of the sum, and adds the new one: the sum is right at every moment, in whatever order the files come.
+
+A connection that drops is resumed. A validator's file server ignores requests for the rest of a file and starts over, so then the part already processed is read again and thrown away.
+
+Three million synthetic accounts (3.65 GB unpacked, with duplicates, closed accounts and one of 10 MiB) load and verify in 20 seconds with 16 workers, about 150,000 accounts a second; the result is the same for any number of workers. The reader is the limit: one process decompresses and routes, the workers hash.
 
 ## Run on-chain programs
 
@@ -729,9 +799,10 @@ make oracle        # Agave's runtime must print what five of the tests print  (n
 
 ```console
 $ make lean-check
-Build completed successfully (62 jobs).
+Build completed successfully (106 jobs).
 ok    anchor (official Lean agrees)
 ok    basics (official Lean agrees)
+ok    blake3 (official Lean agrees)
 ok    block (official Lean agrees)
 ok    builtins (official Lean agrees)
 ok    cpi (official Lean agrees)
@@ -745,12 +816,15 @@ ok    sbpf (official Lean agrees)
 ok    semantics (official Lean agrees)
 ok    sha (official Lean agrees)
 ok    sha_lengths (official Lean agrees)
+ok    snapshot (official Lean agrees)
+ok    store (native only)
 ok    tables (official Lean agrees)
 ok    text (official Lean agrees)
 ok    transaction (official Lean agrees)
 ok    txformat (official Lean agrees)
 ok    versions (official Lean agrees)
-20 passed, 0 failed
+ok    zstd (official Lean agrees)
+24 passed, 0 failed
 ```
 
 The tests not marked "official Lean agrees" either use raw syscalls (`fork`, futexes), which exist only as machine code, or check behaviour specific to `leanc` (aborting on a bounds error, in-place updates).
@@ -763,12 +837,14 @@ Measured on one machine (Xeon Gold 5515+), single core unless noted. They are he
 |---|---|
 | `leanc` source | about 5,800 lines of C |
 | `leanc` binary | 143 KB, static, zero undefined symbols |
-| Lean in this repo | 9,580 lines: runtime 597, libraries 6,279, client 2,703 |
+| Lean in this repo | 12,270 lines: runtime 601, libraries 8,070, client 3,600 |
 | Compiling the whole client | **under 30 ms** |
-| `leansol` binary | **535 KB**, static |
+| `leansol` binary | **675 KB**, static |
 | Full build from a fresh clone | about 40 ms |
 | Ed25519 verification (Lean, compiled by `leanc`) | about 2,950 signatures/s per core |
 | SHA-256 (Lean, compiled by `leanc`) | about 72 MB/s |
+| Zstandard decompression (Lean, compiled by `leanc`) | about 320 MB/s of output on snapshot-like data |
+| Loading a snapshot: decompress, file, hash every account | 3 million accounts (3.65 GB) in 20 s with 16 workers |
 | Futex ring, two processes | 200,000 messages in 0.16 s |
 | Mainnet, 45 s after start | 4,005 nodes, 40,119 signatures verified, 0 bad |
 | Mainnet, steady state | about 12% of a core per verify tile, 7% for gossip; memory flat |
@@ -788,18 +864,21 @@ rt/Rt.lean        the runtime, in Lean: allocator, arrays, strings, panics
 lib/
   Sys.lean          Linux syscalls: sockets, fork, mmap, futex, clocks
   Ipc.lean          futex-backed rings and counters in shared memory
-  Crypto/           SHA-256, SHA-512, Ed25519 (field, curve, scalars, sign, verify), Reed–Solomon
+  Crypto/           SHA-256, SHA-512, Ed25519 (field, curve, scalars, sign, verify), Reed–Solomon, BLAKE3
   Solana/           wire formats, all CRDS record layouts, gossip messages, hash tables,
                     the sBPF virtual machine (SbpfBase: loading, memory, accounts; Native: the
                     built-in programs; Sbpf: the interpreter), transactions, and the bank,
-                    shreds and their recovery, entries and proof of history, repair, block checking
+                    shreds and their recovery, entries and proof of history, repair, block checking,
+                    snapshots (manifest, account files), the lattice hash, the accounts store
   Net/              IPv4 helpers and a DNS stub resolver
-  Encoding/         hex, Base58, Base64
+  Encoding/         hex, Base58, Base64, Zstandard decompression, tar
 client/           the tiles, the dashboard, the JSON/Prometheus export, main
 web/              the public site for a running node (static page + one proxy function)
 deploy/           a systemd unit for a long-running node
 tests/            programs + outputs produced by official Lean
   blocks/           a block and a set of shreds from mainnet, as test input
+  snapshots/        a snapshot written by Agave's test validator
+  zstd/             files compressed by the reference zstd
   programs/         on-chain programs as VM test inputs: lean-svm's, the SPL token programs,
                     and an Anchor program and a sysvar probe with their sources
   oracle/           runs the test scenarios on Agave's runtime (3.1), for comparison
@@ -813,7 +892,7 @@ lakefile.toml     lets the official toolchain check all of the above
 
 Being straightforward about what this is:
 
-- **Not a validator, and not yet a replaying node.** It verifies gossip, and it receives and verifies every block: shreds, leader signature, proof of history, transaction signatures, and each block's link to its parent. It does not know the leader schedule, hold state, execute blocks, or vote. Those need a snapshot of every account, the vote program and the rest of the runtime, and bank hashes that match the ones in the blocks.
+- **Not a validator, and not yet a replaying node.** It verifies gossip, it receives and verifies every block (shreds, leader signature, proof of history, transaction signatures, each block's link to its parent), and it can load and verify the chain's state from a snapshot. It does not yet do so for mainnet's, compute the leader schedule from the stakes in it, execute blocks, or vote. Execution needs the vote program and the rest of the runtime, and bank hashes that match the ones in the blocks.
 - **Transactions run; blocks do not.** Signed transactions are applied with fees, budgets, rent checks, every sysvar and every version of sBPF, and programs can be deployed and upgraded through the loader. Replaying mainnet needs more: the vote program, the remaining signature programs and system calls, and a way to get the accounts, which means the ledger.
 - **Listen-only.** It answers pings but does not serve pull requests or push records to others.
 - **A simple store.** Records are remembered by hash, up to 400,000; when that fills (every several minutes on mainnet) the hash set is flushed and refilled rather than aged out record by record. The node table survives the flush.
@@ -821,7 +900,7 @@ Being straightforward about what this is:
 - **The compiler is not self-hosted.** Its source is C. Nothing in the build uses a C toolchain, because a prebuilt compiler is checked in, but changing the compiler does.
 - **A subset of Lean.** No type classes or higher-order functions is a real restriction; the libraries here are written around it.
 - **`Nat` is 64 bits** (overflow traps rather than wraps; see above).
-- **Young code.** The compiler has been exercised by about 9,580 lines of Lean and the test suite, not by years of users. The Ed25519 implementation is variable-time, which is fine for verifying public data and not what you want around long-lived secret keys.
+- **Young code.** The compiler has been exercised by about 12,270 lines of Lean and the test suite, not by years of users. The Ed25519 implementation is variable-time, which is fine for verifying public data and not what you want around long-lived secret keys.
 - **The network moves.** Wire formats follow agave's current gossip code; when the protocol changes, this needs to follow.
 
 ## How this relates to lean-svm
@@ -838,7 +917,7 @@ They meet at the `.so` file: lean-svm writes it, the virtual machine here runs i
 Write them with [lean-svm](https://github.com/aeyakovenko/lean-svm), and run them locally with `leansol run`, including ones that use tokens. It can build, sign and apply transactions locally, but it does not send them: deploying needs the standard Solana tools.
 
 **Is this the Lean theorem prover's language, or just "lean" as in small?**
-Both. The client is written in Lean 4, the language of the theorem prover, and the result is also small: a 535 KB static binary.
+Both. The client is written in Lean 4, the language of the theorem prover, and the result is also small: a 675 KB static binary.
 
 **Is there really no C toolchain involved?**
 Not in building or running anything here: `make` uses the checked-in `leanc` binary, which compiles Lean straight to an ELF. The compiler's *source* is C, so changing the compiler itself needs a C compiler (`make from-c`). The remaining step is for `leanc` to be written in Lean and compile itself; its subset is not there yet.

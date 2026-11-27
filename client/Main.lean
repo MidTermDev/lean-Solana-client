@@ -7,6 +7,7 @@ import HttpTile
 import RunProgram
 import RunTx
 import RunBlock
+import RunSnapshot
 import BlockTile
 import TurbineTile
 import FollowTile
@@ -51,7 +52,10 @@ def usage : String :=
   "       leansol tx TRANSACTION [options]   apply a signed transaction to accounts, locally\n" ++
   "                                          (see `leansol tx --help`)\n" ++
   "       leansol block [SLOT] [options]     fetch a block from the cluster and verify it\n" ++
-  "                                          (see `leansol block --help`)\n"
+  "                                          (see `leansol block --help`)\n" ++
+  "       leansol snapshot [options]         load the chain's state from a snapshot, verifying it\n" ++
+  "       leansol account ADDRESS            look an account up in the loaded state\n" ++
+  "                                          (see `leansol snapshot --help`)\n"
 
 def die (msg : String) : IO Unit := do
   IO.eprintln s!"leansol: {msg}"
@@ -141,6 +145,12 @@ def main : IO Unit := do
     return
   if argc >= 2 && (← Sys.arg 1) == "block" then
     RunBlock.main
+    return
+  if argc >= 2 && (← Sys.arg 1) == "snapshot" then
+    RunSnapshot.main
+    return
+  if argc >= 2 && (← Sys.arg 1) == "account" then
+    RunSnapshot.account
     return
   let mut cluster := "mainnet"
   let mut hosts : Array String := #[]

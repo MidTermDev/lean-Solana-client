@@ -1,0 +1,13 @@
+official vectors: 35 of 35 agree, each to 131 bytes of output
+the hash is the first 32 bytes of the output: true
+of nothing: af1349b9f5f9a1a6a0404dea36dcc9499bcb25c9adc112b7cc9a93cae41f3262
+lane arithmetic: 20000 of 20000 sums and 20000 of 20000 differences agree with one lane at a time
+one account: 15f7542ff922fd82a17dd42590c0282530e86ce86d8e2d341911ad1ba9d679a5
+two accounts: 3a0fe3f28c83424c59787f685eff01fccfafc5276d01819615bcbcfbfaf79fe2
+order does not matter: true; it is the sum of the two: true
+removing one leaves the other: true
+removing both leaves nothing: true
+an account without lamports is no account: true
+each field matters: lamports true, executable true, owner true, data true
+the same from a buffer: true
+as bytes and back: true; nothing hashes to be2a8de3dcf46c94ce85cdc8e07ac308f4d8a95490d956c38d780fd610db0813
