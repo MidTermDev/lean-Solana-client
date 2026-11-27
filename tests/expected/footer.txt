@@ -1,0 +1,30 @@
+keccak of nothing: c5d2460186f7233c927e7db2dcc703c0e500b653ca82273b7bfad8045d85a470
+keccak of abc:     4e03657aea45a94fc7d47ba826c8d667c0d1e6e33a64a036ec44f58fa12d6c45
+135, 136, 137 and 300 bytes: cbdfd9dee5faad38 7ce759f1ab7f9ce4 ac73d4fae68b8453 4699841dafd5e26c
+signature 1: the signer's key; with the other candidate: another key
+signature 2: the signer's key; with the other candidate: another key
+signature 3: the signer's key; with the other candidate: another key
+signature 4: the signer's key; with the other candidate: another key
+a zero in the signature: nothing; s at the group's order: nothing; a candidate that does not exist: nothing
+88373627028219503 × 4812263350427377 / (432000 × 219422777475117211) = 4486489036
+97514616247484246 × 6094730419354193 / (432000 × 540729259402726871) = 2544254783
+87146286158371614 × 6017240938857688 / (432000 × 813175631550155728) = 1492719420
+24415159833816516 × 7612647962698326 / (432000 × 201796881823127036) = 2132048700
+7398013470137901 × 2385567046635178 / (432000 × 75397286310273156) = 541835284
+99214770065020779 × 3692234311116180 / (432000 × 262293764287324320) = 3232911910
+18446744073709551615 × 18446744073709551615 / (4294967296 × 8589934592) = 9223372036854775807
+5 × 7 / (3 × 0) = 0
+ranks a bitmap names: 0 2 7 9 10 (of 11)
+parsed: true; last vote 102, root 99, timestamp 1000; credits (1097, 500, 400) (1098, 650, 500) 
+put back unchanged: true
+voted on 120: last vote 120, timestamp 2000 at slot 120; votes take 21 bytes
+voted on an older slot, at an earlier time: last vote 102, timestamp 1000
+slot 130 final: root 130; slot 90 final: root 99
+credited 25 in epoch 1098: (1097, 500, 400) (1098, 675, 500) 
+credited 25 in epoch 1099: (1097, 500, 400) (1098, 650, 500) (1099, 675, 650) 
+an entry nothing was added to is reused: (1099, 507, 500) 
+no credits yet: (5, 9, 0) 
+in the epoch Alpenglow took over, a marker goes first: (1097, 500, 400) (1098, 650, 500) (18446744073709551615, 18446744073709551615, 18446744073709551615) (1098, 675, 650) 
+still the right size: 3762; not a vote account: false
+footer:  final slot 4242 (1 bitmap), reward slot 4235 (1 bitmap), rank 2 named true, rank 3 named false
+a footer cut short: the footer's certificates do not parse; an empty one: final 0

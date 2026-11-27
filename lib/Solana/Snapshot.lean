@@ -81,6 +81,8 @@ structure Voter where
   vote : ByteArray
   node : ByteArray
   stake : UInt64
+  /-- the validator's BLS key (48 bytes), with which it signs its votes; empty if its vote account has none -/
+  bls : ByteArray
   deriving Inhabited
 
 /-- The stakes that decide who leads and whose votes count during one epoch. -/
@@ -164,7 +166,9 @@ def voteAccounts (b : ByteArray) (start : Nat) (keep : Bool) : Nat × Array Vote
       return (Wire.bad, voters, 0)
     -- a vote account's data begins with a version number and the validator's identity
     if keep && stake != 0 && dataLen >= 36 then
-      voters := voters.push ⟨b.extract o (o + 32), b.extract (data + 4) (data + 36), stake⟩
+      -- (in the current layout of a vote account, an optional BLS key follows four addresses and three numbers)
+      let bls := if Wire.u32 b data == 3 && dataLen >= 193 && b[data + 144]! == 1 then b.extract (data + 145) (data + 193) else ByteArray.empty
+      voters := voters.push ⟨b.extract o (o + 32), b.extract (data + 4) (data + 36), stake, bls⟩
     o := data + dataLen + 41
   return (o, voters, n)
 

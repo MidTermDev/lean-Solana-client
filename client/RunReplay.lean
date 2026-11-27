@@ -8,6 +8,7 @@ import Solana.Accounts
 import Solana.Snapshot
 import Solana.LtHash
 import Solana.LeaderSchedule
+import Solana.Alpenglow
 import RunBlock
 
 /-!
@@ -140,6 +141,24 @@ def slotHistorySysvar : ByteArray := Base58.decode "SysvarS1otHistory11111111111
 def incinerator : ByteArray := Base58.decode "1nc1nerator11111111111111111111111111111111"
 def alpenglowFeature : ByteArray := Base58.decode "A1pengvuM6JEcyNuTnMqepBKhwHE3N6PmUrdATGawhJS"
 
+/-- The account holding the rewards an epoch can pay, and the one recording when Alpenglow took over. -/
+def voteRewardAccount : ByteArray := (Sbpf.findProgramAddress #["vote_reward_account".toUTF8] alpenglowFeature).1
+def genesisCertificate : ByteArray := (Sbpf.findProgramAddress #["carlgration".toUTF8] alpenglowFeature).1
+
+/-- Position of `key` among `keys`, or `Sbpf.notFound`. -/
+def keyIndex (keys : Array ByteArray) (key : ByteArray) : Nat := Id.run do
+  for i in [0:keys.size] do
+    if keys[i]! == key then
+      return i
+  return Sbpf.notFound
+
+/-- The stakes recorded for an epoch, or none. -/
+def stakesOf (m : Snapshot.Manifest) (epoch : UInt64) : Snapshot.EpochStakes := Id.run do
+  for e in m.epochStakes do
+    if e.epoch == epoch then
+      return e
+  return ⟨epoch, 0, Array.emptyWithCapacity 0⟩
+
 /-- Where the chain keeps its clock to the nanosecond: an address derived from the Alpenglow feature's. -/
 def nanosecondClock : ByteArray := (Sbpf.findProgramAddress #["alpenclock".toUTF8] alpenglowFeature).1
 
@@ -217,7 +236,8 @@ def main : IO Unit := do
     if manifest.lastHashIndex - Wire.u64 manifest.queue (56 * k + 40) <= 150 then
       recent := recent ++ manifest.queue.extract (56 * k) (56 * k + 32)
   let mut machine := Sbpf.Machine.create ⟨0, 0, 0, 0, 0⟩ 200000
-  let leaderTable := LeaderSchedule.table manifest
+  let leaderTable := LeaderSchedule.table manifest false
+  let leaderVotes := LeaderSchedule.table manifest true
   if first == 0 then
     first := slot + 1
   if first != slot + 1 then
@@ -372,7 +392,76 @@ def main : IO Unit := do
     let clockNow ← world.get pending Sbpf.clockSysvar
     closing := closing.push { clockNow with data := clockData slot (Wire.u64 clockNow.data 8) epoch (epoch + 1) (block.producedAt / 1000000000) }
     closing := closing.push ⟨nanosecondClock, Sbpf.systemProgram, 946560, u64 block.producedAt, false⟩
-    -- (votes and their rewards, from the footer's certificates: not applied yet)
+    -- the footer's certificates: who voted on the slot eight back (they are credited, and the leader with
+    -- them), and who made the previous block final (their roots advance)
+    let certs := Alpenglow.parse block.certificates
+    if certs.error != "" then
+      fail s!"slot {slot}: {certs.error}"
+    if certs.rewardSlot != 0 && certs.rewardSlot + 8 != slot then
+      fail s!"slot {slot}: its footer rewards slot {certs.rewardSlot}, which is not eight slots back"
+    let mut voteKeys : Array ByteArray := Array.emptyWithCapacity 1024
+    let mut voteStates : Array Alpenglow.VoteState := Array.emptyWithCapacity 1024
+    let mut voteAccounts : Array Sbpf.Account := Array.emptyWithCapacity 1024
+    let mut leaderReward : UInt64 := 0
+    let genesis ← world.get pending genesisCertificate
+    let migrationEpoch := if genesis.data.size >= 8 && manifest.slotsPerEpoch != 0 then Wire.u64 genesis.data 0 / manifest.slotsPerEpoch else 0xFFFFFFFFFFFFFFFE
+    for pass in [0:2] do
+      let about := if pass == 0 then certs.rewardSlot else certs.finalSlot
+      if about != 0 then
+        let stakes := stakesOf manifest (if manifest.slotsPerEpoch == 0 then 0 else about / manifest.slotsPerEpoch)
+        let ranked := Alpenglow.ranks stakes.voters
+        -- when the slot in question ended, counted back from when this block was produced (slots are 200 ms)
+        let nanos := block.producedAt - 200000000 * (slot - about)
+        let inflation ← world.get pending voteRewardAccount
+        let mut possible : UInt64 := 0
+        let mut perEpoch : UInt64 := 0
+        if Wire.u64 inflation.data 16 == epoch then
+          possible := Wire.u64 inflation.data 0
+          perEpoch := Wire.u64 inflation.data 8
+        else if inflation.data.size >= 49 && inflation.data[24]! == 1 && Wire.u64 inflation.data 41 == epoch then
+          possible := Wire.u64 inflation.data 25
+          perEpoch := Wire.u64 inflation.data 33
+        for rank in [0:ranked.size] do
+          if Alpenglow.namedByAny (if pass == 0 then certs.rewardBits else certs.finalBits) rank then
+            let v := ranked[rank]!
+            let mut at_ := keyIndex voteKeys v.vote
+            if at_ == Sbpf.notFound then
+              let account ← world.get pending v.vote
+              let parsed := Alpenglow.VoteState.parse account.data
+              if account.owner == Bank.voteProgram && parsed.ok then
+                at_ := voteKeys.size
+                voteKeys := voteKeys.push v.vote
+                voteStates := voteStates.push parsed
+                voteAccounts := voteAccounts.push account
+            if at_ != Sbpf.notFound then
+              let mut st := voteStates[at_]!
+              if pass == 0 then
+                st := st.voted about nanos
+                let reward := Alpenglow.ratio possible v.stake perEpoch stakes.total
+                leaderReward := Alpenglow.saturating leaderReward (reward - reward / 2)
+                if reward / 2 != 0 then
+                  st := st.credit migrationEpoch epoch (reward / 2)
+              else
+                st := (st.rooted about).voted about nanos
+              voteStates := voteStates.set! at_ st
+    -- the leader is credited the other half of every reward
+    if certs.rewardSlot != 0 && leaderReward != 0 then
+      let leaderVote := LeaderSchedule.leaderAt leaderVotes slot
+      let mut at_ := keyIndex voteKeys leaderVote
+      if at_ == Sbpf.notFound && leaderVote.size == 32 then
+        let account ← world.get pending leaderVote
+        let parsed := Alpenglow.VoteState.parse account.data
+        if account.owner == Bank.voteProgram && parsed.ok then
+          at_ := voteKeys.size
+          voteKeys := voteKeys.push leaderVote
+          voteStates := voteStates.push parsed
+          voteAccounts := voteAccounts.push account
+      if at_ != Sbpf.notFound then
+        voteStates := voteStates.set! at_ (voteStates[at_]!.credit migrationEpoch epoch leaderReward)
+    for k in [0:voteKeys.size] do
+      let data := voteStates[k]!.bytes
+      if data.size != 0 then
+        closing := closing.push { voteAccounts[k]! with data := data }
     -- the block's hash joins the recent blockhashes
     let oldRecent ← world.get pending recentBlockhashesSysvar
     closing := closing.push { oldRecent with data := recentBlockhashesWith oldRecent.data block.blockhash 5000 }
@@ -417,7 +506,9 @@ def main : IO Unit := do
     let inner := Sha256.hash (bankHash ++ u64 signatures ++ latest)
     bankHash := Sha256.hash (inner ++ LtHash.bytes sum)
     let took := (← Sys.nowMs) - started
-    IO.println s!"slot {slot}: {block.transactions.size} transactions ({failedCount} failed), {signatures} signatures, {Fmt.thousands units} compute units, {touched.size} accounts changed, fees {fees} · {took} ms"
+    IO.println s!"slot {slot}: {block.transactions.size} transactions ({failedCount} failed), {signatures} signatures, {Fmt.thousands units} compute units, {touched.size} accounts changed ({voteKeys.size} vote accounts by the footer), fees {fees} · {took} ms"
+    if lines then
+      IO.println s!"footer: final slot {certs.finalSlot} ({certs.finalBits.size} bitmaps), reward slot {certs.rewardSlot} ({certs.rewardBits.size} bitmaps), leader reward {leaderReward}, migration epoch {migrationEpoch}"
     IO.println s!"  bank hash  {Base58.encode bankHash}"
     IO.println s!"  the block's {Base58.encode block.bankHash}  {if bankHash == block.bankHash then "MATCH" else "(differs)"}"
 

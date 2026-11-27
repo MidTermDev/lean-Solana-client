@@ -24,7 +24,7 @@ def voterOf (n : Nat) (stake : UInt64) : Snapshot.Voter := Id.run do
   key := key.push (n >>> 8).toUInt8
   for _ in [0:30] do
     key := key.push 0
-  return ⟨key, key, stake⟩
+  return ⟨key, key, stake, ByteArray.empty⟩
 
 def power (i pow : Nat) : UInt64 :=
   (if pow == 0 then 1 else if pow == 1 then i else if pow == 2 then i * i else i * i * i).toUInt64

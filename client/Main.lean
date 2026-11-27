@@ -59,7 +59,9 @@ def usage : String :=
   "                                          (see `leansol block --help`)\n" ++
   "       leansol snapshot [options]         load the chain's state from a snapshot, verifying it\n" ++
   "       leansol account ADDRESS            look an account up in the loaded state\n" ++
-  "                                          (see `leansol snapshot --help`)\n"
+  "                                          (see `leansol snapshot --help`)\n" ++
+  "       leansol replay [options]           execute blocks against the loaded state and compare\n" ++
+  "                                          bank hashes (see `leansol replay --help`)\n"
 
 def die (msg : String) : IO Unit := do
   IO.eprintln s!"leansol: {msg}"
@@ -295,7 +297,7 @@ def main : IO Unit := do
     let manifest := Snapshot.parse bytes
     if manifest.error != "" then
       die s!"{stateDir}/manifest.bin: {manifest.error}"
-    schedule := LeaderSchedule.table manifest
+    schedule := LeaderSchedule.table manifest false
     let (low, high) := LeaderSchedule.covers schedule
     IO.eprintln s!"leansol: leader schedule for slots {low} to {high - 1}, from the stakes in the snapshot of slot {manifest.slot}"
   let cfg : Config :=

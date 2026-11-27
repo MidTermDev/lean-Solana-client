@@ -106,6 +106,9 @@ def sysEpochStake : UInt64 := 28
 def sysKeccak : UInt64 := 29
 def sysBlake3 : UInt64 := 30
 def sysSecpRecover : UInt64 := 31
+def sysCurveValidate : UInt64 := 32
+def sysCurveOp : UInt64 := 33
+def sysCurveMsm : UInt64 := 34
 def sysUnknown : UInt64 := 255
 
 /-- True when the NUL-terminated string at `b[o ..]` equals `name`. -/
@@ -125,6 +128,9 @@ def syscallId (b : ByteArray) (o : Nat) : UInt64 :=
   else if cstrIs b o "sol_keccak256" then sysKeccak
   else if cstrIs b o "sol_blake3" then sysBlake3
   else if cstrIs b o "sol_secp256k1_recover" then sysSecpRecover
+  else if cstrIs b o "sol_curve_validate_point" then sysCurveValidate
+  else if cstrIs b o "sol_curve_group_op" then sysCurveOp
+  else if cstrIs b o "sol_curve_multiscalar_mul" then sysCurveMsm
   else if cstrIs b o "sol_get_clock_sysvar" then sysClock
   else if cstrIs b o "abort" then sysAbort
   else if cstrIs b o "sol_panic_" then sysPanic
@@ -240,11 +246,11 @@ def syscallNames : Array String := #["sol_log_", "sol_log_64_", "sol_log_pubkey"
   "sol_get_epoch_schedule_sysvar", "sol_get_epoch_rewards_sysvar", "sol_get_last_restart_slot", "sol_get_epoch_stake",
   "sol_get_rent_sysvar", "sol_set_return_data", "sol_get_return_data", "sol_get_stack_height", "sol_get_sysvar",
   "sol_try_find_program_address", "sol_create_program_address", "sol_get_processed_sibling_instruction",
-  "sol_keccak256", "sol_blake3", "sol_secp256k1_recover"]
+  "sol_keccak256", "sol_blake3", "sol_secp256k1_recover", "sol_curve_validate_point", "sol_curve_group_op",
+  "sol_curve_multiscalar_mul"]
 
 /-- Every system call Agave's runtime registers (those above, and those this machine does not provide yet). -/
-def allSyscallNames : Array String := #["sol_curve_validate_point",
-  "sol_curve_group_op", "sol_curve_multiscalar_mul", "sol_curve_pairing_map", "sol_get_fees_sysvar", "sol_alloc_free_",
+def allSyscallNames : Array String := #["sol_curve_pairing_map", "sol_get_fees_sysvar", "sol_alloc_free_",
   "sol_alt_bn128_group_op", "sol_alt_bn128_compression", "sol_big_mod_exp", "sol_poseidon"]
 
 /-- The system call a hash names, or `sysUnknown`. -/

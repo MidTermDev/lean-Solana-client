@@ -493,6 +493,77 @@ partial def execute (m : Machine) (st0 : State) (programId : ByteArray) (metas :
               mem := digest.copySlice 0 mem dest 32
             else
               status := accessViolation
+        else if id == sysCurveValidate then
+          -- is this a point of the curve? (a1 = which curve: 0 Edwards, 1 Ristretto; a2 = the point)
+          if a1 == 0 then
+            units := units + 159
+            match readBytes p mem inputLen a2 32 with
+            | none => status := accessViolation
+            | some point => result := if (Ed25519.Point.decode point).isSome then 0 else 1
+          else
+            status := unsupportedSyscall
+            detail := s!"curve {a1} of sol_curve_validate_point is not provided"
+        else if id == sysCurveOp then
+          -- add, subtract or multiply on the Edwards curve: a2 = which, a3 and r4 the operands, r5 where the result goes
+          if a1 == 0 && a2 <= 2 then
+            units := units + (if a2 == 0 then 473 else if a2 == 1 then 475 else 2177)
+            let dest := writable p inputLen regs[5]! 32
+            match readBytes p mem inputLen a3 32, readBytes p mem inputLen regs[4]! 32 with
+            | some left, some right =>
+              if !(Wire.ok dest) then
+                status := accessViolation
+              else if a2 == 2 then
+                -- a scalar (which must be reduced) times a point
+                match Ed25519.Point.decode right with
+                | none => result := 1
+                | some point =>
+                  if !(Ed25519.scIsCanonical left) then
+                    result := 1
+                  else
+                    let zero := zeros ByteArray.empty 32
+                    let product := Ed25519.doubleScalarMul left (Ed25519.Point.table point) zero (Ed25519.Point.table point)
+                    mem := (Ed25519.Point.encode product).copySlice 0 mem dest 32
+              else
+                match Ed25519.Point.decode left, Ed25519.Point.decode right with
+                | some x, some y =>
+                  let sum := Ed25519.Point.add x (if a2 == 1 then Ed25519.Point.neg y else y)
+                  mem := (Ed25519.Point.encode sum).copySlice 0 mem dest 32
+                | _, _ => result := 1
+            | _, _ => status := accessViolation
+          else
+            status := unsupportedSyscall
+            detail := s!"curve {a1}, operation {a2} of sol_curve_group_op is not provided"
+        else if id == sysCurveMsm then
+          -- a sum of scalars times points on the Edwards curve: a2 the scalars, a3 the points, r4 how many, r5 the result
+          let count := regs[4]!
+          if a1 == 0 && count <= 512 then
+            units := units + 2273 + 758 * (if count == 0 then 0 else count - 1)
+            let dest := writable p inputLen regs[5]! 32
+            match readBytes p mem inputLen a2 (32 * count), readBytes p mem inputLen a3 (32 * count) with
+            | some scalars, some points =>
+              if !(Wire.ok dest) then
+                status := accessViolation
+              else
+                let zero := zeros ByteArray.empty 32
+                let mut sum := Ed25519.Point.identity
+                let mut valid := true
+                for i in [0:count.toNat] do
+                  let scalar := scalars.extract (32 * i) (32 * i + 32)
+                  match Ed25519.Point.decode (points.extract (32 * i) (32 * i + 32)) with
+                  | none => valid := false
+                  | some point =>
+                    if !(Ed25519.scIsCanonical scalar) then
+                      valid := false
+                    else
+                      sum := Ed25519.Point.add sum (Ed25519.doubleScalarMul scalar (Ed25519.Point.table point) zero (Ed25519.Point.table point))
+                if valid then
+                  mem := (Ed25519.Point.encode sum).copySlice 0 mem dest 32
+                else
+                  result := 1
+            | _, _ => status := accessViolation
+          else
+            status := unsupportedSyscall
+            detail := s!"curve {a1} of sol_curve_multiscalar_mul is not provided"
         else if id == sysSecpRecover then
           -- the public key behind an Ethereum-style signature: a1 the hash, a2 which candidate, a3 the signature, r4 where to put the key
           units := units + 25000

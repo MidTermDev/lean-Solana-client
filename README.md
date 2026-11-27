@@ -51,13 +51,13 @@ And since toly then published [lean-svm](https://github.com/aeyakovenko/lean-svm
 
 All of it — SHA-256, SHA-512, Ed25519, the bloom filters, the wire formats, the hash tables, the DNS query, the terminal UI, the memory allocator underneath — is Lean, compiled to machine code by the compiler in `leanc/`.
 
-It also **verifies real blocks** and follows the chain (see [Verify blocks](#verify-blocks)), **loads the chain's state** from a snapshot, checking every account (see [Hold the state](#hold-the-state)), **runs on-chain programs** locally with `leansol run`, and applies whole signed **transactions** with `leansol tx`: see [Run on-chain programs](#run-on-chain-programs).
+It **replays mainnet blocks** against that state and arrives at the bank hashes their leaders signed (see [Replay](#replay)); it **verifies real blocks** and follows the chain (see [Verify blocks](#verify-blocks)), **loads the chain's state** from a snapshot, checking every account (see [Hold the state](#hold-the-state)), **runs on-chain programs** locally with `leansol run`, and applies whole signed **transactions** with `leansol tx`: see [Run on-chain programs](#run-on-chain-programs).
 
 **What it is not:** a validator. It does not execute the blocks it receives, vote, or produce anything. It observes and verifies. See [Limits and roadmap](#limits-and-roadmap) for exactly where the line is.
 
 ## Quick start
 
-**Just run it.** Every release ships the client as a single 697 KB static binary (Linux, x86-64):
+**Just run it.** Every release ships the client as a single 793 KB static binary (Linux, x86-64):
 
 ```sh
 curl -LO https://github.com/MidTermDev/lean-Solana-client/releases/latest/download/leansol-x86_64-linux
@@ -111,6 +111,8 @@ usage: leansol [options]
        leansol snapshot [options]         load the chain's state from a snapshot, verifying it
        leansol account ADDRESS            look an account up in the loaded state
                                           (see `leansol snapshot --help`)
+       leansol replay [options]           execute blocks against the loaded state and compare
+                                          bank hashes (see `leansol replay --help`)
 ```
 
 Piped or redirected, it switches to log lines automatically:
@@ -384,7 +386,49 @@ Which validator produces which slot is not announced anywhere; every node comput
 
 A node started with `--state DIR` computes the schedule once (15 ms for an epoch of 432,000 slots) and from then on a block is only as good as the signature of the validator whose slot it is. The public node runs this way.
 
-The stakes in a snapshot reach one epoch past it. To know the schedule after that, the node has to have applied the blocks in between: that is replay, and it is next.
+The stakes in a snapshot reach one epoch past it. To know the schedule after that, the node has to have applied the blocks in between: that is [replay](#replay).
+
+## Replay
+
+Holding the state and receiving the blocks, the remaining step is to apply one to the other: execute every transaction of a block against the accounts and arrive at the state the rest of the network arrived at. There is one test of that, and it is all or nothing. Each block's footer carries its **bank hash**: the hash of the parent's bank hash, the number of signatures, the blockhash, and the lattice hash of *every account on the chain* after the block. The leader signed its shreds over it. One lamport wrong in one account, one byte of one program's data, and the hash is different.
+
+```console
+$ ./build/leansol replay --state state --blocks blocks --count 5
+state        slot 474362232, bank hash CVT3U37SYMvWgyLEqXQA2FfmPjvcNKJeWmA9iba5viVM
+slot 474362233: 333 transactions (82 failed), 348 signatures, 12,472,797 compute units, 1394 accounts changed (654 vote accounts by the footer)
+  bank hash  66HQiwhcu6bm8iBo9X4cqfQzAzWKGCpNXvsVvByKcU1J
+  the block's 66HQiwhcu6bm8iBo9X4cqfQzAzWKGCpNXvsVvByKcU1J  MATCH
+slot 474362234: 296 transactions (73 failed), 306 signatures, 9,625,365 compute units, 1313 accounts changed (654 vote accounts by the footer)
+  bank hash  Evo4N1GPsJUdugG8ExuzC5TatWw39yVUNDnahMgkia6K
+  the block's Evo4N1GPsJUdugG8ExuzC5TatWw39yVUNDnahMgkia6K  MATCH
+slot 474362235: 362 transactions (102 failed), 377 signatures, 11,171,906 compute units, 1294 accounts changed (654 vote accounts by the footer)
+  bank hash  DN79jazshFv3rfkJQ1P9HmAzacSN5dsedjAqLfMan9QJ
+  the block's DN79jazshFv3rfkJQ1P9HmAzacSN5dsedjAqLfMan9QJ  MATCH
+slot 474362236: 352 transactions (107 failed), 354 signatures, 10,149,714 compute units, 1278 accounts changed (654 vote accounts by the footer)
+  bank hash  aKM3WPyS8vA79cyQhqKbc1XwUHqLGuAoYAdp8ZaPyaZ
+  the block's aKM3WPyS8vA79cyQhqKbc1XwUHqLGuAoYAdp8ZaPyaZ  MATCH
+slot 474362237: 335 transactions (83 failed), 348 signatures, 11,011,549 compute units, 1398 accounts changed (654 vote accounts by the footer)
+  bank hash  2ruEdUtnH1QUk4iaJmSRL37TfmPaRhBPL4Zrbte3Jpip
+  the block's 2ruEdUtnH1QUk4iaJmSRL37TfmPaRhBPL4Zrbte3Jpip  MATCH
+```
+
+Those are the five mainnet blocks after the snapshot: 1,678 transactions, 54 million compute units of other people's programs (Jupiter, Raydium, Orca, pump, the token programs, hand-written assembly), every one of them run by a virtual machine written in Lean, and five bank hashes equal to the ones mainnet's leaders signed.
+
+**It stops at the sixth.** One transaction there calls the Poseidon hash, a system call this machine does not have yet; the block's other 294 transactions agree with mainnet, and its hash therefore does not. That is the shape of what is left: a tail of rarely used system calls (Poseidon, the alt_bn128 curve, Ristretto, big modular exponentiation), each of which some block will need. And it is slow: about two seconds a block, where mainnet makes one every 200 ms.
+
+What a block does, beyond its transactions, each part of which had to be exactly right for the hash to match:
+
+- **Before the transactions**: the parent's bank hash joins the `SlotHashes` sysvar, and the clock moves to the slot.
+- **The transactions**, in order, each through [the bank](#whole-transactions): fee, nonce, compute budget, instructions, rent, commit or roll back. Mainnet turned out to need a few things the bank did not have: the **version 1 transaction layout** (four in ten transactions; the budget is in the message, the priority fee is a sum rather than a price), programs deployed with the **older loader**, the instruction data's address in the second register (hand-written programs read it), and the Keccak-256, BLAKE3, secp256k1-recovery and curve25519 system calls ([`lib/Crypto/Keccak.lean`](lib/Crypto/Keccak.lean), [`lib/Crypto/Secp256k1.lean`](lib/Crypto/Secp256k1.lean)).
+- **The footer** ([`lib/Solana/Alpenglow.lean`](lib/Solana/Alpenglow.lean)). Mainnet runs Alpenglow: validators do not vote with transactions any more. They sign votes with BLS keys, and each block's footer carries the aggregates: a certificate that the previous block is final, and one of who voted on the slot eight back. A certificate names its signers by a bitmap over the validators in order of stake. Applying them rewrites some 650 vote accounts in every block: the slot each last voted on, its root, its timestamp, and its credits, which now count lamports of reward, half to the voter and half to the leader. The footer also sets the clock, to the second in the sysvar and to the nanosecond in an account of its own.
+- **After the footer**: the blockhash joins the recent blockhashes; half of the signature fees are burned and the rest, with the priority fees, goes to whoever collects for the leader; the slot is marked in the slot history; what was sent to the incinerator is destroyed.
+- **The hash**: the lattice hash moves by exactly what changed (every changed account taken out as it was, put in as it is), and is hashed with the rest.
+
+The state is the snapshot's store, never written, and an overlay: one more shard of the same kind holding every account as the replayed blocks left it.
+
+How it was found, since a hash that does not match says nothing about why: a public RPC gives, for each transaction of a block, its status, fee, compute units and the balance of every account afterwards. The replay prints the same (`--lines`), and the first disagreement names the transaction. That took the first block from 9 of its first 11 transactions to 333 of 333; then the leader's fee reward matched the RPC's to the lamport; and then, with the footer applied, the hash.
+
+**What is not checked.** The BLS signatures on the footer's certificates are not verified (who voted is taken from the bitmaps), and a transaction's blockhash is checked for being recent but not for having been used before: both are things a block's producer is trusted for here, and neither changes the hash of a valid block. Blocks come from files saved by `leansol block --save`, not yet from the node that follows the chain.
 
 ## Run on-chain programs
 
@@ -836,7 +880,7 @@ make oracle        # Agave's runtime must print what five of the tests print  (n
 
 ```console
 $ make lean-check
-Build completed successfully (110 jobs).
+Build completed successfully (118 jobs).
 ok    anchor (official Lean agrees)
 ok    basics (official Lean agrees)
 ok    blake3 (official Lean agrees)
@@ -845,6 +889,7 @@ ok    builtins (official Lean agrees)
 ok    cpi (official Lean agrees)
 ok    ed25519 (official Lean agrees)
 ok    erasure (official Lean agrees)
+ok    footer (official Lean agrees)
 ok    fuzz_wire (official Lean agrees)
 ok    inplace (native only)
 ok    ipc (native only)
@@ -862,7 +907,7 @@ ok    transaction (official Lean agrees)
 ok    txformat (official Lean agrees)
 ok    versions (official Lean agrees)
 ok    zstd (official Lean agrees)
-25 passed, 0 failed
+26 passed, 0 failed
 ```
 
 The tests not marked "official Lean agrees" either use raw syscalls (`fork`, futexes), which exist only as machine code, or check behaviour specific to `leanc` (aborting on a bounds error, in-place updates).
@@ -875,9 +920,9 @@ Measured on one machine (Xeon Gold 5515+), single core unless noted. They are he
 |---|---|
 | `leanc` source | about 5,800 lines of C |
 | `leanc` binary | 143 KB, static, zero undefined symbols |
-| Lean in this repo | 12,750 lines: runtime 601, libraries 8,470, client 3,680 |
+| Lean in this repo | 14,140 lines: runtime 604, libraries 9,330, client 4,200 |
 | Compiling the whole client | **under 30 ms** |
-| `leansol` binary | **697 KB**, static |
+| `leansol` binary | **793 KB**, static |
 | Full build from a fresh clone | about 40 ms |
 | Ed25519 verification (Lean, compiled by `leanc`) | about 2,950 signatures/s per core |
 | SHA-256 (Lean, compiled by `leanc`) | about 72 MB/s |
@@ -885,6 +930,7 @@ Measured on one machine (Xeon Gold 5515+), single core unless noted. They are he
 | Loading a snapshot: decompress, file, hash every account | 3 million accounts (3.65 GB) in 20 s with 16 workers |
 | Mainnet's snapshot, from a validator, verified | 1,245,863,525 accounts (498 GiB unpacked) in 90 minutes; 241 GB on disk |
 | An epoch's leader schedule (432,000 slots, 659 validators) | 15 ms |
+| Replaying a mainnet block (about 330 transactions, 11 million compute units, 1,300 accounts changed) | about 2 s |
 | Futex ring, two processes | 200,000 messages in 0.16 s |
 | Mainnet, 45 s after start | 4,005 nodes, 40,119 signatures verified, 0 bad |
 | Mainnet, steady state | about 12% of a core per verify tile, 7% for gossip; memory flat |
@@ -905,13 +951,13 @@ lib/
   Sys.lean          Linux syscalls: sockets, fork, mmap, futex, clocks
   Ipc.lean          futex-backed rings and counters in shared memory
   Crypto/           SHA-256, SHA-512, Ed25519 (field, curve, scalars, sign, verify), Reed–Solomon, BLAKE3,
-                    ChaCha20 as a random number generator
+                    ChaCha20 as a random number generator, Keccak-256, secp256k1 key recovery
   Solana/           wire formats, all CRDS record layouts, gossip messages, hash tables,
                     the sBPF virtual machine (SbpfBase: loading, memory, accounts; Native: the
                     built-in programs; Sbpf: the interpreter), transactions, and the bank,
                     shreds and their recovery, entries and proof of history, repair, block checking,
                     snapshots (manifest, account files), the lattice hash, the accounts store,
-                    the leader schedule
+                    the leader schedule, the footer's certificates and what they do to vote accounts
   Net/              IPv4 helpers and a DNS stub resolver
   Encoding/         hex, Base58, Base64, Zstandard decompression, tar
 client/           the tiles, the dashboard, the JSON/Prometheus export, main
@@ -934,7 +980,7 @@ lakefile.toml     lets the official toolchain check all of the above
 
 Being straightforward about what this is:
 
-- **Not a validator, and not yet a replaying node.** It verifies gossip; it receives and verifies every block (shreds, the scheduled leader's signature, proof of history, transaction signatures, each block's link to its parent); and it holds mainnet's state as of a snapshot, verified account by account. It does not yet execute blocks against that state, so the state does not advance, the leader schedule runs out one epoch after the snapshot, and bank hashes are read rather than recomputed. Execution needs the vote program, the rest of the runtime's system calls, and per-slot bookkeeping; the test of it is bank hashes that match the ones in the blocks.
+- **Not a validator, and replay has only begun.** It verifies gossip; it receives and verifies every block; it holds mainnet's state as of a snapshot, verified account by account; and it has replayed the five blocks after that snapshot to the bank hashes mainnet's leaders signed. The sixth needs a system call it does not have, and there are more behind it (Poseidon, alt_bn128, Ristretto, big modular exponentiation), along with the secp256r1 program, the vote and stake programs' rarer instructions, and epoch boundaries. It replays a block in about two seconds, ten times too slowly to keep up, from files rather than from the live feed. It does not vote.
 - **Transactions run; blocks do not.** Signed transactions are applied with fees, budgets, rent checks, every sysvar and every version of sBPF, and programs can be deployed and upgraded through the loader. Replaying mainnet needs more: the vote program, the remaining signature programs and system calls, and a way to get the accounts, which means the ledger.
 - **Listen-only.** It answers pings but does not serve pull requests or push records to others.
 - **A simple store.** Records are remembered by hash, up to 400,000; when that fills (every several minutes on mainnet) the hash set is flushed and refilled rather than aged out record by record. The node table survives the flush.
@@ -942,7 +988,7 @@ Being straightforward about what this is:
 - **The compiler is not self-hosted.** Its source is C. Nothing in the build uses a C toolchain, because a prebuilt compiler is checked in, but changing the compiler does.
 - **A subset of Lean.** No type classes or higher-order functions is a real restriction; the libraries here are written around it.
 - **`Nat` is 64 bits** (overflow traps rather than wraps; see above).
-- **Young code.** The compiler has been exercised by about 12,750 lines of Lean and the test suite, not by years of users. The Ed25519 implementation is variable-time, which is fine for verifying public data and not what you want around long-lived secret keys.
+- **Young code.** The compiler has been exercised by about 14,140 lines of Lean and the test suite, not by years of users. The Ed25519 implementation is variable-time, which is fine for verifying public data and not what you want around long-lived secret keys.
 - **The network moves.** Wire formats follow agave's current gossip code; when the protocol changes, this needs to follow.
 
 ## How this relates to lean-svm
@@ -959,7 +1005,7 @@ They meet at the `.so` file: lean-svm writes it, the virtual machine here runs i
 Write them with [lean-svm](https://github.com/aeyakovenko/lean-svm), and run them locally with `leansol run`, including ones that use tokens. It can build, sign and apply transactions locally, but it does not send them: deploying needs the standard Solana tools.
 
 **Is this the Lean theorem prover's language, or just "lean" as in small?**
-Both. The client is written in Lean 4, the language of the theorem prover, and the result is also small: a 697 KB static binary.
+Both. The client is written in Lean 4, the language of the theorem prover, and the result is also small: a 793 KB static binary.
 
 **Is there really no C toolchain involved?**
 Not in building or running anything here: `make` uses the checked-in `leanc` binary, which compiles Lean straight to an ELF. The compiler's *source* is C, so changing the compiler itself needs a C compiler (`make from-c`). The remaining step is for `leanc` to be written in Lean and compile itself; its subset is not there yet.

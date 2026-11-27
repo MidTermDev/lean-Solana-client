@@ -122,8 +122,8 @@ def draw (voters : Array Snapshot.Voter) (epoch : UInt64) (slots repeat_ : Nat) 
 --   the leaders' identities (32 bytes each, in schedule order),
 --   and two bytes for each run of four slots: which of them leads it.
 
-/-- The schedules of every epoch whose stakes the manifest records. -/
-def table (m : Snapshot.Manifest) : ByteArray := Id.run do
+/-- The schedules of every epoch whose stakes the manifest records: the leaders' identities, or with `byVote` their vote accounts. -/
+def table (m : Snapshot.Manifest) (byVote : Bool) : ByteArray := Id.run do
   let mut t := ByteArray.emptyWithCapacity 1200000
   for e in m.epochStakes do
     let order := sorted e.voters
@@ -135,7 +135,7 @@ def table (m : Snapshot.Manifest) : ByteArray := Id.run do
         t := Wire.putU64 t m.slotsPerEpoch
         t := Wire.putU64 t order.size.toUInt64
         for v in order do
-          t := t ++ v.node
+          t := t ++ (if byVote then v.vote else v.node)
         for p in picks do
           t := Wire.putU16 t p.toUInt64
   return t
