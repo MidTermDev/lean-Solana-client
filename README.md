@@ -647,7 +647,7 @@ One thing worth knowing if you read older material: v3 changed while it was bein
 
 ### Programs as machine code
 
-The interpreter spends about sixty machine instructions on each instruction of a program: fetch it, find out what it is, find its registers, do it, count it. [`lib/Solana/Jit.lean`](lib/Solana/Jit.lean) translates a program into x86-64 code that does the same thing directly. It is 600 lines of Lean: an encoder for the instruction forms it needs, and one pass over the program.
+The interpreter spends about sixty machine instructions on each instruction of a program: fetch it, find out what it is, find its registers, do it, count it. [`lib/Solana/Jit.lean`](lib/Solana/Jit.lean) translates a program into x86-64 code that does the same thing directly. It is 650 lines of Lean, a tenth of them explanation: an encoder for the instruction forms it needs, and one pass over the program.
 
 ```
 r1 += 8                         add   rdi, 8
@@ -663,7 +663,7 @@ if r2 > r3 goto +5              cmp   rsi, rcx
 
 Running bytes the program itself just wrote takes a door that Lean does not have. [`lib/Fast.lean`](lib/Fast.lean) has it as two functions, `codeLoad` (make these bytes executable) and `run` (call them), which `leanc` compiles to an `mmap`, an `mprotect` and an indirect call. Under the official toolchain the door stays shut: `codeLoad` declines, and the interpreter runs everything.
 
-That makes the test simple. [`tests/jit.lean`](tests/jit.lean) runs 1,500 random programs: arithmetic of every kind and width, loads and stores in the frame, the heap, the account, the program's own file and nowhere at all, jumps, calls into the middle of things, budgets that run out anywhere. Its expected output was written by the official toolchain, which is to say by the interpreter; `leanc`'s output comes from the machine code and must be the same file. (Its first run found a call that landed in the second half of a two-slot instruction.) The bytes the translator writes must be the same under both compilers too. And the 600 mainnet blocks reach the same bank hashes either way: `leansol replay --interpret` runs them with no translation, in 118 seconds instead of 73.
+That makes the test simple. [`tests/jit.lean`](tests/jit.lean) runs 1,500 random programs: arithmetic of every kind and width, loads and stores in the frame, the heap, the account, the program's own file and nowhere at all, jumps, calls into the middle of things, budgets that run out anywhere. Its expected output was written by the official toolchain, which is to say by the interpreter; `leanc`'s output comes from the machine code and must be the same file. (Its first run found a call that landed in the second half of a two-slot instruction.) The bytes the translator writes must be the same under both compilers too. And the 600 mainnet blocks reach the same bank hashes either way: `leansol replay --interpret` runs them with no translation, in 134 seconds instead of 73.
 
 Translating costs about as much as interpreting sixteen instructions for each instruction translated, and most programs on a chain run a handful of times an hour. So a program met while following the chain is translated only once it has run often enough to pay for it: twice, and once more for every 4,096 instructions it has.
 
@@ -959,7 +959,7 @@ Measured on one machine (Xeon Gold 5515+), single core unless noted. They are he
 |---|---|
 | `leanc` source | about 6,400 lines of C |
 | `leanc` binary | 166 KB, static, zero undefined symbols |
-| Lean in this repo | 18,190 lines: runtime 814, libraries 12,940, client 4,436 |
+| Lean in this repo | 18,120 lines: runtime 814, libraries 12,870, client 4,436 |
 | Compiling the whole client | **about 0.1 s** |
 | `leansol` binary | **1.1 MB**, static |
 | Full build from a fresh clone | about 0.1 s |
@@ -970,7 +970,7 @@ Measured on one machine (Xeon Gold 5515+), single core unless noted. They are he
 | Mainnet's snapshot, from a validator, verified | 1,245,863,525 accounts (498 GiB unpacked) in 90 minutes; 241 GB on disk |
 | An epoch's leader schedule (432,000 slots, 659 validators) | 15 ms |
 | Replaying a mainnet block (about 340 transactions, 12 million compute units, 1,400 accounts changed) | **0.12 s**, signatures checked on three more cores (the chain: 0.2 s) |
-| The same with every program interpreted | 0.19 s |
+| The same with every program interpreted | 0.22 s |
 | Translating a program into machine code | about 200 ns an instruction: 10 ms for Token-2022 (53,702 instructions, 1.7 MB of x86-64) |
 | The same before the compiler had registers and vector instructions | 1.2 s |
 | Checking a Groth16 proof (four pairings on alt_bn128) | about 40 ms (it was 0.5 s) |
@@ -1036,7 +1036,7 @@ Being straightforward about what this is:
 - **The compiler is not self-hosted.** Its source is C. Nothing in the build uses a C toolchain, because a prebuilt compiler is checked in, but changing the compiler does.
 - **A subset of Lean.** No type classes or higher-order functions is a real restriction; the libraries here are written around it.
 - **`Nat` is 64 bits** (overflow traps rather than wraps; see above).
-- **Young code.** The compiler has been exercised by about 18,200 lines of Lean and the test suite, not by years of users. The Ed25519 implementation is variable-time, which is fine for verifying public data and not what you want around long-lived secret keys.
+- **Young code.** The compiler has been exercised by about 18,100 lines of Lean and the test suite, not by years of users. The Ed25519 implementation is variable-time, which is fine for verifying public data and not what you want around long-lived secret keys.
 - **The network moves.** Wire formats follow agave's current gossip code; when the protocol changes, this needs to follow.
 
 ## How this relates to lean-svm

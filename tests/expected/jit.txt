@@ -64,4 +64,4 @@ machine code and interpreter differ on 0
 translated exactly where it should be: true
 mov r0, 0; exit: 422 bytes of machine code, entered at 010000
   its last 64: 00100000488b841568020000e933ffffff48c7455802000000e941ffffff4983ef0248c7455800000000e930ffffff4983ef0148c7455801000000e91fffffff
-counter.so: 115 instructions, 5519 bytes, e26dbb253c1649fcc099808f4ed67bcdcaf0d32404bd8920e9feb2a8d0c17dd1, blocks d8d1f8e9fd0d3ed10d6d7217ecc994c004c76b5a3e6838c05bcd603e3264c6b9
+counter.so: 115 instructions, 5230 bytes, 27e08ba23ef6f1562f6bf982eadf93677cb83a2909680861b70770c13c82332b, blocks d8d1f8e9fd0d3ed10d6d7217ecc994c004c76b5a3e6838c05bcd603e3264c6b9

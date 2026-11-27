@@ -72,6 +72,11 @@ def frameBytes : Nat := 4096
 def maxDepth : Nat := 64
 def stackBytes : Nat := 262144
 
+-- (The low 32 or 16 bits as a signed number, without asking which sign: flipping the sign bit and taking
+-- its weight away again leaves a positive number as it was and wraps a negative one round to the top.)
+@[inline] def sext32 (x : UInt64) : UInt64 := ((x &&& 0xFFFFFFFF) ^^^ 0x80000000) - 0x80000000
+@[inline] def sext16 (x : UInt64) : UInt64 := ((x &&& 0xFFFF) ^^^ 0x8000) - 0x8000
+
 end Sbpf
 
 namespace Jit
@@ -99,9 +104,7 @@ def cpuWords : Nat := cFrames + 6 * Sbpf.maxDepth
 -- ------------------------------------------------------------ x86-64, as much of it as is needed
 
 def rax : UInt64 := 0
-def rcx : UInt64 := 1
 def rdx : UInt64 := 2
-def rbx : UInt64 := 3
 def rbp : UInt64 := 5
 def rsi : UInt64 := 6
 def rdi : UInt64 := 7
@@ -181,25 +184,10 @@ def jumpTo (b : ByteArray) (target : Nat) : ByteArray :=
   let b := jump b
   aim b (b.size - 4) target
 
--- the conditions
-def ccB : UInt64 := 2
-def ccAE : UInt64 := 3
-def ccE : UInt64 := 4
-def ccNE : UInt64 := 5
-def ccBE : UInt64 := 6
-def ccA : UInt64 := 7
-def ccL : UInt64 := 12
-def ccGE : UInt64 := 13
-def ccLE : UInt64 := 14
-def ccG : UInt64 := 15
-
 /-- A word of `cpu`, as a displacement from rbp. -/
 @[inline] def slot (i : Nat) : UInt64 := (8 * i).toUInt64
 
 -- ------------------------------------------------------------ what can be translated
-
-@[inline] def sext32 (x : UInt64) : UInt64 := ((x &&& 0xFFFFFFFF) ^^^ 0x80000000) - 0x80000000
-@[inline] def sext16 (x : UInt64) : UInt64 := ((x &&& 0xFFFF) ^^^ 0x8000) - 0x8000
 
 /-- No instruction writes r10. (The rule that makes a frame access checkable when the program is
 translated rather than when it runs. Every program a validator accepts keeps it.) -/
@@ -212,7 +200,7 @@ def frameSafe (code : Array UInt64) : Bool := Id.run do
 
 /-- Where the call instruction `word` at `pc` goes, for a call that names its target. -/
 def callTarget (word : UInt64) (pc : Nat) (call : UInt64) (v3 : Bool) : UInt64 :=
-  if !v3 && call != 0 then call - 1 else (pc + 1).toUInt64 + sext32 (word >>> 32)
+  if !v3 && call != 0 then call - 1 else (pc + 1).toUInt64 + Sbpf.sext32 (word >>> 32)
 
 /-- How the instruction `word` at `pc` is handled: 0 = translated, 1 = translated, and the last of its
 block (a jump, a call, a return), 2 = left to the interpreter. `syscall` and `call` are the program's
@@ -247,7 +235,7 @@ def classOf (word : UInt64) (pc count : Nat) (syscall call : UInt64) (v3 : Bool)
 
 /-- Where a jump instruction at `pc` goes when it is taken. -/
 @[inline] def jumpTarget (word : UInt64) (pc : Nat) : UInt64 :=
-  (pc + 1).toUInt64 + sext16 (word >>> 16)
+  (pc + 1).toUInt64 + Sbpf.sext16 (word >>> 16)
 
 /-- How each instruction is handled (`classOf`, and 3 for the second half of a two-slot constant), and
 which instructions begin a block. -/
@@ -317,15 +305,20 @@ def address (b : ByteArray) (base off width : UInt64) (write : Bool) : ByteArray
   let b := rr b 1 0x89 rax rdx                                  -- mov rdx, rax
   let b := (rr b 1 0xC1 5 rdx).push 32                          -- shr rdx, 32: the region
   let b := (rr b 1 0x83 7 rdx).push 4                           -- cmp rdx, 4
-  let b := jumpIf b ccA
+  let b := jumpIf b 7
   let b := rr b 0 0x89 rax rax                                  -- mov eax, eax: the offset in the region
   let b := rx b 1 0x2B rax rbp rdx 3 (slot cLow)                -- sub rax, [low]
   let b := rx b 1 0x3B rax rbp rdx 3 (slot ((if write then cWrite else cRead) + 5 * width.toNat))
-  let b := jumpIf b ccAE
+  let b := jumpIf b 3
   rx b 1 0x03 rax rbp rdx 3 (slot cBase)                        -- add rax, [base]
 
 def faultA : Nat := 36
 def faultB : Nat := 12
+
+/-- Notes a way out: the jump whose last four bytes are at `site` leaves for the interpreter at
+instruction `pc`, with `uncounted` instructions of the block counted and not run. -/
+def fault (faults : Array UInt64) (site pc : Nat) (uncounted : UInt64) : Array UInt64 :=
+  ((faults.push site.toUInt64).push pc.toUInt64).push uncounted
 
 /-- With the number of calls in progress in rax (and room for one more): saves r6-r9, the frame pointer
 and the instruction to return to, and moves up one frame. -/
@@ -386,7 +379,7 @@ def compile (code syscalls calls : Array UInt64) (count entry : Nat) (v3 : Bool)
   let tableSite := b.size - 4
   b := ((b.push 0x8B).push 0x04).push 0x82                      -- mov eax, [rdx + rax*4]
   b := rr b 0 0x85 rax rax
-  b := jumpIf b ccE
+  b := jumpIf b 4
   let noBlock := b.size - 4
   b := rr b 1 0x01 rdx rax
   b := (b.push 0xFF).push 0xE0                                  -- jmp rax
@@ -410,11 +403,8 @@ def compile (code syscalls calls : Array UInt64) (count entry : Nat) (v3 : Bool)
   let mut placed : Array UInt64 := Array.replicate (count + 1) 0
   -- jumps to fill in when everything is placed: (site, target instruction)
   let mut jumps : Array UInt64 := Array.emptyWithCapacity 1024
-  -- ways out for an instruction that cannot be carried out here: (site, site or 0, instruction, how many
-  -- instructions of its block were counted and not run)
+  -- ways out for an instruction that cannot be carried out here (see `fault`)
   let mut faults : Array UInt64 := Array.emptyWithCapacity 1024
-  -- jumps to instructions that do not exist: (site, instruction)
-  let mut strays : Array UInt64 := Array.emptyWithCapacity 16
   let mut pc := 0
   let mut ran := 0       -- instructions of the current block already translated
   let mut length := 0     -- how many the block has
@@ -441,8 +431,8 @@ def compile (code syscalls calls : Array UInt64) (count entry : Nat) (v3 : Bool)
       open_ := true
       b := ri b 1 0 r15 length.toUInt64
       b := rm b 1 0x3B r15 rbp (slot cBudget)
-      b := jumpIf b ccA
-      faults := (((faults.push (b.size - 4).toUInt64).push 0).push pc.toUInt64).push length.toUInt64
+      b := jumpIf b 7
+      faults := fault faults (b.size - 4) pc length.toUInt64
     let word := code[pc]!
     let opc := word &&& 0xFF
     let cls := opc &&& 7
@@ -450,9 +440,9 @@ def compile (code syscalls calls : Array UInt64) (count entry : Nat) (v3 : Bool)
     let d := (word >>> 8) &&& 15
     let s := (word >>> 12) &&& 15
     let named := word &&& 8 != 0
-    let off := sext16 (word >>> 16)
+    let off := Sbpf.sext16 (word >>> 16)
     let imm32 := word >>> 32
-    let imm := sext32 imm32
+    let imm := Sbpf.sext32 imm32
     let uncounted := (length - ran).toUInt64
     let mut step := 1
     if cls == 7 || cls == 4 then
@@ -474,8 +464,8 @@ def compile (code syscalls calls : Array UInt64) (count entry : Nat) (v3 : Bool)
       else if op == 0x30 || op == 0x90 then
         if named then
           b := rr b w 0x85 sh sh
-          b := jumpIf b ccE
-          faults := (((faults.push (b.size - 4).toUInt64).push 0).push pc.toUInt64).push uncounted
+          b := jumpIf b 4
+          faults := fault faults (b.size - 4) pc uncounted
         else
           b := Fast.push32 (rm b w 0xC7 0 rbp (slot cTemp)) imm
         b := rr b w 0x89 dh rax
@@ -520,7 +510,7 @@ def compile (code syscalls calls : Array UInt64) (count entry : Nat) (v3 : Bool)
       let disp := if framed then off else 0
       if !framed then
         b := address b base off log (cls != 1)
-        faults := (((faults.push (b.size - faultA).toUInt64).push (b.size - faultB).toUInt64).push pc.toUInt64).push uncounted
+        faults := fault (fault faults (b.size - faultA) pc uncounted) (b.size - faultB) pc uncounted
       if cls == 1 then
         let dh := hostOf d
         b := if size == 8 then rm b 1 0x8B dh at_ disp else if size == 4 then rm b 0 0x8B dh at_ disp
@@ -538,16 +528,13 @@ def compile (code syscalls calls : Array UInt64) (count entry : Nat) (v3 : Bool)
       if opc == 0x05 then
         let target := jumpTarget word pc
         b := jump b
-        if target < count.toUInt64 && kind[target.toNat]! != 3 then
-          jumps := (jumps.push (b.size - 4).toUInt64).push target
-        else
-          strays := (strays.push (b.size - 4).toUInt64).push target
+        jumps := (jumps.push (b.size - 4).toUInt64).push target
       else if opc == 0x95 then
         -- return to the caller inside the program (the end of the program is the interpreter's)
         b := rm b 1 0x8B rax rbp (slot cCalls)
         b := rr b 1 0x85 rax rax
-        b := jumpIf b ccE
-        faults := (((faults.push (b.size - 4).toUInt64).push 0).push pc.toUInt64).push uncounted
+        b := jumpIf b 4
+        faults := fault faults (b.size - 4) pc uncounted
         b := rr b 1 0xFF 1 rax                                  -- dec rax
         b := rm b 1 0x89 rax rbp (slot cCalls)
         b := (((b.push 0x48).push 0x8D).push 0x14).push 0x40    -- lea rdx, [rax + rax*2]
@@ -567,13 +554,13 @@ def compile (code syscalls calls : Array UInt64) (count entry : Nat) (v3 : Bool)
           b := rr b 1 0x29 rdx rax
           b := (rr b 1 0xC1 5 rax).push 3
           b := Fast.push32 (rr b 1 0x81 7 rax) count.toUInt64
-          b := jumpIf b ccAE
-          faults := (((faults.push (b.size - 4).toUInt64).push 0).push pc.toUInt64).push uncounted
+          b := jumpIf b 3
+          faults := fault faults (b.size - 4) pc uncounted
           b := rm b 1 0x89 rax rbp (slot cTemp)
         b := rm b 1 0x8B rax rbp (slot cCalls)
         b := (rr b 1 0x83 7 rax).push (Sbpf.maxDepth - 1).toUInt8
-        b := jumpIf b ccAE
-        faults := (((faults.push (b.size - 4).toUInt64).push 0).push pc.toUInt64).push uncounted
+        b := jumpIf b 3
+        faults := fault faults (b.size - 4) pc uncounted
         b := pushFrame b (pc + 1).toUInt64
         if opc == 0x8d then
           b := rm b 1 0x8B rax rbp (slot cTemp)
@@ -581,10 +568,7 @@ def compile (code syscalls calls : Array UInt64) (count entry : Nat) (v3 : Bool)
         else
           let target := callTarget word pc calls[pc]! v3
           b := jump b
-          if kind[target.toNat]! != 3 then
-            jumps := (jumps.push (b.size - 4).toUInt64).push target
-          else
-            strays := (strays.push (b.size - 4).toUInt64).push target
+          jumps := (jumps.push (b.size - 4).toUInt64).push target
       else
         -- a conditional jump
         let dh := hostOf d
@@ -595,15 +579,14 @@ def compile (code syscalls calls : Array UInt64) (count entry : Nat) (v3 : Bool)
           b := if named then rr b 1 0x85 sh dh else Fast.push32 (rr b 1 0xF7 0 dh) imm
         else
           b := if named then rr b 1 0x39 sh dh else ri b 1 7 dh imm
-        let cc := if op == 0x10 then ccE else if op == 0x20 then ccA else if op == 0x30 then ccAE
-          else if op == 0x40 || op == 0x50 then ccNE else if op == 0x60 then ccG else if op == 0x70 then ccGE
-          else if op == 0xa0 then ccB else if op == 0xb0 then ccBE else if op == 0xc0 then ccL else ccLE
+        -- x86's condition for each: equal 4, above 7, above or equal 3, not equal 5, greater 15, greater
+        -- or equal 13, below 2, below or equal 6, less 12, less or equal 14
+        let cc : UInt64 := if op == 0x10 then 4 else if op == 0x20 then 7 else if op == 0x30 then 3
+          else if op == 0x40 || op == 0x50 then 5 else if op == 0x60 then 15 else if op == 0x70 then 13
+          else if op == 0xa0 then 2 else if op == 0xb0 then 6 else if op == 0xc0 then 12 else 14
         let target := jumpTarget word pc
         b := jumpIf b cc
-        if target < count.toUInt64 && kind[target.toNat]! != 3 then
-          jumps := (jumps.push (b.size - 4).toUInt64).push target
-        else
-          strays := (strays.push (b.size - 4).toUInt64).push target
+        jumps := (jumps.push (b.size - 4).toUInt64).push target
     else
       -- a 64-bit constant, in two slots
       b := loadConstant b (hostOf d) (imm32 ||| ((code[pc + 1]! >>> 32) <<< 32))
@@ -616,21 +599,27 @@ def compile (code syscalls calls : Array UInt64) (count entry : Nat) (v3 : Bool)
   placed := placed.set! count b.size.toUInt64
   b := Fast.push32 (rm b 1 0xC7 0 rbp (slot cPc)) count.toUInt64
   b := jumpTo b leave
+  -- A jump goes to where its target begins a block. A target where none does (outside the program, or
+  -- the second half of a constant) is the interpreter's: name it and leave.
   for i in [0:jumps.size / 2] do
-    b := aim b jumps[2 * i]!.toNat placed[jumps[2 * i + 1]!.toNat]!.toNat
-  -- the ways out: uncount what was not run, name the instruction, leave
-  for i in [0:faults.size / 4] do
-    b := aim b faults[4 * i]!.toNat b.size
-    if faults[4 * i + 1]! != 0 then
-      b := aim b faults[4 * i + 1]!.toNat b.size
-    b := ri b 1 5 r15 faults[4 * i + 3]!
-    b := Fast.push32 (rm b 1 0xC7 0 rbp (slot cPc)) faults[4 * i + 2]!
-    b := jumpTo b leave
-  for i in [0:strays.size / 2] do
-    b := aim b strays[2 * i]!.toNat b.size
-    b := loadConstant b rax strays[2 * i + 1]!
-    b := rm b 1 0x89 rax rbp (slot cPc)
-    b := jumpTo b leave
+    let target := jumps[2 * i + 1]!
+    if target <= count.toUInt64 && placed[target.toNat]! != 0 then
+      b := aim b jumps[2 * i]!.toNat placed[target.toNat]!.toNat
+    else
+      b := aim b jumps[2 * i]!.toNat b.size
+      b := loadConstant b rax target
+      b := rm b 1 0x89 rax rbp (slot cPc)
+      b := jumpTo b leave
+  -- The ways out: uncount what was not run, name the instruction, leave. (The two jumps of one memory
+  -- access come one after the other and share theirs.)
+  let mut at_ := 0
+  for i in [0:faults.size / 3] do
+    if i == 0 || faults[3 * i + 1]! != faults[3 * i - 2]! || faults[3 * i + 2]! != faults[3 * i - 1]! then
+      at_ := b.size
+      b := ri b 1 5 r15 faults[3 * i + 2]!
+      b := Fast.push32 (rm b 1 0xC7 0 rbp (slot cPc)) faults[3 * i + 1]!
+      b := jumpTo b leave
+    b := aim b faults[3 * i]!.toNat at_
   return (b, starts.set! count 0)
 
 /-- Fills in the parts of `cpu` that say where the program's memory is: the stack (region 2), the heap

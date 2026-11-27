@@ -526,14 +526,6 @@ def writable (p : Program) (inputLen : Nat) (addr len : UInt64) : Nat :=
 
 -- --------------------------------------------------------------- arithmetic
 
--- (The low 32 bits as a signed number, without asking which sign: flipping the sign bit and taking its
--- weight away again leaves a positive number as it was and wraps a negative one round to the top.)
-@[inline] def sext32 (x : UInt64) : UInt64 :=
-  ((x &&& 0xFFFFFFFF) ^^^ 0x80000000) - 0x80000000
-
-@[inline] def sext16 (x : UInt64) : UInt64 :=
-  ((x &&& 0xFFFF) ^^^ 0x8000) - 0x8000
-
 /-- Signed "less than" on two's-complement words. -/
 @[inline] def slt (a b : UInt64) : Bool := (a ^^^ 0x8000000000000000) < (b ^^^ 0x8000000000000000)
 
