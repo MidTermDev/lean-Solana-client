@@ -248,8 +248,10 @@ partial def execute (m : Machine) (st0 : State) (programId : ByteArray) (metas :
 
   let input := serialize accounts metas data programId
   let inputLen := input.size
+  -- the stack and the heap start as zeros: copied from a block of zeros made once, not pushed a byte at a time
   let mut mem := ByteArray.emptyWithCapacity (stackBytes + p.heap + inputLen)
-  for _ in [0:stackBytes + p.heap] do
+  mem := zeroBlock.copySlice 0 mem 0 (if stackBytes + p.heap < zeroBlock.size then stackBytes + p.heap else zeroBlock.size)
+  for _ in [mem.size:stackBytes + p.heap] do
     mem := mem.push 0
   mem := mem ++ input
   let mut regs : Array UInt64 := Array.replicate 11 0

@@ -883,6 +883,9 @@ def findInfo (infos : Array Info) (key : ByteArray) : Nat := Id.run do
 -- A program receives its accounts, instruction data and own address in one
 -- buffer, laid out the way Solana's loader does (the "aligned" format).
 
+/-- Zeros for a program's stack and the usual heap, made once: memory that starts as zeros is copied from here rather than pushed a byte at a time. -/
+def zeroBlock : ByteArray := zeros (ByteArray.emptyWithCapacity (stackBytes + 32768)) (stackBytes + 32768)
+
 /-- Bytes an account occupies in the input: header, data, room to grow, alignment, rent epoch. -/
 def accountSpan (dataLen : Nat) : Nat := (dataLen + 10343) / 8 * 8
 
@@ -909,7 +912,8 @@ def serialize (accounts : Array Account) (metas : Array Meta) (instruction progr
       b := Wire.putU64 b a.lamports
       b := Wire.putU64 b a.data.size.toUInt64
       b := b ++ a.data
-      b := zeros b (accountSpan a.data.size - 88 - a.data.size - 8)
+      -- (room for the account to grow, and alignment: between 10,240 and 10,247 zeros)
+      b := zeroBlock.copySlice 0 b b.size (accountSpan a.data.size - 88 - a.data.size - 8)
       b := Wire.putU64 b 0xFFFFFFFFFFFFFFFF
   b := Wire.putU64 b instruction.size.toUInt64
   b := b ++ instruction
