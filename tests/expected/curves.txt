@@ -1,0 +1,96 @@
+-- Poseidon
+1 inputs: 2a8e93af51f306c5879ca2e93ed3d1a0cacd581e276f29d02f2658a4f9f5c77c
+2 inputs: 0cb00458154eb2f13835b339bb14de7bb81c01b0f0013777884889e943d7c27d
+5 inputs: 0b90db34b5a80cb9691defb0b9096cba807fa6e7d24148c0f01330a680860e53
+12 inputs: 274065f073a912039b3aa6f7ac7a8494a4eb4661c25db51f17ceb5c3af4fdc69
+no inputs: 0 bytes; thirteen inputs: 0 bytes
+-- BN254
+add chfast1: agrees
+add chfast2: agrees
+add cdetrio1: agrees
+add cdetrio2: agrees
+add cdetrio3: agrees
+add cdetrio4: agrees
+add cdetrio5: agrees
+add cdetrio6: agrees
+add cdetrio7: agrees
+add cdetrio8: agrees
+add cdetrio9: agrees
+add cdetrio10: agrees
+add cdetrio11: agrees
+add cdetrio12: agrees
+add cdetrio13: agrees
+add cdetrio14: agrees
+add chfast1, with 0x80 set in y: agrees
+add chfast1, with 0x40 set in y: infinity: agrees
+add chfast1, with both set: agrees
+a point of the twist: a point; with 0x80 set in y: a point; with 0x40: infinity; with both: refused; off the curve: refused
+multiply chfast1: agrees
+multiply chfast2: agrees
+multiply chfast3: agrees
+multiply cdetrio1: agrees
+multiply cdetrio2: agrees
+multiply cdetrio3: agrees
+multiply cdetrio15: agrees
+multiply zeroScalar: agrees
+pairing jeff1: 1
+pairing empty_data: 1
+pairing one_point: 0
+-- BN254 points in half the bytes
+a point of the curve: 18b18acfb4c2c30276db5411368e7185b311dd124691610c5d3b74034e093dc9
+and back: 64 bytes
+a point of the curve: 98b18acfb4c2c30276db5411368e7185b311dd124691610c5d3b74034e093dc9
+and back: 64 bytes
+a point of the curve: a243525c5efd4b9c3d3c45ac0ca3fe4dd85e830a4ce6b65fa1eeaee202839703
+and back: 64 bytes
+a point of the curve: 2243525c5efd4b9c3d3c45ac0ca3fe4dd85e830a4ce6b65fa1eeaee202839703
+and back: 64 bytes
+a point of the twist: 64 bytes
+and back: 128 bytes
+a point of the twist: 64 bytes
+and back: 128 bytes
+a point of the twist: 64 bytes
+and back: 128 bytes
+a point of the twist: 64 bytes
+and back: 128 bytes
+no point has this x: refused
+an x beyond the modulus: refused
+both flags set: refused
+infinity, marked: 64 bytes
+infinity, as zeros: 0000000000000000000000000000000000000000000000000000000000000000
+infinity, marked in y: 4000000000000000000000000000000000000000000000000000000000000000
+infinity of the twist: 128 bytes
+a point of the wrong length: refused
+a y beyond the modulus: refused
+-- the secp256r1 program
+a signature by OpenSSL, key of kind 2: accepted
+the same in its higher form: refused with error 2
+a signature by OpenSSL, key of kind 3: accepted
+the same in its higher form: refused with error 2
+a signature by OpenSSL, key of kind 2: accepted
+the same in its higher form: refused with error 2
+a changed message: refused with error 2
+a changed signature: refused with error 2
+the key's other y: refused with error 2
+a key of kind 4: refused with error 0
+a key whose x is beyond the prime: refused with error 0
+r = 0: refused with error 2
+a message that runs past the end: refused with error 3
+parts said to be in an instruction that is not there: refused with error 3
+no signatures: refused with error 4
+nine signatures: refused with error 4
+two signatures, as two copies in two instructions: accepted
+-- the secp256k1 program
+one signature, all of it in the instruction: accepted
+two signatures, one kept in another instruction: accepted
+the same without the other instruction: refused with error 4
+a changed message: refused with error 2
+a changed address: refused with error 2
+a changed signature: refused with error 2
+the other candidate key: refused with error 2
+a recovery byte of 4: refused with error 1
+a message that runs past the end: refused with error 2
+a count with nothing after it: refused with error 4
+no signatures: accepted
+no signatures, but more bytes: refused with error 4
+no bytes at all: refused with error 4

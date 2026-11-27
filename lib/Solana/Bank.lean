@@ -1,5 +1,6 @@
 import Solana.Sbpf
 import Solana.Transaction
+import Crypto.P256
 
 /-!
 # Processing whole transactions
@@ -38,6 +39,8 @@ def lookupTableProgram : ByteArray := Base58.decode "AddressLookupTab1e111111111
 def voteProgram : ByteArray := Base58.decode "Vote111111111111111111111111111111111111111"
 def stakeProgram : ByteArray := Base58.decode "Stake11111111111111111111111111111111111111"
 def configProgram : ByteArray := Base58.decode "Config1111111111111111111111111111111111111"
+/-- What is sent here is destroyed at the end of the slot. -/
+def incinerator : ByteArray := Base58.decode "1nc1nerator11111111111111111111111111111111"
 def loaderV2 : ByteArray := Sbpf.loaderV2
 def loaderV1 : ByteArray := Sbpf.loaderV1
 def loaderV4 : ByteArray := Base58.decode "LoaderV411111111111111111111111111111111111"
@@ -126,10 +129,10 @@ def Bank.withPrograms (bank : Bank) (keys : Array ByteArray) (all : Bool) : Bank
     let at_ := find out.accounts key
     if at_ != Sbpf.notFound then
       let account := out.accounts[at_]!
-      if account.owner == loaderV2 && account.executable && (all || !(hasProgram out key)) then
-        -- the older loader: the account's data is the program
+      if (account.owner == loaderV2 || account.owner == loaderV1) && account.executable && (all || !(hasProgram out key)) then
+        -- the older loaders: the account's data is the program (and the first loader's programs take their input packed)
         let program := Sbpf.load account.data
-        out := { out with machine := out.machine.add key { program with since := if program.error != "" then 0xFFFFFFFFFFFFFFFF else 0 } }
+        out := { out with machine := out.machine.add key { program with since := (if program.error != "" then 0xFFFFFFFFFFFFFFFF else 0), packed := account.owner == loaderV1 } }
       else if account.owner == Sbpf.loaderId && Sbpf.loaderKind account == 2 && (all || !(hasProgram out key)) then
         let holder := find out.accounts (account.data.extract 4 36)
         let code := if holder == Sbpf.notFound then ByteArray.empty else out.accounts[holder]!.data
@@ -137,9 +140,9 @@ def Bank.withPrograms (bank : Bank) (keys : Array ByteArray) (all : Bool) : Bank
           else Sbpf.Program.failed ByteArray.empty "the program was closed"
         if program.error != "" then
           -- cannot run: every call to it is refused
-          out := { out with machine := out.machine.add key { program with since := 0xFFFFFFFFFFFFFFFF } }
+          out := { out with machine := out.machine.add key { program with since := 0xFFFFFFFFFFFFFFFF, holderSize := code.size } }
         else
-          out := { out with machine := out.machine.add key { program with since := Wire.u64 code 4 + 1 } }
+          out := { out with machine := out.machine.add key { program with since := Wire.u64 code 4 + 1, holderSize := code.size } }
   return out
 
 -- ------------------------------------------------------------------- sysvars
@@ -310,6 +313,88 @@ def verifyEd25519 (datas : Array ByteArray) (current : Nat) : UInt64 := Id.run d
     | _, _, _ => return 4
   return 0
 
+/-- One P-256 signature: 0 if it is valid, otherwise 1 + the program's error code. -/
+def checkSecp256r1 (signature key message : ByteArray) : UInt64 :=
+  if !(P256.inRange signature) then 3
+  else
+    match P256.decode key with
+    | none => 1
+    | some point => if P256.verify point signature message then 0 else 3
+
+/-- Checks the signatures a secp256r1 program instruction lists (at most
+eight; laid out as for Ed25519, with a 33-byte key). Returns 0 if all are
+valid, otherwise 1 + the program's error code. -/
+def verifySecp256r1 (datas : Array ByteArray) (current : Nat) : UInt64 := Id.run do
+  let data := datas[current]!
+  if data.size < 2 then
+    return 5
+  let count := data[0]!.toNat
+  if count == 0 || count > 8 || data.size < 2 + 14 * count then
+    return 5
+  for k in [0:count] do
+    let o := 2 + 14 * k
+    match precompileSlice datas current (Wire.u16 data (o + 2)) (Wire.u16 data o) 64,
+        precompileSlice datas current (Wire.u16 data (o + 6)) (Wire.u16 data (o + 4)) 33,
+        precompileSlice datas current (Wire.u16 data (o + 12)) (Wire.u16 data (o + 8)) (Wire.u16 data (o + 10)) with
+    | some signature, some key, some message =>
+      let result := checkSecp256r1 signature key message
+      if result != 0 then
+        return result
+    | _, _, _ => return 4
+  return 0
+
+/-- Checks the signatures a secp256k1 program instruction lists: each names
+a 64-byte signature followed by a recovery byte, a 20-byte Ethereum address
+and a message, anywhere in the transaction's instructions; the key recovered
+from the signature over the message's Keccak hash must hash to the address.
+Returns 0 if all hold, otherwise 1 + the program's error code (1 = invalid
+recovery byte, 2 = invalid signature, 3 = invalid offsets, 4 = invalid data
+size). -/
+def verifySecp256k1 (datas : Array ByteArray) (current : Nat) : UInt64 := Id.run do
+  let data := datas[current]!
+  if data.size == 0 then
+    return 5
+  let count := data[0]!.toNat
+  if (count == 0 && data.size > 1) || data.size < 1 + 11 * count then
+    return 5
+  for k in [0:count] do
+    let o := 1 + 11 * k
+    let signatureAt := (Wire.u16 data o).toNat
+    let signatureIn := data[o + 2]!.toNat
+    if signatureIn >= datas.size then
+      return 5
+    let holder := datas[signatureIn]!
+    if signatureAt + 64 >= holder.size then
+      return 3
+    let signature := holder.extract signatureAt (signatureAt + 64)
+    if Secp256k1.atLeast (Secp256k1.ofBytes signature 0) Secp256k1.n
+        || Secp256k1.atLeast (Secp256k1.ofBytes signature 32) Secp256k1.n then
+      return 3
+    let recovery := holder[signatureAt + 64]!.toNat
+    if recovery > 3 then
+      return 2
+    let addressIn := data[o + 5]!.toNat
+    let messageIn := data[o + 10]!.toNat
+    if addressIn >= datas.size then
+      return 4
+    let addressAt := (Wire.u16 data (o + 3)).toNat
+    if addressAt + 20 > datas[addressIn]!.size then
+      return 3
+    if messageIn >= datas.size then
+      return 4
+    let messageAt := (Wire.u16 data (o + 6)).toNat
+    let messageSize := (Wire.u16 data (o + 8)).toNat
+    if messageAt + messageSize > datas[messageIn]!.size then
+      return 3
+    let hash := Keccak.hash (datas[messageIn]!.extract messageAt (messageAt + messageSize))
+    let key := Secp256k1.recover hash recovery signature
+    if key.size != 64 then
+      return 3
+    let address := (Keccak.hash key).extract 12 32
+    if address != datas[addressIn]!.extract addressAt (addressAt + 20) then
+      return 3
+  return 0
+
 -- ---------------------------------------------------------------- processing
 
 def refuse (bank : Bank) (why : String) : Receipt :=
@@ -416,6 +501,8 @@ def Bank.process (bank : Bank) (tx : Tx.Transaction) (verify : Bool) : Receipt :
   let mut heap : UInt64 := 32768
   let mut heapAt := Sbpf.notFound
   let mut loadedSet := false
+  -- how much account data the transaction may load: 64 MiB unless it says otherwise
+  let mut loadedLimit : UInt64 := 67108864
   let mut signatures := msg.signers.toUInt64
   for i in [0:msg.instructions.size] do
     let ix := msg.instructions[i]!
@@ -444,6 +531,7 @@ def Bank.process (bank : Bank) (tx : Tx.Transaction) (verify : Bool) : Receipt :
         if Wire.u32 ix.data 1 == 0 then
           return refuse bank "InvalidLoadedAccountsDataSizeLimit"
         loadedSet := true
+        loadedLimit := min (Wire.u32 ix.data 1) 67108864
       else
         return refuse bank invalid
     else if program == ed25519Program || program == secp256k1Program || program == secp256r1Program then
@@ -459,6 +547,7 @@ def Bank.process (bank : Bank) (tx : Tx.Transaction) (verify : Bool) : Receipt :
     let mut o := 4
     limit := 0
     limitSet := true
+    loadedLimit := 0
     if mask &&& 3 != 0 then
       feeGiven := Wire.u64 msg.config o
       o := o + 8
@@ -466,6 +555,7 @@ def Bank.process (bank : Bank) (tx : Tx.Transaction) (verify : Bool) : Receipt :
       limit := Wire.u32 msg.config o
       o := o + 4
     if mask &&& 8 != 0 then
+      loadedLimit := min (Wire.u32 msg.config o) 67108864
       o := o + 4
     if mask &&& 16 != 0 then
       heap := Wire.u32 msg.config o
@@ -496,14 +586,45 @@ def Bank.process (bank : Bank) (tx : Tx.Transaction) (verify : Bool) : Receipt :
     return ⟨"InsufficientFundsForFee", false, fee, 0, limit, Array.emptyWithCapacity 0, ByteArray.empty, bank, "", Array.emptyWithCapacity 0⟩
   if !(rentAllowed bank payer.lamports payer.data.size (payer.lamports - fee) payer.data.size) then
     return ⟨"InsufficientFundsForRent { account_index: 0 }", false, fee, 0, limit, Array.emptyWithCapacity 0, ByteArray.empty, bank, "", Array.emptyWithCapacity 0⟩
-  -- every program named must exist
+  -- From here on the fee is paid, whatever happens. First, what the transaction loads must fit in what it
+  -- allowed itself: 8248 bytes for every address table, then for every account that exists 64 bytes and
+  -- its data; a program whose code is kept in a second account is charged for that one too (once, and
+  -- not if the transaction names it itself).
+  let mut loadError := ""
+  let mut loaded : UInt64 := 8248 * msg.lookups.size.toUInt64
+  let mut holders : Array ByteArray := Array.emptyWithCapacity 4
+  for key in keys do
+    if loadError == "" && key != instructionsSysvar then
+      let account := bank.get key
+      if account.lamports != 0 then
+        loaded := loaded + 64 + account.data.size.toUInt64
+        if account.owner == Sbpf.loaderId && Sbpf.loaderKind account == 2 then
+          let holder := account.data.extract 4 36
+          let mut counted := false
+          for other in keys do
+            if other == holder then
+              counted := true
+          for other in holders do
+            if other == holder then
+              counted := true
+          if !counted then
+            holders := holders.push holder
+            -- its size: as noted when the program was read, or the account's own if it is at hand
+            let mut size := (bank.get holder).data.size
+            if find bank.accounts holder == Sbpf.notFound then
+              for k in [0:bank.machine.ids.size] do
+                if bank.machine.ids[k]! == key then
+                  size := bank.machine.programs[k]!.holderSize
+            if size != 0 then
+              loaded := loaded + 64 + size.toUInt64
+      if loaded > loadedLimit then
+        loadError := "MaxLoadedAccountsDataSizeExceeded"
+  -- and every program named must exist
   for ix in msg.instructions do
     let program := keys[ix.program]!
-    if !(program == Sbpf.systemProgram || program == Sbpf.computeBudgetProgram || program == ed25519Program
-        || program == Sbpf.loaderId || program == loaderV1 || program == loaderV2 || hasProgram bank program) then
-      let why := if (bank.get program).lamports == 0 then "ProgramAccountNotFound" else "InvalidProgramForExecution"
-      return ⟨why, false, fee, 0, limit, Array.emptyWithCapacity 0, ByteArray.empty, bank, "", Array.emptyWithCapacity 0⟩
-  -- from here on the fee is paid, whatever happens
+    if loadError == "" && !(program == Sbpf.systemProgram || program == Sbpf.computeBudgetProgram || program == ed25519Program
+        || program == secp256k1Program || program == secp256r1Program || program == Sbpf.loaderId || program == loaderV1 || program == loaderV2 || hasProgram bank program) then
+      loadError := if (bank.get program).lamports == 0 then "ProgramAccountNotFound" else "InvalidProgramForExecution"
   let charged := bank.set { payer with lamports := payer.lamports - fee }
 
   -- 4. the instructions, in order, on the accounts as the previous one left them
@@ -521,7 +642,7 @@ def Bank.process (bank : Bank) (tx : Tx.Transaction) (verify : Bool) : Receipt :
     datas := datas.push ix.data
   let machine := { bank.machine with budget := (if bank.machine.cap != 0 && bank.machine.cap < limit then bank.machine.cap else limit), heap := heap.toNat }
   let mut st : Sbpf.State := ⟨accounts, 0, Array.emptyWithCapacity 8, ByteArray.empty, Sbpf.finished, 0, "", Array.emptyWithCapacity 8⟩
-  let mut error := ""
+  let mut error := loadError
   for i in [0:msg.instructions.size] do
     if error == "" then
       let ix := msg.instructions[i]!
@@ -539,15 +660,25 @@ def Bank.process (bank : Bank) (tx : Tx.Transaction) (verify : Bool) : Receipt :
         let result := verifyEd25519 datas i
         if result != 0 then
           error := s!"InstructionError({i}, Custom({result - 1}))"
+      else if program == secp256k1Program then
+        st := { st with trace := st.trace.push ⟨1, program, metas, ix.data⟩ }
+        let result := verifySecp256k1 datas i
+        if result != 0 then
+          error := s!"InstructionError({i}, Custom({result - 1}))"
+      else if program == secp256r1Program then
+        st := { st with trace := st.trace.push ⟨1, program, metas, ix.data⟩ }
+        let result := verifySecp256r1 datas i
+        if result != 0 then
+          error := s!"InstructionError({i}, Custom({result - 1}))"
       else
         st := Sbpf.execute machine st program metas ix.data 1
         if st.status != Sbpf.finished then
           error := s!"InstructionError({i}, {instructionError st})"
 
-  -- 5. nobody may be left with too little to be exempt from rent
+  -- 5. nobody may be left with too little to be exempt from rent (the incinerator may: it keeps nothing)
   if error == "" then
     for i in [0:keys.size] do
-      if error == "" && writable[i]! then
+      if error == "" && writable[i]! && keys[i]! != incinerator then
         let was := bank.get keys[i]!
         let now := st.accounts[i]!
         if !(rentAllowed bank was.lamports was.data.size now.lamports now.data.size) then

@@ -297,7 +297,7 @@ def main : IO Unit := do
     let manifest := Snapshot.parse bytes
     if manifest.error != "" then
       die s!"{stateDir}/manifest.bin: {manifest.error}"
-    schedule := LeaderSchedule.table manifest false
+    schedule := LeaderSchedule.table manifest 0
     let (low, high) := LeaderSchedule.covers schedule
     IO.eprintln s!"leansol: leader schedule for slots {low} to {high - 1}, from the stakes in the snapshot of slot {manifest.slot}"
   let cfg : Config :=

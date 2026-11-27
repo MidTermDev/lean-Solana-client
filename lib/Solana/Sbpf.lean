@@ -246,7 +246,7 @@ partial def execute (m : Machine) (st0 : State) (programId : ByteArray) (metas :
   let mut trace := trace0
   let budget := m.budget
 
-  let input := serialize accounts metas data programId
+  let input := if p.packed then serializePacked accounts metas data programId else serialize accounts metas data programId
   let inputLen := input.size
   -- the stack and the heap start as zeros: copied from a block of zeros made once, not pushed a byte at a time
   let mut mem := ByteArray.emptyWithCapacity (stackBytes + p.heap + inputLen)
@@ -266,6 +266,8 @@ partial def execute (m : Machine) (st0 : State) (programId : ByteArray) (metas :
   let v3 := p.version >= 3
   regs := regs.set! 10 (stackStart + (if ownStack then stackBytes else frameBytes).toUInt64)
   -- saved r6..r9, frame pointer and return address of every active call
+  -- how much of the heap the old allocation call has handed out
+  let mut allocated : UInt64 := 0
   let mut frames : Array UInt64 := Array.replicate (maxDepth * 6) 0
   let mut calls := 0
   let mut pc := p.entry
@@ -566,6 +568,100 @@ partial def execute (m : Machine) (st0 : State) (programId : ByteArray) (metas :
           else
             status := unsupportedSyscall
             detail := s!"curve {a1} of sol_curve_multiscalar_mul is not provided"
+        else if id == sysAllocFree then
+          -- the allocator older programs call: hands out the heap from its start, never takes anything back
+          if a2 == 0 then
+            let aligned := if p.packed then allocated else (allocated + 7) / 8 * 8
+            if a1 <= p.heap.toUInt64 && aligned + a1 <= p.heap.toUInt64 then
+              result := 0x300000000 + aligned
+              allocated := aligned + a1
+        else if id == sysBn128 then
+          -- the alt_bn128 curve: a1 = add (0), multiply (2) or check pairings (3); a2, a3 the input; r4 the result
+          if a1 == 0 || a1 == 2 || a1 == 3 then
+            let pairs := a3 / 192
+            units := units + (if a1 == 0 then 334 else if a1 == 2 then 3840
+              else 36364 + 12121 * (if pairs == 0 then 0 else pairs - 1) + 85 + a3 + 32)
+            let outSize : UInt64 := if a1 == 3 then 32 else 64
+            let dest := writable p inputLen regs[4]! outSize
+            match readBytes p mem inputLen a2 a3 with
+            | none => status := accessViolation
+            | some raw =>
+              if !(Wire.ok dest) then
+                status := accessViolation
+              else if units > budget then
+                -- (nothing is computed that the budget cannot pay for)
+                pure ()
+              else if a1 == 3 then
+                if raw.size % 192 != 0 then
+                  result := 1
+                else
+                  let answer := Bn254.pairingCheck raw true
+                  if answer == 2 then
+                    result := 1
+                  else
+                    mem := (zeros ByteArray.empty 31).push answer.toUInt8 |>.copySlice 0 mem dest 32
+              else
+                let limit := if a1 == 0 then 128 else 96
+                if raw.size > limit then
+                  result := 1
+                else
+                  let input := zeros raw (limit - raw.size)
+                  match Bn254.g1OfBytes input 0 true with
+                  | none => result := 1
+                  | some first =>
+                    if a1 == 2 then
+                      let product := Bn254.g1Scale (Mont.ofBytes input 64 true) first
+                      mem := (Bn254.g1ToBytes product true).copySlice 0 mem dest 64
+                    else
+                      match Bn254.g1OfBytes input 64 true with
+                      | none => result := 1
+                      | some second => mem := (Bn254.g1ToBytes (Bn254.g1Add first second) true).copySlice 0 mem dest 64
+          else
+            status := unsupportedSyscall
+            detail := s!"operation {a1} of sol_alt_bn128_group_op is not provided"
+        else if id == sysBn128Convert then
+          -- points of alt_bn128 to half their size and back: a1 = which conversion, a2, a3 the input, r4 the result
+          if a1 > 3 then
+            status := unsupportedSyscall
+            detail := s!"conversion {a1} of sol_alt_bn128_compression is not provided"
+          else
+            units := units + 100 + (if a1 == 0 then 30 else if a1 == 1 then 398 else if a1 == 2 then 86 else 13610)
+            let outSize : UInt64 := if a1 == 0 then 32 else if a1 == 3 then 128 else 64
+            let dest := writable p inputLen regs[4]! outSize
+            match readBytes p mem inputLen a2 a3 with
+            | none => status := accessViolation
+            | some raw =>
+              if !(Wire.ok dest) then
+                status := accessViolation
+              else if units > budget then
+                pure ()
+              else
+                let converted := Bn254.convert a1.toNat raw
+                if converted.size == 0 then
+                  result := 1
+                else
+                  mem := converted.copySlice 0 mem dest converted.size
+        else if id == sysPoseidon then
+          -- the Poseidon hash of up to 12 numbers: a1 = which parameters (0), a2 = byte order, a3 the inputs
+          -- (address and length pairs), r4 how many, r5 where the 32-byte result goes
+          let count := regs[4]!
+          if a1 != 0 || a2 > 1 || count > 12 then
+            status := runtimeError
+            detail := "ProgramFailedToComplete"
+          else
+            units := units + 61 * count * count + 542
+            let dest := writable p inputLen regs[5]! 32
+            match readSlices p mem inputLen a3 count with
+            | none => status := accessViolation
+            | some inputs =>
+              if !(Wire.ok dest) then
+                status := accessViolation
+              else
+                let digest := Poseidon.hash inputs (a2 == 0)
+                if digest.size != 32 then
+                  result := 1
+                else
+                  mem := digest.copySlice 0 mem dest 32
         else if id == sysSecpRecover then
           -- the public key behind an Ethereum-style signature: a1 the hash, a2 which candidate, a3 the signature, r4 where to put the key
           units := units + 25000
@@ -750,7 +846,11 @@ partial def execute (m : Machine) (st0 : State) (programId : ByteArray) (metas :
             | some file => detail := s!"panicked at {printable file}:{a3}"
         else
           status := unsupportedSyscall
-          detail := "the program makes a system call this machine does not provide"
+          let mut wanted := if id >= 0x100000000 then s!"with hash {id - 0x100000000}" else "(named in the program's symbols)"
+          for name in allSyscallNames do
+            if id >= 0x100000000 && murmur3 name.toUTF8 == id - 0x100000000 then
+              wanted := name
+          detail := s!"the program makes a system call this machine does not provide: {wanted}"
         if status != finished then
           break
         if units > budget then
@@ -803,7 +903,25 @@ partial def execute (m : Machine) (st0 : State) (programId : ByteArray) (metas :
     for i in [0:metas.size] do
       if status == finished then
         if isRepeat metas i then
-          o := o + 8
+          o := o + (if p.packed then 1 else 8)
+        else if p.packed then
+          -- the first loader's layout: balance and data can change, size and owner cannot
+          let index := metas[i]!.index
+          let account := accounts[index]!
+          let was := entry[index]!.data.size
+          if Wire.u64 mem (o + 43) != was.toUInt64 then
+            status := invalidRealloc
+          else
+            let lamports := Wire.u64 mem (o + 35)
+            let contents := mem.extract (o + 51) (o + 51 + was)
+            let why := changeError programId metas[i]!.writable account lamports account.owner contents
+            if why != "" then
+              status := accountRule
+              detail := why
+            else
+              accounts := accounts.set! index { account with lamports := lamports, data := contents }
+              sum := sum + lamports
+          o := o + was + 92
         else
           let index := metas[i]!.index
           let account := accounts[index]!

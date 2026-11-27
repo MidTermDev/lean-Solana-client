@@ -2,6 +2,8 @@ import Crypto.Sha256
 import Crypto.Ed25519
 import Crypto.Keccak
 import Crypto.Secp256k1
+import Crypto.Poseidon
+import Crypto.Bn254
 import Crypto.Blake3
 import Encoding.Base58
 import Encoding.Base64
@@ -109,6 +111,10 @@ def sysSecpRecover : UInt64 := 31
 def sysCurveValidate : UInt64 := 32
 def sysCurveOp : UInt64 := 33
 def sysCurveMsm : UInt64 := 34
+def sysPoseidon : UInt64 := 35
+def sysAllocFree : UInt64 := 36
+def sysBn128 : UInt64 := 37
+def sysBn128Convert : UInt64 := 38
 def sysUnknown : UInt64 := 255
 
 /-- True when the NUL-terminated string at `b[o ..]` equals `name`. -/
@@ -131,6 +137,10 @@ def syscallId (b : ByteArray) (o : Nat) : UInt64 :=
   else if cstrIs b o "sol_curve_validate_point" then sysCurveValidate
   else if cstrIs b o "sol_curve_group_op" then sysCurveOp
   else if cstrIs b o "sol_curve_multiscalar_mul" then sysCurveMsm
+  else if cstrIs b o "sol_poseidon" then sysPoseidon
+  else if cstrIs b o "sol_alloc_free_" then sysAllocFree
+  else if cstrIs b o "sol_alt_bn128_group_op" then sysBn128
+  else if cstrIs b o "sol_alt_bn128_compression" then sysBn128Convert
   else if cstrIs b o "sol_get_clock_sysvar" then sysClock
   else if cstrIs b o "abort" then sysAbort
   else if cstrIs b o "sol_panic_" then sysPanic
@@ -186,10 +196,15 @@ structure Program where
   roRegion : UInt64
   /-- The first slot in which the program can be called: the one after it was deployed or upgraded. -/
   since : UInt64
+  /-- a program of the first loader: it is given its accounts packed, with no room to grow and nothing aligned -/
+  packed : Bool
+  /-- For a program whose code is kept in a second account: that account's size (0 if it is gone). A
+  transaction is charged for it against the amount of data it may load. -/
+  holderSize : Nat
   deriving Inhabited
 
 def Program.failed (elf : ByteArray) (why : String) : Program :=
-  ⟨elf, 0, 0, 0, 0, 0, Array.emptyWithCapacity 0, Array.emptyWithCapacity 0, why, 32768, 0, 0, 0, 1, 0⟩
+  ⟨elf, 0, 0, 0, 0, 0, Array.emptyWithCapacity 0, Array.emptyWithCapacity 0, why, 32768, 0, 0, 0, 1, 0, false, 0⟩
 
 /-- Where a section sits in the file, and the address it asks for. Size 0 means "absent". -/
 structure Section where
@@ -247,11 +262,12 @@ def syscallNames : Array String := #["sol_log_", "sol_log_64_", "sol_log_pubkey"
   "sol_get_rent_sysvar", "sol_set_return_data", "sol_get_return_data", "sol_get_stack_height", "sol_get_sysvar",
   "sol_try_find_program_address", "sol_create_program_address", "sol_get_processed_sibling_instruction",
   "sol_keccak256", "sol_blake3", "sol_secp256k1_recover", "sol_curve_validate_point", "sol_curve_group_op",
-  "sol_curve_multiscalar_mul"]
+  "sol_curve_multiscalar_mul", "sol_poseidon", "sol_alloc_free_", "sol_alt_bn128_group_op",
+  "sol_alt_bn128_compression"]
 
 /-- Every system call Agave's runtime registers (those above, and those this machine does not provide yet). -/
-def allSyscallNames : Array String := #["sol_curve_pairing_map", "sol_get_fees_sysvar", "sol_alloc_free_",
-  "sol_alt_bn128_group_op", "sol_alt_bn128_compression", "sol_big_mod_exp", "sol_poseidon"]
+def allSyscallNames : Array String := #["sol_curve_pairing_map", "sol_get_fees_sysvar",
+  "sol_big_mod_exp"]
 
 /-- The system call a hash names, or `sysUnknown`. -/
 def syscallByHash (hash : UInt64) : UInt64 := Id.run do
@@ -311,9 +327,12 @@ def loadStrict (elf : ByteArray) : Program := Id.run do
         -- (not an error until the call is made: programs import calls they do not always use)
         if which.length > 60 then
           return Program.failed elf s!"the program makes a system call this machine does not provide ({which})"
-      syscalls := syscalls.set! pc id
+        -- remembered by its hash, so that a call to it can say which it was
+        syscalls := syscalls.set! pc (0x100000000 + Wire.u32 elf (o + 4))
+      else
+        syscalls := syscalls.set! pc id
   return ⟨elf, textOff, count, 0, roSize, ((entry - programStart) / 8).toNat, syscalls, Array.replicate count 0, "", 32768,
-    3, roOff, programStart, 0, 0⟩
+    3, roOff, programStart, 0, 0, false, 0⟩
 
 /-- Parses and relocates an sBPF ELF file as written by Solana toolchains. Versions 0 to 2 share
 this loader; version 3 has its own. -/
@@ -400,7 +419,7 @@ def load (image : ByteArray) : Program := Id.run do
         else if nameOff < names.size then
           syscalls := syscalls.set! pc (syscallId elf (names.off + nameOff))
   return ⟨elf, text.off, count, roLow, roHigh, ((entryAddr - text.addr) / 8).toNat, syscalls, calls, "", 32768,
-    version.toNat, roLow, programStart + text.off.toUInt64, 1, 0⟩
+    version.toNat, roLow, programStart + text.off.toUInt64, 1, 0, false, 0⟩
 
 -- ------------------------------------------------------------------- memory
 --
@@ -888,6 +907,34 @@ def zeroBlock : ByteArray := zeros (ByteArray.emptyWithCapacity (stackBytes + 32
 
 /-- Bytes an account occupies in the input: header, data, room to grow, alignment, rent epoch. -/
 def accountSpan (dataLen : Nat) : Nat := (dataLen + 10343) / 8 * 8
+
+/-- The input as the first loader's programs expect it: the same fields in
+another order, back to back, with each account's data at its exact size. -/
+def serializePacked (accounts : Array Account) (metas : Array Meta) (instruction programId : ByteArray) : ByteArray := Id.run do
+  let mut b := Wire.putU64 (ByteArray.emptyWithCapacity 16384) metas.size.toUInt64
+  for i in [0:metas.size] do
+    let mt := metas[i]!
+    let mut first := i
+    for j in [0:i] do
+      if first == i && metas[j]!.index == mt.index then
+        first := j
+    if first != i then
+      b := b.push first.toUInt8
+    else
+      let a := accounts[mt.index]!
+      b := b.push 0xff
+      b := b.push (if mt.signer then 1 else 0)
+      b := b.push (if mt.writable then 1 else 0)
+      b := b ++ a.key
+      b := Wire.putU64 b a.lamports
+      b := Wire.putU64 b a.data.size.toUInt64
+      b := b ++ a.data
+      b := b ++ a.owner
+      b := b.push (if a.executable then 1 else 0)
+      b := Wire.putU64 b 0xFFFFFFFFFFFFFFFF
+  b := Wire.putU64 b instruction.size.toUInt64
+  b := b ++ instruction
+  return b ++ programId
 
 def serialize (accounts : Array Account) (metas : Array Meta) (instruction programId : ByteArray) : ByteArray := Id.run do
   let mut b := Wire.putU64 (ByteArray.emptyWithCapacity 16384) metas.size.toUInt64

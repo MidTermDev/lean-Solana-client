@@ -117,6 +117,15 @@ def nowMs : IO UInt64 := do
   let nsec ← Mem.load64 (p + 32)
   return sec * 1000 + nsec / 1000000
 
+/-- Microseconds on a clock that only moves forward (for measuring how long something took). -/
+def nowUs : IO UInt64 := do
+  let ts := scratch 16
+  let p := Unsafe.addr ts
+  let _ ← syscall 228 1 (p + 24) 0 0 0 0
+  let sec ← Mem.load64 (p + 24)
+  let nsec ← Mem.load64 (p + 32)
+  return sec * 1000000 + nsec / 1000
+
 -- ---------------------------------------------------------------- processes
 
 /-- `fork()`: returns 0 in the child and the child's pid in the parent. -/

@@ -35,6 +35,8 @@ def usage : String :=
   "  --from SLOT    the first block to execute (default: the one after the snapshot's)\n" ++
   "  --count N      how many blocks (default 1)\n" ++
   "  --lines        print one line per transaction: its outcome, fee, compute units and balances\n" ++
+  "  --follow       after a block whose hash differs, continue from the block's own hash\n" ++
+  "  --timing       say where each block's time went\n" ++
   "  --trace N      print the log of transaction N of the first block\n"
 
 def fail (message : String) : IO Unit := do
@@ -136,9 +138,11 @@ def slotHistoryWith (old : ByteArray) (slot : UInt64) : ByteArray := Id.run do
   b := Sbpf.storeAt b at_ 8 (Wire.u64 b at_ ||| ((1 : UInt64) <<< ((slot % 1048576) % 64)))
   return Sbpf.storeAt b 131089 8 (slot + 1)
 
+def tokenProgram : ByteArray := Base58.decode "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
+def token2022Program : ByteArray := Base58.decode "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb"
 def recentBlockhashesSysvar : ByteArray := Base58.decode "SysvarRecentB1ockHashes11111111111111111111"
 def slotHistorySysvar : ByteArray := Base58.decode "SysvarS1otHistory11111111111111111111111111"
-def incinerator : ByteArray := Base58.decode "1nc1nerator11111111111111111111111111111111"
+def incinerator : ByteArray := Bank.incinerator
 def alpenglowFeature : ByteArray := Base58.decode "A1pengvuM6JEcyNuTnMqepBKhwHE3N6PmUrdATGawhJS"
 
 /-- The account holding the rewards an epoch can pay, and the one recording when Alpenglow took over. -/
@@ -169,13 +173,25 @@ def main : IO Unit := do
   let mut first : UInt64 := 0
   let mut count := 1
   let mut lines := false
+  -- for looking into a block that does not match: carry on from the block's own bank hash, so that what
+  -- later blocks read of it (the slot hashes) is right and their transactions can still be compared
+  let mut follow := false
+  -- say where each block's time went
+  let mut timing := false
   let mut trace := Sbpf.notFound
   let mut cap : UInt64 := 0
+  let mut traceSlot : UInt64 := 0
   let mut i := 2
   while i < argc do
     let a ← Sys.arg i
     if a == "--lines" then
       lines := true
+      i := i + 1
+    else if a == "--follow" then
+      follow := true
+      i := i + 1
+    else if a == "--timing" then
+      timing := true
       i := i + 1
     else if a == "--help" then
       IO.print usage
@@ -196,6 +212,8 @@ def main : IO Unit := do
         trace := (RunBlock.number v).toNat
       else if a == "--cap" then
         cap := RunBlock.number v
+      else if a == "--at" then
+        traceSlot := RunBlock.number v
       else
         fail s!"unknown option {a}\n{usage}"
       i := i + 2
@@ -236,8 +254,8 @@ def main : IO Unit := do
     if manifest.lastHashIndex - Wire.u64 manifest.queue (56 * k + 40) <= 150 then
       recent := recent ++ manifest.queue.extract (56 * k) (56 * k + 32)
   let mut machine := Sbpf.Machine.create ⟨0, 0, 0, 0, 0⟩ 200000
-  let leaderTable := LeaderSchedule.table manifest false
-  let leaderVotes := LeaderSchedule.table manifest true
+  let leaderVotes := LeaderSchedule.table manifest 1
+  let leaderCollectors := LeaderSchedule.table manifest 2
   if first == 0 then
     first := slot + 1
   if first != slot + 1 then
@@ -256,6 +274,10 @@ def main : IO Unit := do
     if block.error != "" then
       fail s!"slot {slot}: {block.error}"
     let started ← Sys.nowMs
+    let mut mark ← Sys.nowUs
+    let mut usLoad : UInt64 := 0
+    let mut usRun : UInt64 := 0
+    let mut usKeep : UInt64 := 0
     -- every account this block changes, as it was before the block
     let mut touched : Array Sbpf.Account := Array.emptyWithCapacity 4096
     -- ---- a new bank: the parent's hash joins the recent slot hashes, and the clock moves to this slot
@@ -305,6 +327,10 @@ def main : IO Unit := do
         accounts := accounts.push (← world.get pending key)
       if lines then
         IO.println s!"begin {t}"
+      if timing then
+        let now ← Sys.nowUs
+        usLoad := usLoad + (now - mark)
+        mark := now
       for k in [named:named + keys.size] do
         let a := accounts[k]!
         if a.owner == Sbpf.loaderId && Sbpf.loaderKind a == 2 && !(Bank.hasProgram ⟨machine, #[], latest, 5000⟩ a.key) then
@@ -314,9 +340,14 @@ def main : IO Unit := do
       for k in [0:recent.size / 32] do
         if Wire.eqAt recent (32 * k) msg.blockhash 0 32 then
           known := true
-      let capped := if n == 0 && t == trace then cap else 0
+      let traced := t == trace && (if traceSlot == 0 then n == 0 else slot == traceSlot)
+      let capped := if traced then cap else 0
       let bank : Bank.Bank := ⟨{ machine with cap := capped }, accounts, (if known then msg.blockhash else latest), 5000⟩
       let receipt := bank.process tx false
+      if timing then
+        let now ← Sys.nowUs
+        usRun := usRun + (now - mark)
+        mark := now
       machine := { receipt.bank.machine with clock := clock }
       signatures := signatures + tx.signatures.size.toUInt64
       units := units + receipt.units
@@ -352,8 +383,27 @@ def main : IO Unit := do
           if pending.size >= 4194304 then
             world := { world with overlay := ← world.overlay.flush pending }
             pending := ByteArray.emptyWithCapacity 4300000
+      if timing then
+        let now ← Sys.nowUs
+        usKeep := usKeep + (now - mark)
+        mark := now
       if lines then
         IO.println s!"tx {t} {Base58.encode tx.signatures[0]!} err={if receipt.error == "" then "-" else receipt.error} charged={receipt.charged} fee={receipt.fee} cu={receipt.units} bal={balances}"
+        for line in receipt.logs do
+          IO.println s!"log {t} {line}"
+        -- token accounts among its accounts, and what they hold afterwards (the amount is 8 bytes at offset 64)
+        let mut tokens := ""
+        for k in [0:keys.size] do
+          let found := Bank.find receipt.bank.accounts keys[k]!
+          if found != Sbpf.notFound then
+            let a := receipt.bank.accounts[found]!
+            if a.data.size >= 165 && (a.owner == tokenProgram || a.owner == token2022Program) && a.data.size != 82 && Wire.u8 a.data 108 != 0 then
+              tokens := tokens ++ s!" {k}:{Wire.u64 a.data 64}"
+        IO.println s!"tokens {t}{tokens}"
+        let mut calls := ""
+        for f in receipt.frames do
+          calls := calls ++ s!" {f.depth}:{Base58.encode f.program}"
+        IO.println s!"calls {t}{calls}"
         if receipt.why != "" then
           let mut missing := ""
           if RunBlock.findAt receipt.why.toUTF8 "status 6,".toUTF8 0 == 0 then
@@ -373,7 +423,7 @@ def main : IO Unit := do
                 if used then
                   missing := missingCalls holder.data missing
           IO.println s!"why {t} {receipt.why}{if missing != "" then s!" · lacks:{missing}" else ""}"
-      if n == 0 && t == trace then
+      if traced then
         IO.println s!"    [{receipt.error}] [{receipt.why}] {receipt.units} units"
         for line in receipt.logs do
           IO.println s!"    {line}"
@@ -385,6 +435,9 @@ def main : IO Unit := do
         for k in [0:keys.size] do
           let found := Bank.find receipt.bank.accounts keys[k]!
           IO.println s!"    account {k} {Base58.encode keys[k]!} {accounts[named + k]!.lamports} -> {if found == Sbpf.notFound then 0 else receipt.bank.accounts[found]!.lamports}"
+          if found != Sbpf.notFound && receipt.bank.accounts[found]!.data != accounts[named + k]!.data && receipt.bank.accounts[found]!.data.size <= 200 then
+            IO.println s!"      data was {Hex.encode accounts[named + k]!.data}"
+            IO.println s!"      data now {Hex.encode receipt.bank.accounts[found]!.data}"
         Sys.exit 0
     -- ---- the block's end
     let mut closing : Array Sbpf.Account := Array.emptyWithCapacity 8
@@ -403,6 +456,7 @@ def main : IO Unit := do
     let mut voteStates : Array Alpenglow.VoteState := Array.emptyWithCapacity 1024
     let mut voteAccounts : Array Sbpf.Account := Array.emptyWithCapacity 1024
     let mut leaderReward : UInt64 := 0
+    let mut leaderCredited := "nobody"
     let genesis ← world.get pending genesisCertificate
     let migrationEpoch := if genesis.data.size >= 8 && manifest.slotsPerEpoch != 0 then Wire.u64 genesis.data 0 / manifest.slotsPerEpoch else 0xFFFFFFFFFFFFFFFE
     for pass in [0:2] do
@@ -458,6 +512,7 @@ def main : IO Unit := do
           voteAccounts := voteAccounts.push account
       if at_ != Sbpf.notFound then
         voteStates := voteStates.set! at_ (voteStates[at_]!.credit migrationEpoch epoch leaderReward)
+        leaderCredited := Base58.encode leaderVote
     for k in [0:voteKeys.size] do
       let data := voteStates[k]!.bytes
       if data.size != 0 then
@@ -468,13 +523,28 @@ def main : IO Unit := do
     -- the fees: half of what was paid per signature is burned, the rest goes to whoever collects for the leader
     let burned := signatureFees * 50 / 100
     let deposit := (fees - signatureFees) + (signatureFees - burned)
-    let leader := LeaderSchedule.leaderAt leaderTable slot
+    let leader := LeaderSchedule.leaderAt leaderCollectors slot
     if deposit != 0 && leader.size == 32 then
-      let collector ← world.get pending leader
-      if collector.owner == Sbpf.systemProgram then
-        closing := closing.push { collector with lamports := collector.lamports + deposit }
+      -- (the footer may just have rewritten this very account: a leader's vote account can collect its fees)
+      let mut collector ← world.get pending leader
+      let mut rewritten := Sbpf.notFound
+      for k in [0:closing.size] do
+        if closing[k]!.key == leader then
+          collector := closing[k]!
+          rewritten := k
+      -- the collector is the leader's vote account (no questions asked), or a system account that this
+      -- leaves exempt from rent; anything else, and the fees are burned
+      let isVote := leader == LeaderSchedule.leaderAt leaderVotes slot
+      let after := collector.lamports + deposit
+      let rentOk := after >= machine.rentMinimum collector.data.size
+        || (collector.lamports != 0 && collector.lamports < machine.rentMinimum collector.data.size)
+      if isVote || (collector.owner == Sbpf.systemProgram && !(Bank.reserved leader) && (leader == incinerator || rentOk)) then
+        if rewritten != Sbpf.notFound then
+          closing := closing.set! rewritten { collector with lamports := after }
+        else
+          closing := closing.push { collector with lamports := after }
         if lines then
-          IO.println s!"reward {Base58.encode leader} {deposit} {collector.lamports + deposit}"
+          IO.println s!"reward {Base58.encode leader} {deposit} {after}"
     -- this slot had a block
     let oldHistory ← world.get pending slotHistorySysvar
     closing := closing.push { oldHistory with data := slotHistoryWith oldHistory.data slot }
@@ -498,18 +568,29 @@ def main : IO Unit := do
     recent := recent ++ latest
     if recent.size > 32 * 151 then
       recent := recent.extract (recent.size - 32 * 151) recent.size
+    let usFooter := (← Sys.nowUs) - mark
+    mark ← Sys.nowUs
     -- ---- the lattice hash moves by exactly what changed
     for was in touched do
       let now ← world.get pending was.key
       sum := LtHash.mixAccount sum was.lamports was.data was.executable was.owner was.key true
       sum := LtHash.mixAccount sum now.lamports now.data now.executable now.owner now.key false
+    if lines then
+      for was in touched do
+        let now ← world.get pending was.key
+        IO.println s!"changed {Base58.encode was.key} {now.lamports} {Base58.encode now.owner} {now.data.size} {Hex.encode ((Sha256.hash now.data).extract 0 8)} was {was.lamports} {was.data.size} {Hex.encode ((Sha256.hash was.data).extract 0 8)}"
+    let usHash := (← Sys.nowUs) - mark
+    if timing then
+      IO.println s!"timing: accounts read {usLoad / 1000} ms, transactions run {usRun / 1000} ms, changes kept {usKeep / 1000} ms, footer and closing {usFooter / 1000} ms, lattice hash {usHash / 1000} ms"
     let inner := Sha256.hash (bankHash ++ u64 signatures ++ latest)
     bankHash := Sha256.hash (inner ++ LtHash.bytes sum)
     let took := (← Sys.nowMs) - started
     IO.println s!"slot {slot}: {block.transactions.size} transactions ({failedCount} failed), {signatures} signatures, {Fmt.thousands units} compute units, {touched.size} accounts changed ({voteKeys.size} vote accounts by the footer), fees {fees} · {took} ms"
     if lines then
-      IO.println s!"footer: final slot {certs.finalSlot} ({certs.finalBits.size} bitmaps), reward slot {certs.rewardSlot} ({certs.rewardBits.size} bitmaps), leader reward {leaderReward}, migration epoch {migrationEpoch}"
+      IO.println s!"footer: final slot {certs.finalSlot} ({certs.finalBits.size} bitmaps), reward slot {certs.rewardSlot} ({certs.rewardBits.size} bitmaps), leader reward {leaderReward} to {leaderCredited}, migration epoch {migrationEpoch}"
     IO.println s!"  bank hash  {Base58.encode bankHash}"
     IO.println s!"  the block's {Base58.encode block.bankHash}  {if bankHash == block.bankHash then "MATCH" else "(differs)"}"
+    if follow && block.bankHash.size == 32 then
+      bankHash := block.bankHash
 
 end RunReplay
