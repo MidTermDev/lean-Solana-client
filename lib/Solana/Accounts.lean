@@ -62,20 +62,9 @@ def packZeros (b : ByteArray) (o len : Nat) (out0 : ByteArray) : ByteArray := Id
   let mut kept := o
   while i < stop do
     if b[i]! != 0 then
-      -- (eight bytes with no zero among them are passed over at once: a word minus 0x0101..., and not
-      -- the word, has a top bit set exactly where a byte was zero, or was reached by a borrow from one)
-      let word := Fast.le64 b i
-      if i + 8 <= stop && (word - 0x0101010101010101) &&& (~~~word) &&& 0x8080808080808080 == 0 then
-        i := i + 8
-      else
-        i := i + 1
+      i := i + Fast.plainRun b i stop
     else
-      let mut j := i + 1
-      -- (and eight zero bytes at once)
-      while j + 8 <= stop && Fast.le64 b j == 0 do
-        j := j + 8
-      while j < stop && b[j]! == 0 do
-        j := j + 1
+      let j := i + Fast.zeroRun b i stop
       -- a run of one or two zeros costs less left among its neighbours
       if j - i >= 3 then
         while kept < i do
@@ -122,11 +111,13 @@ def unpackZeros (b : ByteArray) (o len size : Nat) : ByteArray := Id.run do
       i := i + 1
   return out
 
-/-- An account as the log holds it. `pubkey`, `owner` and `data` are offsets into `b`. -/
-def record (b : ByteArray) (pubkey owner : Nat) (lamports rentEpoch slot : UInt64) (executable : Bool) (data dataLen : Nat) : ByteArray := Id.run do
+/-- An account as the log holds it: its address and owner at `pubkey` and `owner` in `keys`, its data at
+`data` in `b`. -/
+def recordFrom (keys : ByteArray) (pubkey owner : Nat) (lamports rentEpoch slot : UInt64) (executable : Bool)
+    (b : ByteArray) (data dataLen : Nat) : ByteArray := Id.run do
   let mut r := ByteArray.emptyWithCapacity (headerSize + 16 + dataLen + dataLen / 64)
-  r := b.copySlice pubkey r 0 32
-  r := b.copySlice owner r 32 32
+  r := keys.copySlice pubkey r 0 32
+  r := keys.copySlice owner r 32 32
   r := Wire.putU64 (Wire.putU64 r lamports) slot
   -- the two words that depend on how the data packs are filled in afterwards
   r := Wire.putU64 r 0
@@ -150,6 +141,10 @@ def record (b : ByteArray) (pubkey owner : Nat) (lamports rentEpoch slot : UInt6
   r := r.set! 86 (stored >>> 16).toUInt8
   r := r.set! 87 (stored >>> 24).toUInt8
   return r
+
+/-- The same for an account lying in one buffer: `pubkey`, `owner` and `data` are offsets into `b`. -/
+def record (b : ByteArray) (pubkey owner : Nat) (lamports rentEpoch slot : UInt64) (executable : Bool) (data dataLen : Nat) : ByteArray :=
+  recordFrom b pubkey owner lamports rentEpoch slot executable b data dataLen
 
 def recLamports (r : ByteArray) : UInt64 := Wire.u64 r 64
 def recSlot (r : ByteArray) : UInt64 := Wire.u64 r 72

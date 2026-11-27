@@ -117,7 +117,7 @@ def World.fetch (w : World) (pending : ByteArray) (key : ByteArray) : IO (World 
 
 /-- Files a new version of an account in the overlay. Returns the world and the record, which the caller appends to `pending`. -/
 def World.put (w : World) (pending : ByteArray) (a : Sbpf.Account) (slot : UInt64) : IO (World × ByteArray) := do
-  let r := Accounts.record (a.key ++ a.owner ++ a.data) 0 32 a.lamports Accounts.noRent slot a.executable 64 a.data.size
+  let r := Accounts.recordFrom (a.key ++ a.owner) 0 32 a.lamports Accounts.noRent slot a.executable a.data 0 a.data.size
   let (entry, loc) ← w.overlay.locate pending a.key 0
   let overlay ← w.overlay.point entry (loc == Accounts.none_) (Accounts.Shard.keyOf r 0) (w.overlay.flushed + pending.size.toUInt64)
   let filed : World := { w with overlay := overlay }

@@ -366,7 +366,8 @@ static const struct {
     {"leanc_cas32", IN_CAS32},     {"leanc_cas64", IN_CAS64},     {"leanc_xadd64", IN_XADD64},
     {"leanc_xchg32", IN_XCHG32},   {"leanc_pause", IN_PAUSE},     {"leanc_rdtsc", IN_RDTSC},
     {"leanc_ptr", IN_PTR},         {"leanc_ofptr", IN_OFPTR},     {"leanc_forget", IN_DROPPED},
-    {"leanc_call", IN_CALL},
+    {"leanc_call", IN_CALL},       {"leanc_sha256", IN_SHA256},   {"leanc_move", IN_MOVE},
+    {"leanc_zerorun", IN_ZERORUN}, {"leanc_plainrun", IN_PLAINRUN},
     {NULL, 0}};
 
 static void resolve_sig(Func *f) {
@@ -481,6 +482,12 @@ static Builtin builtins[] = {
     {"Fast.push64", "Yq>Y", B_RT, 0, "Rt.baPush64", NULL, 0, true},
     {"Fast.pushZeros", "YN>Y", B_RT, 0, "Rt.baPushZeros", NULL, 0, true},
     {"Fast.zeroed", "NN>Y", B_RT, 0, "Rt.baZeroed", NULL, 0, true},
+    {"Fast.sameAt", "Y&NY&NN>B", B_RT, 0, "Rt.baSameAt", NULL, 0, true},
+    {"Fast.sha256Blocks", "YY&NN>Y", B_RT, 0, "Rt.sha256Blocks", NULL, 0, true},
+    {"Fast.zeroRun", "Y&NN>N", B_RT, 0, "Rt.baZeroRun", NULL, 0, true},
+    {"Fast.plainRun", "Y&NN>N", B_RT, 0, "Rt.baPlainRun", NULL, 0, true},
+    {"Fast.remembered", "Y&>q", B_RT, 0, "Rt.memoGet", NULL, 0, true},
+    {"Fast.remember", "Y&q>q", B_RT, 0, "Rt.memoPut", NULL, 0, true},
     {"Fast.codeLoad", "Y&>q", B_RT, 0, "Rt.codeLoad", NULL, 0, true},
     {"Fast.run", "qQYY&>P", B_RT, 0, "Rt.codeRun", NULL, 0, true},
     {"Fast.hot", "q>q", B_OP, OP_HOT, NULL, NULL, 0, true},

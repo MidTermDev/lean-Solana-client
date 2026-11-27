@@ -153,7 +153,14 @@ partial def invoke (m : Machine) (st0 : State) (callerId : ByteArray) (callerMet
             return (st.stop missingAccount (Base58.encode account.key), mem)
           let info := infos[k]!
           st := st.charge (info.dataLen / 250)
-          match readBytes p mem inputLen info.lamportsAddr 8, readBytes p mem inputLen info.ownerAddr 32,
+          -- Usually the caller has changed nothing since the account was last brought up to date, and
+          -- its view holds exactly what the account does: seen by comparing in place, nothing copied.
+          if info.dataLen == account.data.size.toUInt64 && account.owner.size == 32
+              && holds p mem inputLen info.lamportsAddr (Wire.putU64 (ByteArray.emptyWithCapacity 8) account.lamports)
+              && holds p mem inputLen info.ownerAddr account.owner && holds p mem inputLen info.dataAddr account.data then
+            if account.data.size > entry[index]!.data.size + maxGrowth then
+              return (st.stop invalidRealloc "", mem)
+          else match readBytes p mem inputLen info.lamportsAddr 8, readBytes p mem inputLen info.ownerAddr 32,
               readBytes p mem inputLen info.dataAddr info.dataLen with
           | some balance, some owner, some data =>
             let lamports := Wire.u64 balance 0
@@ -167,6 +174,7 @@ partial def invoke (m : Machine) (st0 : State) (callerId : ByteArray) (callerMet
     if st.units > m.budget then
       return ({ st with units := m.budget, status := meterExceeded }, mem)
     -- run the callee
+    let handed := st.accounts
     st := execute m st call.programId metas call.data (depth + 1)
     if st.status != finished then
       return (st, mem)
@@ -185,9 +193,12 @@ partial def invoke (m : Machine) (st0 : State) (callerId : ByteArray) (callerMet
         let dataAt := writable p inputLen info.dataAddr span
         if !(Wire.ok balanceAt) || !(Wire.ok ownerAt) || !(Wire.ok dataAt) then
           return (st.stop accessViolation "an account view points outside the caller's memory", mem)
-        mem := storeAt mem balanceAt 8 account.lamports
-        mem := account.owner.copySlice 0 mem ownerAt 32
-        mem := account.data.copySlice 0 mem dataAt account.data.size
+        -- (an account the callee left as it was handed over is in the caller's memory already)
+        let was := handed[index]!
+        if account.lamports != was.lamports || account.owner != was.owner || account.data != was.data then
+          mem := storeAt mem balanceAt 8 account.lamports
+          mem := account.owner.copySlice 0 mem ownerAt 32
+          mem := account.data.copySlice 0 mem dataAt account.data.size
         if size != info.dataLen then
           -- the account was resized: clear what it gave up, and update both places its length is kept
           for k in [account.data.size:info.dataLen.toNat] do
@@ -1005,15 +1016,20 @@ partial def execute (m : Machine) (st0 : State) (programId : ByteArray) (metas :
             status := invalidRealloc
           else
             let lamports := Wire.u64 mem (o + 72)
-            let owner := mem.extract (o + 40) (o + 72)
-            let contents := mem.extract (o + 88) (o + 88 + len.toNat)
-            let why := changeError programId metas[i]!.writable account lamports owner contents
-            if why != "" then
-              status := accountRule
-              detail := why
-            else
-              accounts := accounts.set! index { account with lamports := lamports, owner := owner, data := contents }
+            if lamports == account.lamports && len.toNat == account.data.size && account.owner.size == 32
+                && Fast.sameAt mem (o + 40) account.owner 0 32 && Fast.sameAt mem (o + 88) account.data 0 account.data.size then
+              -- nothing about it changed (seen where it lies): the account stays the very one it was
               sum := sum + lamports
+            else
+              let owner := mem.extract (o + 40) (o + 72)
+              let contents := mem.extract (o + 88) (o + 88 + len.toNat)
+              let why := changeError programId metas[i]!.writable account lamports owner contents
+              if why != "" then
+                status := accountRule
+                detail := why
+              else
+                accounts := accounts.set! index { account with lamports := lamports, owner := owner, data := contents }
+                sum := sum + lamports
           o := o + accountSpan was
     if status == finished && sum != entrySum then
       status := unbalanced

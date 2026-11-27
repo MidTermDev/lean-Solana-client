@@ -86,3 +86,45 @@ def main : IO Unit := do
   v := if wide then Fast.quarter32 v 28 25 26 27 39 0 else Fast.Ref.quarter32 v 28 25 26 27 39 0
   IO.println s!"the quarter-round: {digest v}"
   IO.println s!"and the file they started from: {digest f}"
+  -- SHA-256's compression function: the processor's instructions against the definition, on blocks that
+  -- begin at every alignment
+  let mut agree := true
+  let mut states := ByteArray.empty
+  for start in [0:19] do
+    let st := Fast.Ref.sha256Blocks (f.extract (3 * start) (3 * start + 32)) f (64 + start) (1 + start % 4)
+    let quick := if Fast.sha then Fast.sha256Blocks (f.extract (3 * start) (3 * start + 32)) f (64 + start) (1 + start % 4) else st
+    if quick != st then
+      agree := false
+    states := states ++ st
+  IO.println s!"sha256Blocks: {Hex.encode (states.extract 0 32)}..., the instructions agree: {agree}"
+  -- comparing where the bytes lie
+  let mut verdicts := ""
+  for o in #[0, 1, 63, 64, 1000, 2500, 2559] do
+    for n in #[0, 1, 7, 8, 9, 31, 64, 65] do
+      let piece := (f.extract o (o + n)).push 9
+      let moved := (ByteArray.empty.push 1) ++ piece
+      verdicts := verdicts ++ (if Fast.sameAt f o moved 1 n then "s" else "d") ++ (if Fast.sameAt f o moved 2 n then "s" else "d")
+  IO.println s!"sameAt: {verdicts}"
+  -- remembering: whatever is recalled is what was noted, and noting returns its value
+  let key := Sha256.hash f
+  let first := if Fast.remembered key != 0 then Fast.remembered key else Fast.remember key 41
+  let again := if Fast.remembered key != 0 then Fast.remembered key else Fast.remember key 41
+  IO.println s!"noted and recalled: {first} {again}"
+  -- runs of zeros and of anything else, from every position of an array that has both, long and short
+  let mut runs := ByteArray.emptyWithCapacity 600
+  for i in [0:600] do
+    runs := runs.push (if i % 97 < 40 || (i > 300 && i < 420) || i % 7 == 3 then 0 else (i % 251 + 1).toUInt8)
+  let mut total := 0
+  let mut wrong := 0
+  for i in [0:600] do
+    for stop in #[i, i + 1, i + 5, i + 16, i + 17, i + 40, 600, 700] do
+      let mut zeros := 0
+      while i + zeros < stop && i + zeros < 600 && runs[i + zeros]! == 0 do
+        zeros := zeros + 1
+      let mut others := 0
+      while i + others < stop && i + others < 600 && runs[i + others]! != 0 do
+        others := others + 1
+      if Fast.zeroRun runs i stop != zeros || Fast.plainRun runs i stop != others then
+        wrong := wrong + 1
+      total := total + zeros + 3 * others
+  IO.println s!"zeroRun and plainRun: {total} over every position, {wrong} wrong"

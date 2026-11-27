@@ -494,6 +494,15 @@ def readBytes (p : Program) (mem : ByteArray) (inputLen : Nat) (addr len : UInt6
     else if idx >= progBase then some (p.elf.extract (idx - progBase) (idx - progBase + len.toNat))
     else some (mem.extract idx (idx + len.toNat))
 
+/-- Whether the bytes at `addr` can be read and are exactly `expected`, without copying them out. -/
+def holds (p : Program) (mem : ByteArray) (inputLen : Nat) (addr : UInt64) (expected : ByteArray) : Bool :=
+  if expected.size == 0 then true
+  else
+    let idx := locate p inputLen addr expected.size false
+    if !(Wire.ok idx) then false
+    else if idx >= progBase then Fast.sameAt p.elf (idx - progBase) expected 0 expected.size
+    else Fast.sameAt mem idx expected 0 expected.size
+
 /-- Where `len` writable bytes at `addr` live, or `Wire.bad`. Lengths beyond any region are refused first. -/
 def writable (p : Program) (inputLen : Nat) (addr len : UInt64) : Nat :=
   if len > 0x10000000 then Wire.bad
@@ -870,7 +879,11 @@ def createProgramAddress (seeds : Array ByteArray) (programId : ByteArray) : Opt
     message := message ++ seed
   message := message ++ programId ++ "ProgramDerivedAddress".toUTF8
   let hash := Sha256.hash message
-  if Ed25519.Point.isOnCurve hash then
+  -- (whether a hash is a point on the curve is worked out once and remembered, where anything can be:
+  -- programs derive the same addresses again and again, and this is most of what deriving one costs)
+  let known := Fast.remembered hash
+  let onCurve := if known != 0 then known == 2 else Fast.remember hash (if Ed25519.Point.isOnCurve hash then 2 else 1) == 2
+  if onCurve then
     return none
   return some hash
 

@@ -311,6 +311,9 @@ enum {
   IN_COPY, IN_FILL, IN_MEMEQ,
   IN_CAS32, IN_CAS64, IN_XADD64, IN_XCHG32, IN_PAUSE, IN_RDTSC,
   IN_CALL,    // call the machine code at an address, with three arguments (rdi, rsi, rdx)
+  IN_SHA256,  // SHA-256's compression function over whole blocks, by the SHA instructions
+  IN_MOVE,    // copy between regions that do not overlap: sixteen bytes at a time up to 512, `rep movsb` beyond
+  IN_ZERORUN, IN_PLAINRUN, // how many bytes from an address on are zero (are not zero), sixteen at a time
   IN_PTR,     // address of heap object (borrowed arg)
   IN_OFPTR,   // reinterpret raw address as heap object (takes ownership)
   IN_DROPPED, // forget a value without releasing it

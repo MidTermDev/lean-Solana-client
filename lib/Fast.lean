@@ -82,6 +82,30 @@ def pushZeros (b : ByteArray) (n : Nat) : ByteArray := Id.run do
 /-- `n` zero bytes, in an array with room for `capacity` bytes. -/
 def zeroed (n capacity : Nat) : ByteArray := pushZeros (ByteArray.emptyWithCapacity (if capacity > n then capacity else n)) n
 
+/-- Whether the `n` bytes of `b` from `o` and the `n` bytes of `c` from `p` are the same; false if either
+range leaves its array. (Compared where they lie, eight at a time.) -/
+def sameAt (b : ByteArray) (o : Nat) (c : ByteArray) (p n : Nat) : Bool := Id.run do
+  if o + n > b.size || p + n > c.size then
+    return false
+  for i in [0:n] do
+    if b[o + i]! != c[p + i]! then
+      return false
+  return true
+
+/-- How many bytes of `b` from `i` on are zero, looking no further than `stop` (or the end). -/
+def zeroRun (b : ByteArray) (i stop : Nat) : Nat := Id.run do
+  let mut n := 0
+  while i + n < stop && i + n < b.size && b[i + n]! == 0 do
+    n := n + 1
+  return n
+
+/-- How many bytes of `b` from `i` on are not zero, looking no further than `stop` (or the end). -/
+def plainRun (b : ByteArray) (i stop : Nat) : Nat := Id.run do
+  let mut n := 0
+  while i + n < stop && i + n < b.size && b[i + n]! != 0 do
+    n := n + 1
+  return n
+
 /-- The high 64 bits of the 128-bit product `a × b`. -/
 def mulHi (a b : UInt64) : UInt64 :=
   let al := a &&& 0xFFFFFFFF
@@ -107,6 +131,9 @@ def compiled : Bool := false
 
 def quick : Bool := compiled && wide
 
+/-- The SHA-256 instructions (with AVX2, which every processor that is given them for speed also has). -/
+def sha : Bool := cpuBits &&& 0x20000020 == 0x20000020
+
 /-- The shifts whose count is in any register (`shlx`, `shrx`, `sarx`: BMI2). -/
 def anyShift : Bool := cpuBits &&& 0x100 != 0
 
@@ -127,6 +154,20 @@ What the code does is up to whoever wrote its bytes; all this promises is that n
 def run (entry : UInt64) (cpu : Array UInt64) (mem : ByteArray) (ro : ByteArray) : Array UInt64 × ByteArray :=
   if entry == 0 || ro.size == 0 then (cpu, mem) else (cpu, mem)
 
+-- ------------------------------------------------------- a memory outside the language
+--
+-- Some answers are expensive, a function of 32 bytes alone, and asked for again and again (is this hash
+-- a point on the curve?). `leanc` keeps a table of them for as long as the program runs. A pure function
+-- cannot have such a table, so in plain Lean these remember nothing: `remembered` answers 0 and the
+-- caller works the answer out, every time. The rule that keeps the two the same: only ever `remember`
+-- under a key a value that the key alone determines.
+
+/-- What was last noted under `key` (32 bytes that are already well mixed: a hash, an address), or 0. -/
+def remembered (key : ByteArray) : UInt64 := if key.size == 32 then 0 else 0
+
+/-- Notes `value` (not 0) under `key`, and returns it. -/
+def remember (key : ByteArray) (value : UInt64) : UInt64 := if key.size == 32 then value else value
+
 /-- Its argument. Written where a local is defined (`let mut pc := Fast.hotNat 0`), it tells `leanc` that
 this is one of the few values an inner loop turns on, to be kept in a processor register rather than in
 memory; `leanc` otherwise picks by counting uses, which says little about a loop with a hundred branches. -/
@@ -136,6 +177,70 @@ def hotNat (x : Nat) : Nat := x
 -- ------------------------------------------------------------ the vector operations, as Lean
 
 namespace Ref
+
+/-- SHA-256's round constants: the first 32 bits of the fractional parts of the cube roots of the first
+64 primes. -/
+def sha256K : Array UInt32 := #[
+  0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5, 0x3956c25b, 0x59f111f1, 0x923f82a4, 0xab1c5ed5,
+  0xd807aa98, 0x12835b01, 0x243185be, 0x550c7dc3, 0x72be5d74, 0x80deb1fe, 0x9bdc06a7, 0xc19bf174,
+  0xe49b69c1, 0xefbe4786, 0x0fc19dc6, 0x240ca1cc, 0x2de92c6f, 0x4a7484aa, 0x5cb0a9dc, 0x76f988da,
+  0x983e5152, 0xa831c66d, 0xb00327c8, 0xbf597fc7, 0xc6e00bf3, 0xd5a79147, 0x06ca6351, 0x14292967,
+  0x27b70a85, 0x2e1b2138, 0x4d2c6dfc, 0x53380d13, 0x650a7354, 0x766a0abb, 0x81c2c92e, 0x92722c85,
+  0xa2bfe8a1, 0xa81a664b, 0xc24b8b70, 0xc76c51a3, 0xd192e819, 0xd6990624, 0xf40e3585, 0x106aa070,
+  0x19a4c116, 0x1e376c08, 0x2748774c, 0x34b0bcb5, 0x391c0cb3, 0x4ed8aa4a, 0x5b9cca4f, 0x682e6ff3,
+  0x748f82ee, 0x78a5636f, 0x84c87814, 0x8cc70208, 0x90befffa, 0xa4506ceb, 0xbef9a3f7, 0xc67178f2]
+
+@[inline] def rotr32 (x : UInt32) (n : UInt32) : UInt32 := (x >>> n) ||| (x <<< (32 - n))
+
+/-- SHA-256's compression function (FIPS 180-4), over `blocks` 64-byte blocks of `data` from `off`.
+`state` is the eight working words h0 to h7, four bytes each, least significant byte first. -/
+def sha256Blocks (state0 : ByteArray) (data : ByteArray) (off blocks : Nat) : ByteArray := Id.run do
+  let mut state := state0
+  for block in [0:blocks] do
+    let at_ := off + 64 * block
+    let mut w : Array UInt32 := Array.replicate 64 0
+    for i in [0:16] do
+      let j := at_ + 4 * i
+      w := w.set! i ((data[j]!.toUInt32 <<< 24) ||| (data[j + 1]!.toUInt32 <<< 16) |||
+        (data[j + 2]!.toUInt32 <<< 8) ||| data[j + 3]!.toUInt32)
+    for i in [16:64] do
+      let w15 := w[i - 15]!
+      let w2 := w[i - 2]!
+      let s0 := rotr32 w15 7 ^^^ rotr32 w15 18 ^^^ (w15 >>> 3)
+      let s1 := rotr32 w2 17 ^^^ rotr32 w2 19 ^^^ (w2 >>> 10)
+      w := w.set! i (w[i - 16]! + s0 + w[i - 7]! + s1)
+    let mut a := (le32 state 0).toUInt32
+    let mut b := (le32 state 4).toUInt32
+    let mut c := (le32 state 8).toUInt32
+    let mut d := (le32 state 12).toUInt32
+    let mut e := (le32 state 16).toUInt32
+    let mut f := (le32 state 20).toUInt32
+    let mut g := (le32 state 24).toUInt32
+    let mut h := (le32 state 28).toUInt32
+    for i in [0:64] do
+      let s1 := rotr32 e 6 ^^^ rotr32 e 11 ^^^ rotr32 e 25
+      let ch := (e &&& f) ^^^ (~~~e &&& g)
+      let t1 := h + s1 + ch + sha256K[i]! + w[i]!
+      let s0 := rotr32 a 2 ^^^ rotr32 a 13 ^^^ rotr32 a 22
+      let maj := (a &&& b) ^^^ (a &&& c) ^^^ (b &&& c)
+      let t2 := s0 + maj
+      h := g
+      g := f
+      f := e
+      e := d + t1
+      d := c
+      c := b
+      b := a
+      a := t1 + t2
+    state := put32 state 0 ((le32 state 0).toUInt32 + a).toUInt64
+    state := put32 state 4 ((le32 state 4).toUInt32 + b).toUInt64
+    state := put32 state 8 ((le32 state 8).toUInt32 + c).toUInt64
+    state := put32 state 12 ((le32 state 12).toUInt32 + d).toUInt64
+    state := put32 state 16 ((le32 state 16).toUInt32 + e).toUInt64
+    state := put32 state 20 ((le32 state 20).toUInt32 + f).toUInt64
+    state := put32 state 24 ((le32 state 24).toUInt32 + g).toUInt64
+    state := put32 state 28 ((le32 state 28).toUInt32 + h).toUInt64
+  return state
 
 def add32 (f : ByteArray) (d a b : Nat) : ByteArray := Id.run do
   let mut out := f
@@ -303,6 +408,11 @@ def quarter32 (f : ByteArray) (a b c d mx my : Nat) : ByteArray :=
   xorRor32 f b b c 7
 
 end Ref
+
+/-- SHA-256's compression function over whole blocks (see `Ref.sha256Blocks`); with `sha`, the
+processor's own instructions for it. -/
+def sha256Blocks (state : ByteArray) (data : ByteArray) (off blocks : Nat) : ByteArray :=
+  Ref.sha256Blocks state data off blocks
 
 -- ---------------------------------------- the vector operations, as `leanc` compiles them
 

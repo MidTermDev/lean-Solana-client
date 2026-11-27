@@ -724,6 +724,155 @@ static bool gen_borrow_with_index(Expr *obj, Expr *idx) {
   return true;
 }
 
+// An SSE instruction on two xmm registers: an optional prefix, 0F, an optional second map byte, the opcode.
+static void sse_rr(int pfx, int map, int op, int reg, int rm) {
+  if (pfx) b1(pfx);
+  if (reg > 7 || rm > 7) b1(0x40 | (reg >> 3) << 2 | rm >> 3);
+  b1(0x0F);
+  if (map) b1(map);
+  b1(op), b1(0xC0 | (reg & 7) << 3 | (rm & 7));
+}
+// The same with its second operand in memory at [base + disp8] (base rsi or rdi).
+static void sse_rm(int pfx, int map, int op, int reg, int base, int disp) {
+  if (pfx) b1(pfx);
+  if (reg > 7) b1(0x44);
+  b1(0x0F);
+  if (map) b1(map);
+  b1(op), b1(0x40 | (reg & 7) << 3 | base), b1(disp);
+}
+// The same with its second operand at a place in the code (addressed from rip).
+static void sse_at(int pfx, int map, int op, int reg, int target) {
+  if (pfx) b1(pfx);
+  if (reg > 7) b1(0x44);
+  b1(0x0F);
+  if (map) b1(map);
+  b1(op), b1(0x05 | (reg & 7) << 3);
+  buf_u32(&code, (u32)(target - ((int)code.len + 4)));
+}
+
+// SHA-256's compression function by the SHA instructions: rdi = the eight words of state, rsi = the
+// data, rcx = how many 64-byte blocks. The sequence is Intel's: the state is kept as ABEF and CDGH in
+// two registers, each `sha256rnds2` does two rounds, and the message schedule is four registers that
+// `sha256msg1` and `sha256msg2` roll forward.
+static void gen_sha256(void) {
+  static const u32 K[64] = {
+      0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5, 0x3956c25b, 0x59f111f1, 0x923f82a4, 0xab1c5ed5,
+      0xd807aa98, 0x12835b01, 0x243185be, 0x550c7dc3, 0x72be5d74, 0x80deb1fe, 0x9bdc06a7, 0xc19bf174,
+      0xe49b69c1, 0xefbe4786, 0x0fc19dc6, 0x240ca1cc, 0x2de92c6f, 0x4a7484aa, 0x5cb0a9dc, 0x76f988da,
+      0x983e5152, 0xa831c66d, 0xb00327c8, 0xbf597fc7, 0xc6e00bf3, 0xd5a79147, 0x06ca6351, 0x14292967,
+      0x27b70a85, 0x2e1b2138, 0x4d2c6dfc, 0x53380d13, 0x650a7354, 0x766a0abb, 0x81c2c92e, 0x92722c85,
+      0xa2bfe8a1, 0xa81a664b, 0xc24b8b70, 0xc76c51a3, 0xd192e819, 0xd6990624, 0xf40e3585, 0x106aa070,
+      0x19a4c116, 0x1e376c08, 0x2748774c, 0x34b0bcb5, 0x391c0cb3, 0x4ed8aa4a, 0x5b9cca4f, 0x682e6ff3,
+      0x748f82ee, 0x78a5636f, 0x84c87814, 0x8cc70208, 0x90befffa, 0xa4506ceb, 0xbef9a3f7, 0xc67178f2};
+  enum { MSG = 0, S0 = 1, S1 = 2, M0 = 3, TMP = 7, MASK = 8, SAVE0 = 9, SAVE1 = 10 };
+#define MOVDQA(d, s) sse_rr(0x66, 0, 0x6F, d, s)
+#define PSHUFD(d, s, i) (sse_rr(0x66, 0, 0x70, d, s), b1(i))
+#define PALIGNR(d, s, i) (sse_rr(0x66, 0x3A, 0x0F, d, s), b1(i))
+#define PBLENDW(d, s, i) (sse_rr(0x66, 0x3A, 0x0E, d, s), b1(i))
+#define PADDD(d, s) sse_rr(0x66, 0, 0xFE, d, s)
+#define RNDS2(d, s) sse_rr(0, 0x38, 0xCB, d, s)
+  b1(0xE9), buf_u32(&code, 64 * 4 + 16); // over the constants
+  int k = (int)code.len;
+  for (int i = 0; i < 64; i++) buf_u32(&code, K[i]);
+  int mask = (int)code.len;
+  buf_u32(&code, 0x00010203), buf_u32(&code, 0x04050607), buf_u32(&code, 0x08090a0b), buf_u32(&code, 0x0c0d0e0f);
+  ins_rr(1, 0x85, -1, RCX, RCX); // test rcx, rcx
+  b1(0x0F), b1(0x84), buf_u32(&code, 0);
+  int none = (int)code.len;
+  b1(0xC5), b1(0xF8), b1(0x77);       // vzeroupper: no penalty for mixing with the wide registers' users
+  sse_rm(0xF3, 0, 0x6F, TMP, RDI, 0); // movdqu: DCBA
+  sse_rm(0xF3, 0, 0x6F, S1, RDI, 16); // HGFE
+  PSHUFD(TMP, TMP, 0xB1);             // CDAB
+  PSHUFD(S1, S1, 0x1B);               // EFGH
+  MOVDQA(S0, TMP);
+  PALIGNR(S0, S1, 8);                 // ABEF
+  PBLENDW(S1, TMP, 0xF0);             // CDGH
+  sse_at(0xF3, 0, 0x6F, MASK, mask);
+  int top = (int)code.len;
+  MOVDQA(SAVE0, S0);
+  MOVDQA(SAVE1, S1);
+  for (int i = 0; i < 16; i++) {
+    int m = M0 + i % 4, next = M0 + (i + 1) % 4, last = M0 + (i + 3) % 4;
+    if (i < 4) {
+      sse_rm(0xF3, 0, 0x6F, m, RSI, 16 * i);
+      sse_rr(0x66, 0x38, 0x00, m, MASK); // pshufb: the words are big-endian
+    }
+    sse_at(0xF3, 0, 0x6F, MSG, k + 16 * i); // (movdqu: the constants lie wherever the code put them)
+    PADDD(MSG, m);
+    RNDS2(S1, S0);
+    if (i >= 3 && i <= 14) {
+      MOVDQA(TMP, m);
+      PALIGNR(TMP, last, 4);
+      PADDD(next, TMP);
+      sse_rr(0, 0x38, 0xCD, next, m); // sha256msg2
+    }
+    PSHUFD(MSG, MSG, 0x0E);
+    RNDS2(S0, S1);
+    if (i >= 1 && i <= 12) sse_rr(0, 0x38, 0xCC, last, m); // sha256msg1
+  }
+  PADDD(S0, SAVE0);
+  PADDD(S1, SAVE1);
+  alu_ri(ALU_ADD, RSI, 64);
+  alu_ri(ALU_SUB, RCX, 1);
+  b1(0x0F), b1(0x85), buf_u32(&code, (u32)(top - ((int)code.len + 4)));
+  PSHUFD(TMP, S0, 0x1B); // FEBA
+  PSHUFD(S1, S1, 0xB1);  // DCHG
+  MOVDQA(S0, TMP);
+  PBLENDW(S0, S1, 0xF0); // DCBA
+  PALIGNR(S1, TMP, 8);   // HGFE
+  sse_rm(0xF3, 0, 0x7F, S0, RDI, 0);
+  sse_rm(0xF3, 0, 0x7F, S1, RDI, 16);
+  u32 d = (u32)((int)code.len - none);
+  memcpy(code.p + none - 4, &d, 4);
+#undef MOVDQA
+#undef PSHUFD
+#undef PALIGNR
+#undef PBLENDW
+#undef PADDD
+#undef RNDS2
+}
+
+// Three short routines given as their bytes, each with the assembly it was put together from.
+
+// Copies rcx bytes from rsi to rdi; the regions must not overlap. Up to 512 bytes go sixteen at a time
+// (`rep movsb` takes some thirty cycles to get going, which is most of a short copy):
+//       cmp rcx, 16 / jb 3f / cmp rcx, 512 / ja 5f
+//       movdqu xmm1, [rsi+rcx-16] / lea rdx, [rdi+rcx-16]        ; the last sixteen, and where they go
+//   1:  movdqu xmm0, [rsi] / movdqu [rdi], xmm0 / add rsi, 16 / add rdi, 16 / sub rcx, 16
+//       cmp rcx, 16 / jae 1b / movdqu [rdx], xmm1 / jmp 9f
+//   3:  cmp rcx, 8 / jb 5f                                       ; 8 to 15: two words that may overlap
+//       mov rax, [rsi] / mov rdx, [rsi+rcx-8] / mov [rdi], rax / mov [rdi+rcx-8], rdx / jmp 9f
+//   5:  rep movsb
+//   9:
+static const u8 code_move[] = {
+    0x48, 0x83, 0xF9, 0x10, 0x72, 0x34, 0x48, 0x81, 0xF9, 0x00, 0x02, 0x00, 0x00, 0x77, 0x43, 0xF3, 0x0F,
+    0x6F, 0x4C, 0x0E, 0xF0, 0x48, 0x8D, 0x54, 0x0F, 0xF0, 0xF3, 0x0F, 0x6F, 0x06, 0xF3, 0x0F, 0x7F, 0x07,
+    0x48, 0x83, 0xC6, 0x10, 0x48, 0x83, 0xC7, 0x10, 0x48, 0x83, 0xE9, 0x10, 0x48, 0x83, 0xF9, 0x10, 0x73,
+    0xE6, 0xF3, 0x0F, 0x7F, 0x0A, 0xEB, 0x1A, 0x48, 0x83, 0xF9, 0x08, 0x72, 0x12, 0x48, 0x8B, 0x06, 0x48,
+    0x8B, 0x54, 0x0E, 0xF8, 0x48, 0x89, 0x07, 0x48, 0x89, 0x54, 0x0F, 0xF8, 0xEB, 0x02, 0xF3, 0xA4};
+
+// rax = how many of the rcx bytes at rsi, from the first on, are zero:
+//       xor eax, eax / pxor xmm1, xmm1
+//   1:  lea rdx, [rax+16] / cmp rdx, rcx / ja 3f
+//       movdqu xmm0, [rsi+rax] / pcmpeqb xmm0, xmm1 / pmovmskb edx, xmm0    ; a bit for each zero byte
+//       cmp edx, 0xFFFF / jne 2f / add rax, 16 / jmp 1b
+//   2:  not edx / bsf edx, edx / add rax, rdx / jmp 9f
+//   3:  cmp rax, rcx / jae 9f / cmp byte [rsi+rax], 0 / jne 9f / inc rax / jmp 3b
+//   9:
+static const u8 code_zerorun[] = {
+    0x31, 0xC0, 0x66, 0x0F, 0xEF, 0xC9, 0x48, 0x8D, 0x50, 0x10, 0x48, 0x39, 0xCA, 0x77, 0x25, 0xF3, 0x0F,
+    0x6F, 0x04, 0x06, 0x66, 0x0F, 0x74, 0xC1, 0x66, 0x0F, 0xD7, 0xD0, 0x81, 0xFA, 0xFF, 0xFF, 0x00, 0x00,
+    0x75, 0x06, 0x48, 0x83, 0xC0, 0x10, 0xEB, 0xDC, 0xF7, 0xD2, 0x0F, 0xBC, 0xD2, 0x48, 0x01, 0xD0, 0xEB,
+    0x10, 0x48, 0x39, 0xC8, 0x73, 0x0B, 0x80, 0x3C, 0x06, 0x00, 0x75, 0x05, 0x48, 0xFF, 0xC0, 0xEB, 0xF0};
+
+// rax = how many of the rcx bytes at rsi, from the first on, are not zero: the same, looking for the
+// first zero byte (`test edx, edx / jnz 2f`, and no `not`; `je 9f` in the byte loop).
+static const u8 code_plainrun[] = {
+    0x31, 0xC0, 0x66, 0x0F, 0xEF, 0xC9, 0x48, 0x8D, 0x50, 0x10, 0x48, 0x39, 0xCA, 0x77, 0x1F, 0xF3,
+    0x0F, 0x6F, 0x04, 0x06, 0x66, 0x0F, 0x74, 0xC1, 0x66, 0x0F, 0xD7, 0xD0, 0x85, 0xD2, 0x75, 0x06,
+    0x48, 0x83, 0xC0, 0x10, 0xEB, 0xE0, 0x0F, 0xBC, 0xD2, 0x48, 0x01, 0xD0, 0xEB, 0x10, 0x48, 0x39,
+    0xC8, 0x73, 0x0B, 0x80, 0x3C, 0x06, 0x00, 0x74, 0x05, 0x48, 0xFF, 0xC0, 0xEB, 0xF0};
+
 static void gen_intrin(Expr *e) {
   static const int sysregs[] = {RAX, RDI, RSI, RDX, R10, R8, R9};
   int which = (int)e->num2, n = e->nargs;
@@ -764,12 +913,27 @@ static void gen_intrin(Expr *e) {
     pop_r(RDI), pop_r(RAX), pop_r(RCX);
     b1(0xF3), b1(0xAA);
     return;
-  case IN_MEMEQ: // a b n -> Bool
+  case IN_MEMEQ: { // a b n -> Bool
+    // Eight bytes at a time while eight are left, then `repe cmpsb` for the rest (which alone takes
+    // a couple of cycles over every byte).
     pop_r(RSI), pop_r(RDI), pop_r(RCX);
-    alu_rr(ALU_CMP, RAX, RAX); // ZF = 1 so that n = 0 compares equal
+    int top = (int)code.len;
+    alu_ri(ALU_CMP, RCX, 8);
+    int tail = jcc8(CC_B);
+    mov_rm(RAX, RSI, 0);
+    ins_mem(1, 0x3B, -1, RAX, RDI, 0); // cmp rax, [rdi]
+    int differ = jcc8(CC_NE);
+    alu_ri(ALU_ADD, RSI, 8);
+    alu_ri(ALU_ADD, RDI, 8);
+    alu_ri(ALU_SUB, RCX, 8);
+    b1(0xEB), b1((u8)(top - ((int)code.len + 1)));
+    patch8(tail);
+    alu_rr(ALU_CMP, RAX, RAX); // ZF = 1 so that nothing left compares equal
     b1(0xF3), b1(0xA6);
+    patch8(differ);
     setcc_movzx(CC_E);
     return;
+  }
   case IN_CAS32: // addr expected new -> previous value
     pop_r(RDI), pop_r(RAX), pop_r(RSI);
     b1(0xF0);
@@ -792,6 +956,22 @@ static void gen_intrin(Expr *e) {
     truncate(RAX, 32);
     return;
   case IN_PAUSE: b1(0xF3), b1(0x90); return;
+  case IN_MOVE: // dst src n
+    pop_r(RDI), pop_r(RSI), pop_r(RCX);
+    buf_put(&code, code_move, sizeof code_move);
+    return;
+  case IN_ZERORUN: // address, how many bytes -> how many of them, from the first on, are zero
+    pop_r(RSI), pop_r(RCX);
+    buf_put(&code, code_zerorun, sizeof code_zerorun);
+    return;
+  case IN_PLAINRUN:
+    pop_r(RSI), pop_r(RCX);
+    buf_put(&code, code_plainrun, sizeof code_plainrun);
+    return;
+  case IN_SHA256: // state, data, blocks
+    pop_r(RDI), pop_r(RSI), pop_r(RCX);
+    gen_sha256();
+    return;
   case IN_CALL: // address, then what it finds in rdi, rsi, rdx; it must keep rbx, rbp and r12-r15
     pop_r(RAX), pop_r(RDI), pop_r(RSI), pop_r(RDX);
     b1(0xFF), b1(0xD0);
@@ -1698,7 +1878,7 @@ void gen_program(Func *main_fn, Buf *out) {
   b1(0x0F), b1(0x05);
 
   // A function marked @[inline] is compiled on its own only if a call to it remains somewhere.
-  bool *emitted = xalloc((u64)nwork + 1);
+  bool *emitted = xalloc(sizeof(bool) * ((u64)nwork + 1));
   for (int i = 0; i < nwork; i++) {
     Func *f = work[i];
     if (f->node && (f->node->flag & 4)) continue;

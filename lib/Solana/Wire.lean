@@ -94,12 +94,6 @@ def putVarint (b : ByteArray) (v : UInt64) : ByteArray := Id.run do
   return out.push x.toUInt8
 
 /-- True when `b[o .. o + n)` equals `c[p .. p + n)`. -/
-def eqAt (b : ByteArray) (o : Nat) (c : ByteArray) (p n : Nat) : Bool := Id.run do
-  if o + n > b.size || p + n > c.size then
-    return false
-  for i in [0:n] do
-    if b[o + i]! != c[p + i]! then
-      return false
-  return true
+@[inline] def eqAt (b : ByteArray) (o : Nat) (c : ByteArray) (p n : Nat) : Bool := Fast.sameAt b o c p n
 
 end Wire

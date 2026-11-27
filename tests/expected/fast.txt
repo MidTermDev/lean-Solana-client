@@ -14,3 +14,7 @@ move, set32, add32x3, xorRor32: fea1ebb533be308cfa8dcd17
 interleaving and picking quarters: 372c3e3d93b1eec800d9ed05
 the quarter-round: ab58056f12d71f05b8fda997
 and the file they started from: 780639485bf2fc605d5bc1e7
+sha256Blocks: 13e0925da8e8b0f852e3e7cac0f828c8049c33231787a2b4cb98874678354955..., the instructions agree: true
+sameAt: sssdsdsdsdsdsdsdsssdsdsdsdsdsdsdsssdsdsdsdsdsdsdsssdsdsdsdsdsdsdsssdsdsdsdsdsdsdsssdsdsdsdsdddddsssddddddddddddd
+noted and recalled: 41 41
+zeroRun and plainRun: 60998 over every position, 0 wrong

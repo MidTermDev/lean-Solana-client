@@ -32,6 +32,12 @@ namespace Mem
 @[extern "leanc_store64"] opaque store64 (addr val : UInt64) : IO Unit
 /-- `rep movsb`: copies `n` bytes from `src` to `dst`. -/
 @[extern "leanc_copy"] opaque copy (dst src n : UInt64) : IO Unit
+/-- Copies `n` bytes between regions that do not overlap; quicker than `copy` for a few hundred bytes or fewer. -/
+@[extern "leanc_move"] opaque move (dst src n : UInt64) : IO Unit
+/-- How many of the `n` bytes at `addr`, from the first on, are zero. -/
+@[extern "leanc_zerorun"] opaque zeroRun (addr n : UInt64) : IO UInt64
+/-- How many of the `n` bytes at `addr`, from the first on, are not zero. -/
+@[extern "leanc_plainrun"] opaque plainRun (addr n : UInt64) : IO UInt64
 /-- `rep stosb`: fills `n` bytes at `dst` with `byte`. -/
 @[extern "leanc_fill"] opaque fill (dst byte n : UInt64) : IO Unit
 /-- `repe cmpsb`: true when the two `n`-byte regions are equal. -/
@@ -50,6 +56,9 @@ namespace Mem
 /-- Calls the machine code at `addr`, which finds `a`, `b` and `c` in rdi, rsi and rdx, and must leave
 rbx, rbp, rsp and r12-r15 as it found them. Returns what it leaves in rax. -/
 @[extern "leanc_call"] opaque call (addr a b c : UInt64) : IO UInt64
+/-- SHA-256's compression function, by the processor's SHA instructions: folds `blocks` 64-byte blocks
+at `data` into the eight 32-bit words at `state`. -/
+@[extern "leanc_sha256"] opaque sha256 (state data blocks : UInt64) : IO Unit
 
 end Mem
 
@@ -70,6 +79,7 @@ def bss : UInt64 := 0x20000000
 def heapCur : UInt64 := 0x20000008
 def heapEnd : UInt64 := 0x20000010
 def scratch : UInt64 := 0x20000040
+def memoTable : UInt64 := 0x20000018
 def freeLists : UInt64 := 0x20000100
 def chunkSize : UInt64 := 0x400000
 def bigThreshold : UInt64 := 0x100000
@@ -308,17 +318,10 @@ def baPush64 (p v : UInt64) : IO UInt64 := baPushLe p v 8
 /-- Copies `n` bytes. A short copy (an address, a number) goes eight bytes at a time: `rep movsb` has a
 start-up cost that is most of what a short copy costs. Long, tiny or overlapping ones are left to it. -/
 def copyBytes (dst src n : UInt64) : IO Unit := do
-  if n > 64 || n < 8 || (dst < src + n && src < dst + n) then
+  if dst < src + n && src < dst + n then
     Mem.copy dst src n
-    return
-  let mut i : UInt64 := 0
-  while i + 8 <= n do
-    let word ← Mem.load64 (src + i)
-    Mem.store64 (dst + i) word
-    i := i + 8
-  if i < n then
-    let last ← Mem.load64 (src + n - 8)
-    Mem.store64 (dst + n - 8) last
+  else
+    Mem.move dst src n
 
 /-- `a ++ b`: consumes `a`, borrows `b`. Appends in place when `a` is unique. -/
 def baAppend (a b : UInt64) : IO UInt64 := do
@@ -401,6 +404,14 @@ def baEq (a b : UInt64) : IO Bool := do
       return x1 == y1 && x2 == y2 && x3 == y3
   Mem.eq (a + 24) (b + 24) sa
 
+/-- `Fast.sameAt`: whether `n` bytes of `b` from `o` equal `n` bytes of `c` from `p`. -/
+def baSameAt (b o c p n : UInt64) : IO Bool := do
+  let sb ← Mem.load64 (b + 8)
+  let sc ← Mem.load64 (c + 8)
+  if n > sb || o > sb - n || n > sc || p > sc - n then
+    return false
+  Mem.eq (b + 24 + o) (c + 24 + p) n
+
 def baIsEmpty (b : UInt64) : IO Bool := do
   let size ← Mem.load64 (b + 8)
   return size == 0
@@ -475,6 +486,67 @@ def arrUnique (p isPtr : UInt64) : IO UInt64 := do
     incElems q size
   Mem.store64 p (rc - 1)
   return q
+
+/-- `Fast.zeroRun`: how many bytes of `b` from `i` on are zero, looking no further than `stop`. -/
+def baZeroRun (b i stop : UInt64) : IO UInt64 := do
+  let size ← Mem.load64 (b + 8)
+  let last := if stop < size then stop else size
+  if i >= last then
+    return 0
+  let n ← Mem.zeroRun (b + 24 + i) (last - i)
+  return n
+
+/-- `Fast.plainRun`: how many bytes of `b` from `i` on are not zero, looking no further than `stop`. -/
+def baPlainRun (b i stop : UInt64) : IO UInt64 := do
+  let size ← Mem.load64 (b + 8)
+  let last := if stop < size then stop else size
+  if i >= last then
+    return 0
+  let n ← Mem.plainRun (b + 24 + i) (last - i)
+  return n
+
+/-- `Fast.sha256Blocks`: the state (32 bytes) after `blocks` 64-byte blocks of `data` from `off`. -/
+def sha256Blocks (state data off blocks : UInt64) : IO UInt64 := do
+  let st ← baUnique state
+  let ssz ← Mem.load64 (st + 8)
+  let dsz ← Mem.load64 (data + 8)
+  if ssz < 32 || blocks > dsz / 64 || off > dsz - 64 * blocks then
+    panic 1 0
+  Mem.sha256 (st + 24) (data + 24 + off) blocks
+  return st
+
+/-- The slot of the table behind `Fast.remembered` where a 32-byte key belongs: 65,536 slots of 48 bytes
+(the key, the value, a spare word), in memory asked for the first time it is used. A slot holds the
+last key that landed in it. -/
+def memoSlot (key : UInt64) : IO UInt64 := do
+  let mut t ← Mem.load64 memoTable
+  if t == 0 then
+    t ← mmapAnon 3145728
+    Mem.store64 memoTable t
+  let h ← Mem.load64 (key + 24)
+  return t + ((h ^^^ (h >>> 29)) &&& 0xFFFF) * 48
+
+/-- `Fast.remembered`: the value noted under this key, or 0. -/
+def memoGet (key : UInt64) : IO UInt64 := do
+  let size ← Mem.load64 (key + 8)
+  if size != 32 then
+    return 0
+  let slot ← memoSlot key
+  let same ← Mem.eq slot (key + 24) 32
+  if !same then
+    return 0
+  let value ← Mem.load64 (slot + 32)
+  return value
+
+/-- `Fast.remember`: notes a value under a key, and returns it. -/
+def memoPut (key value : UInt64) : IO UInt64 := do
+  let size ← Mem.load64 (key + 8)
+  if size != 32 then
+    return value
+  let slot ← memoSlot key
+  Mem.copy slot (key + 24) 32
+  Mem.store64 (slot + 32) value
+  return value
 
 /-- `Fast.codeLoad`: a copy of an array's bytes in memory that may be executed (and no longer written);
 its address, or 0 if the system will not give such memory. -/
