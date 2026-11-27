@@ -19,7 +19,8 @@
   <a href="#the-lean-you-can-write">The Lean subset</a> ·
   <a href="#checked-against-the-real-lean">Verification</a> ·
   <a href="#numbers">Numbers</a> ·
-  <a href="#limits-and-roadmap">Limits</a>
+  <a href="#limits-and-roadmap">Limits</a> ·
+  <a href="#funding">Funding</a>
 </p>
 
 Inspired by toly's remark that a Lean Solana client would be easy once you have your own dependency-free Lean compiler and a raw futex for IPC. This repository takes that literally:
@@ -1066,6 +1067,16 @@ Not yet. The code is ordinary Lean that the official toolchain type-checks, whic
 
 **Is it safe to run?**
 It opens one UDP socket, makes outbound connections to public Solana nodes, and writes nothing to disk. Your address becomes visible to the gossip network, as it does for any node.
+
+## Funding
+
+Development is funded through a token on Solana:
+
+```
+B2HU7PEkoKmhkMhfZa5tFN3YJdwLeLq6Fg85saoo111
+```
+
+It is used to raise funds for development and for creating full validators on this client.
 
 ## Acknowledgements
 
