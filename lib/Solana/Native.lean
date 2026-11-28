@@ -68,13 +68,15 @@ def assignOwner (st : State) (target : Meta) (owner : ByteArray) : State :=
   else if account.owner != systemProgram || !target.writable then st.stop accountRule ruleOwner
   else { st with accounts := st.accounts.set! target.index { account with owner := owner } }
 
-/-- The system program's `transfer`: lamports from a signing, data-less, system-owned account to any account. -/
+/-- The system program's `transfer`: lamports from a signing, data-less, system-owned account to any
+account. (Nothing at all may be "taken" from an account of any owner: programs do that to have the
+balances they changed themselves written back.) -/
 def systemTransfer (st : State) (source dest : Meta) (amount : UInt64) : State :=
   let from_ := st.accounts[source.index]!
   if !source.signer then programError st 8
   else if from_.data.size != 0 then programError st 2
   else if amount > from_.lamports then systemError st 1
-  else if from_.owner != systemProgram then st.stop accountRule ruleSpend
+  else if amount != 0 && from_.owner != systemProgram then st.stop accountRule ruleSpend
   else if !source.writable || !dest.writable then st.stop accountRule ruleReadOnlyBalance
   else
     let accounts := st.accounts.set! source.index { from_ with lamports := from_.lamports - amount }
@@ -613,12 +615,14 @@ def loaderInstruction (m : Machine) (st0 : State) (metas : Array Meta) (data : B
       return st.stop accountRule (loaderMay st metas[0]!)
     let emptied := setAccount st metas[0]! { account with data := zeros ByteArray.empty 4 }
     return moveLamports emptied metas[0]! metas[1]! account.lamports
-  if tag == 9 then
-    -- ExtendProgramChecked { bytes }: more room for the code, paid for by account 4 if rent requires it.
-    -- Accounts: program data, program, authority, system program, payer.
+  if tag == 9 || tag == 6 then
+    -- ExtendProgramChecked { bytes }: more room for the code, paid for by the last account if rent requires
+    -- it. Accounts: program data, program, authority, system program, payer. ExtendProgram, the older
+    -- form, has no authority among them and asks for none (but the program must still have one).
+    let payer := if tag == 9 then 4 else 3
     if data.size < 8 || Wire.u32 data 4 == 0 then
       return programError st 3
-    if metas.size < 3 then
+    if metas.size < payer - 1 then
       return programError st 11
     let programData := st.accounts[metas[0]!.index]!
     let program := st.accounts[metas[1]!.index]!
@@ -640,15 +644,15 @@ def loaderInstruction (m : Machine) (st0 : State) (metas : Array Meta) (data : B
     if Wire.u64 programData.data 4 == slot then
       return programError st 2
     let authority := optionalKey programData.data 12
-    let bad := authorityError st metas authority 2
+    let bad := if tag == 9 then authorityError st metas authority 2 else if authority.size != 32 then 25 else 0
     if bad != 0 then
       return programError st bad
     let required := if m.rentMinimum size == 0 then 1 else m.rentMinimum size
     let mut paid := st
     if required > programData.lamports then
-      if metas.size < 5 then
+      if metas.size <= payer then
         return programError st 11
-      paid := systemInstruction m st #[metas[4]!, metas[0]!] (Wire.putU64 (Wire.putU32 ByteArray.empty 2) (required - programData.lamports))
+      paid := systemInstruction m st #[metas[payer]!, metas[0]!] (Wire.putU64 (Wire.putU32 ByteArray.empty 2) (required - programData.lamports))
       if paid.status != finished then
         return paid
     let grown := paid.accounts[metas[0]!.index]!
@@ -656,7 +660,7 @@ def loaderInstruction (m : Machine) (st0 : State) (metas : Array Meta) (data : B
     if (load (bigger.extract 45 size)).error != "" then
       return programError paid 4
     return setAccount paid metas[0]! { grown with data := (programDataHeader slot authority).copySlice 0 bigger 0 45 }
-  -- ExtendProgram (replaced by the checked form), Migrate (to a loader that is not enabled), or unknown
+  -- Migrate (to a loader that is not enabled), or unknown
   return programError st 3
 
 end Sbpf

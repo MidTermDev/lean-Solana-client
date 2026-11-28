@@ -118,7 +118,8 @@ def hasProgram (bank : Bank) (id : ByteArray) : Bool := bank.machine.find id != 
 of the loader, the code in its program data account is loaded and registered,
 callable from the slot after it was deployed. A program whose data account
 was closed stops being callable. With `all` unset, programs that are already
-registered are left alone. -/
+registered are left alone; with it, they are read again where their data
+account is among the accounts. -/
 def Bank.withPrograms (bank : Bank) (keys : Array ByteArray) (all : Bool) : Bank := Id.run do
   let mut out := bank
   for key in keys do
@@ -129,7 +130,9 @@ def Bank.withPrograms (bank : Bank) (keys : Array ByteArray) (all : Bool) : Bank
         -- the older loaders: the account's data is the program (and the first loader's programs take their input packed)
         let program := Sbpf.parse account.data
         out := { out with machine := out.machine.add key { program with since := (if program.error != "" then 0xFFFFFFFFFFFFFFFF else 0), packed := account.owner == loaderV1 } }
-      else if account.owner == Sbpf.loaderId && Sbpf.loaderKind account == 2 && (all || !(hasProgram out key)) then
+      else if account.owner == Sbpf.loaderId && Sbpf.loaderKind account == 2
+          && (!(hasProgram out key) || (all && find out.accounts (account.data.extract 4 36) != Sbpf.notFound)) then
+        -- (a registered program is read again only if its code is at hand: whatever changed it had to name it)
         let holder := find out.accounts (account.data.extract 4 36)
         let code := if holder == Sbpf.notFound then ByteArray.empty else out.accounts[holder]!.data
         let program := if code.size > 45 && Wire.u32 code 0 == 3 then Sbpf.parse (code.extract 45 code.size)
