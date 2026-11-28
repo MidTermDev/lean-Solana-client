@@ -926,19 +926,28 @@ def main : IO Unit := do
         IO.sleep 20
         continue
     else
-      -- the first block saved after this one, which must be built on it
+      -- of the blocks saved for the slots after this one: the one built on it that leads to a block some
+      -- footer calls final (a leader's blocks can be passed over by the next leader), or, where the saved
+      -- blocks end and no footer says, the first one built on it
       for s in [1:65] do
-        if waiting.size == 0 then
+        if waitingAt waiting (slot + s.toUInt64) == Sbpf.notFound then
           let w ← savedBlock blocksDir (slot + s.toUInt64)
           if w.block.error == "" then
             waiting := waiting.push w
       if waiting.size == 0 then
         fail s!"no block is saved for the slots after {slot}"
-      if waiting[0]!.parent != slot then
-        fail s!"the block saved for slot {waiting[0]!.slot} is built on slot {waiting[0]!.parent}, and the state is that of slot {slot}"
-      chosen := 0
+      let (found, _, _) := next waiting slot lastId false
+      chosen := found
+      let mut first := 0
+      for k in [0:waiting.size] do
+        if waiting[k]!.slot < waiting[first]!.slot then
+          first := k
+        if found == Sbpf.notFound && waiting[k]!.parent == slot && (chosen == Sbpf.notFound || waiting[k]!.slot < waiting[chosen]!.slot) then
+          chosen := k
+      if chosen == Sbpf.notFound then
+        fail s!"the block saved for slot {waiting[first]!.slot} is built on slot {waiting[first]!.parent}, and the state is that of slot {slot}"
       -- (a block whose certificate does not hold is no block; checked with the signatures)
-      let w := waiting[0]!
+      let w := waiting[chosen]!
       if checkers != 0 && w.final.finalSlot != 0 then
         signers := signersFor manifest signers w.final.finalSlot
         if !(Alpenglow.finalProven w.final signers w.version) then

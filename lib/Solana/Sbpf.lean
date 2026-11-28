@@ -149,6 +149,9 @@ partial def invoke (m : Machine) (st0 : State) (callerId : ByteArray) (callerMet
       if (wantSign && !maySign) || (wantWrite && held &&& 4 == 0) then
         return (st.stop privilegeEscalation (Base58.encode key), mem, input)
       metas := metas.push ⟨index, wantSign, wantWrite⟩
+    -- the program called must itself be among the transaction's accounts
+    if findAccount st.accounts call.programId == notFound then
+      return (st.stop unknownProgram (Base58.encode call.programId), mem, input)
     -- a reference repeated with different rights gets the union of them
     for i in [0:metas.size] do
       let r := rights metas metas[i]!.index
