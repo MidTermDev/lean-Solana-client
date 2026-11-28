@@ -364,10 +364,10 @@ def authorityError (st : State) (metas : Array Meta) (authority : ByteArray) (wh
 def voteProgram : ByteArray := Base58.decode "Vote111111111111111111111111111111111111111"
 
 /-- The vote program, as far as it is provided, now that votes are no longer transactions: Withdraw (3),
-by which a validator takes lamports out of its vote account (account 0) to account 1, and
-UpdateCommission (5). The account's withdraw authority must sign. What a withdrawal leaves must cover
-the account's size, or be nothing, which empties the account, and that only once the validator has
-earned no credits for a whole epoch. -/
+by which a validator takes lamports out of its vote account (account 0) to account 1, UpdateCommission
+(5) and UpdateCommissionCollector (17). The account's withdraw authority must sign. What a withdrawal
+leaves must cover the account's size, or be nothing, which empties the account, and that only once the
+validator has earned no credits for a whole epoch. -/
 def voteInstruction (m : Machine) (st0 : State) (metas : Array Meta) (data : ByteArray) : State := Id.run do
   let st := st0.charge 2100
   if metas.size < 1 then
@@ -384,11 +384,16 @@ def voteInstruction (m : Machine) (st0 : State) (metas : Array Meta) (data : Byt
     return programError st 3
   if metas.size < (if tag == 3 then 2 else if tag == 17 then 3 else 1) then
     return programError st 11
-  let state := Alpenglow.VoteState.parse account.data
+  let state := Alpenglow.VoteState.read account.data
   if !state.ok then
-    return st.stop unsupportedInstruction "a vote account in an older layout is not provided for"
-  if Wire.u64 state.voters 0 == 0 then
+    return programError st 4
+  -- (an account in an older layout is one nobody has written since: it may be withdrawn from as it is,
+  -- and names no voters if it was never set up)
+  let older := Wire.u32 account.data 0 != 3
+  if older && Wire.u64 state.voters 0 == 0 then
     return programError st 10
+  if older && tag != 3 then
+    return st.stop unsupportedInstruction "bringing a vote account in an older layout up to the present one is not provided"
   if !(signedBy st metas (account.data.extract 36 68)) then
     return programError st 8
   -- UpdateCommissionCollector: who receives the rewards' commission (0) or the block fees (1): the vote
@@ -414,12 +419,12 @@ def voteInstruction (m : Machine) (st0 : State) (metas : Array Meta) (data : Byt
   let mut left := st
   if account.lamports == lamports then
     let entries := state.credits.size
-    if Wire.u64 account.data 136 != 0 then
+    if !older && Wire.u64 account.data 136 != 0 then
       return programError st 6
     if entries >= 3 && m.clock.epoch < state.credits[entries - 3]! + 2 then
       return customError st 18
     left := setAccount st metas[0]! { account with data := zeros ByteArray.empty account.data.size }
-  else if account.lamports - lamports < m.rentMinimum account.data.size + Wire.u64 account.data 136 then
+  else if account.lamports - lamports < m.rentMinimum account.data.size + (if older then 0 else Wire.u64 account.data 136) then
     return programError st 6
   return moveLamports left metas[0]! metas[1]! lamports
 

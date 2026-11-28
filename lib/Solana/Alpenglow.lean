@@ -242,16 +242,19 @@ structure VoteState where
 
 def notVoteState : VoteState := ⟨false, ByteArray.empty, ByteArray.empty, false, 0, ByteArray.empty, Array.emptyWithCapacity 0, 0, 0, 0⟩
 
-def VoteState.parse (d : ByteArray) : VoteState := Id.run do
-  if d.size < 200 || Wire.u32 d 0 != 3 then
+/-- A vote account's state in the present layout (3) or the two before it (1 and 2), which accounts
+untouched since keep: those have a shorter head, a list of earlier voters (1,545 bytes) before the
+credits, and in layout 1 votes of 12 bytes. Only the present layout can be written back. -/
+def VoteState.read (d : ByteArray) : VoteState := Id.run do
+  let layout := Wire.u32 d 0
+  if d.size < 200 || layout == 0 || layout > 3 then
     return notVoteState
-  let mut o := 144
-  o := if d[o]! == 1 then o + 49 else o + 1
+  let mut o := if layout < 3 then 69 else if d[144]! == 1 then 193 else 145
   let votesAt := o
   let votes := Wire.u64 d o
   if votes > 64 then
     return notVoteState
-  o := o + 8 + 13 * votes.toNat
+  o := o + 8 + (if layout == 1 then 12 else 13) * votes.toNat
   if o + 9 > d.size then
     return notVoteState
   let hasRoot := d[o]! == 1
@@ -262,7 +265,10 @@ def VoteState.parse (d : ByteArray) : VoteState := Id.run do
   let voters := Wire.u64 d o
   if voters > 64 then
     return notVoteState
-  o := o + 8 + 40 * voters.toNat
+  let votersEnd := o + 8 + 40 * voters.toNat
+  o := if layout < 3 then votersEnd + 1545 else votersEnd
+  if o + 8 > d.size then
+    return notVoteState
   let creditsCount := Wire.u64 d o
   if creditsCount > 128 || o + 8 + 24 * creditsCount.toNat + 16 > d.size then
     return notVoteState
@@ -270,8 +276,11 @@ def VoteState.parse (d : ByteArray) : VoteState := Id.run do
   for i in [0:3 * creditsCount.toNat] do
     credits := credits.push (Wire.u64 d (o + 8 + 8 * i))
   let after := o + 8 + 24 * creditsCount.toNat
-  return ⟨true, d.extract 0 votesAt, d.extract votesAt votesEnd, hasRoot, root, d.extract votersAt o, credits,
+  return ⟨true, d.extract 0 votesAt, d.extract votesAt votesEnd, hasRoot, root, d.extract votersAt votersEnd, credits,
     Wire.u64 d after, Wire.u64 d (after + 8), d.size⟩
+
+/-- The state of a vote account in the present layout. -/
+def VoteState.parse (d : ByteArray) : VoteState := if Wire.u32 d 0 == 3 then VoteState.read d else notVoteState
 
 /-- The state as account data again, padded to the account's size. Empty if it no longer fits. -/
 def VoteState.bytes (s : VoteState) : ByteArray := Id.run do
