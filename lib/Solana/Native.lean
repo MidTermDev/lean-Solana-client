@@ -378,11 +378,11 @@ def voteInstruction (m : Machine) (st0 : State) (metas : Array Meta) (data : Byt
   if data.size < 4 then
     return programError st 3
   let tag := Wire.u32 data 0
-  if tag != 3 && tag != 5 then
+  if tag != 3 && tag != 5 && tag != 17 then
     return st.stop unsupportedInstruction s!"instruction {tag} of the vote program is not provided"
-  if data.size < (if tag == 3 then 12 else 5) then
+  if data.size < (if tag == 3 then 12 else if tag == 17 then 8 else 5) || (tag == 17 && Wire.u32 data 4 > 1) then
     return programError st 3
-  if tag == 3 && metas.size < 2 then
+  if metas.size < (if tag == 3 then 2 else if tag == 17 then 3 else 1) then
     return programError st 11
   let state := Alpenglow.VoteState.parse account.data
   if !state.ok then
@@ -391,8 +391,20 @@ def voteInstruction (m : Machine) (st0 : State) (metas : Array Meta) (data : Byt
     return programError st 10
   if !(signedBy st metas (account.data.extract 36 68)) then
     return programError st 8
-  if !metas[0]!.writable && (tag == 5 || account.lamports == Wire.u64 data 4) then
+  -- UpdateCommissionCollector: who receives the rewards' commission (0) or the block fees (1): the vote
+  -- account itself, or a plain account that needs no rent and may be written
+  let collector := st.accounts[metas[if tag == 17 then 1 else 0]!.index]!
+  if tag == 17 && collector.key != account.key then
+    if collector.owner != systemProgram then
+      return programError st 23
+    if collector.lamports < m.rentMinimum collector.data.size then
+      return programError st 6
+    if !metas[1]!.writable then
+      return programError st 2
+  if !metas[0]!.writable && (tag != 3 || account.lamports == Wire.u64 data 4) then
     return st.stop accountRule ruleReadOnly
+  if tag == 17 then
+    return setAccount st metas[0]! { account with data := collector.key.copySlice 0 account.data (if Wire.u32 data 4 == 0 then 68 else 100) 32 }
   if tag == 5 then
     -- (a percentage, kept in hundredths of a percent)
     return setAccount st metas[0]! { account with data := storeAt account.data 132 2 (data[4]!.toUInt64 * 100) }
