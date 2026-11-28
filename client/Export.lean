@@ -61,6 +61,10 @@ def json (sh : Shared) (cfg : Config) (withNodes : Bool) : IO String := do
   s := s ++ s!"  \"tipSlot\": {← m.get M.tipSlot},\n"
   s := s ++ s!"  \"tipReporters\": {← m.get M.tipReporters},\n"
   s := s ++ s!"  \"nodeCount\": {← m.get M.nodes},\n"
+  -- how far `leansol replay --live` has executed the chain, if it is running beside this node
+  let replay ← if cfg.spool != "" then Sys.readFile s!"{cfg.spool}/replay.json" 4096 else pure ByteArray.empty
+  if replay.size != 0 then
+    s := s ++ s!"  \"replay\": {String.fromUTF8! replay},\n"
   -- blocks fetched from validators and checked by the block tile
   let mut leader := ByteArray.emptyWithCapacity 32
   let mut blockhash := ByteArray.emptyWithCapacity 32

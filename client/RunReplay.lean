@@ -1290,6 +1290,9 @@ def main : IO Unit := do
         IO.println s!"footer: final slot {certs.finalSlot} ({certs.finalBits.size} bitmaps), reward slot {certs.rewardSlot} ({certs.rewardBits.size} bitmaps), leader reward {leaderReward} to {leaderCredited}, migration epoch {migrationEpoch}"
       IO.println s!"  bank hash  {Base58.encode bankHash}"
       IO.println s!"  the block's {Base58.encode block.bankHash}  {if bankHash == block.bankHash then "MATCH" else "(differs)"}{if checkers == 0 then "" else if bad == 0 then " · signatures valid" else s!" · {bad} SIGNATURES DO NOT VERIFY"}"
+    -- (how it is going, for the node to show: see `Export.json`)
+    if live && (bankHash != block.bankHash || (← Sys.nowMs) - reported >= 5000) then
+      let _ ← Sys.writeFileAtomic s!"{blocksDir}/replay.json" s!"\{\"slot\": {slot}, \"executed\": {n}, \"behind\": {if tip > slot then tip - slot else 0}, \"savedSlot\": {savedSlot}, \"at\": {← Sys.nowMs}, \"stopped\": {bankHash != block.bankHash}}".toUTF8
     if live && bankHash != block.bankHash then
       fail s!"stopped at slot {slot}, built on slot {parent}. The state saved is that of slot {savedSlot}, and the blocks since are in {blocksDir}"
     if follow && block.bankHash.size == 32 then

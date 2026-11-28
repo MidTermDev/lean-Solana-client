@@ -293,6 +293,7 @@
                 <dt>chained</dt><dd id="b-linked">—</dd>
                 <dt>shreds</dt><dd id="b-shreds">—</dd>
                 <dt>failed a check</dt><dd id="b-bad">—</dd>
+                <dt>executed</dt><dd id="b-run">not on this node yet</dd>
               </dl>
             </div>
             <div class="panel wide">
@@ -593,6 +594,12 @@ async function tick() {
         $('b-hash').textContent = b.last.blockhash;
         $('b-size').textContent = `${fmt(b.last.transactions)} transactions in ${fmt(b.last.shreds)} shreds; fetched in ${fmt(b.last.fetchMs)} ms, verified in ${fmt(b.last.verifyMs)} ms`;
       }
+    }
+    if (d.replay) {
+      const r = d.replay;
+      $('b-run').textContent = r.stopped ? `stopped at slot ${fmt(r.slot)}: something mainnet uses that is not written yet`
+        : d.timestampMs - r.at > 60000 ? `up to slot ${fmt(r.slot)}; not running now`
+        : `slot ${fmt(r.slot)}: ${fmt(r.executed)} blocks in a row to the bank hashes their leaders signed; ${fmt(r.behind)} slots behind the chain`;
     }
     bars($('clients'), Object.entries(d.clients), d.nodeCount);
     bars($('versions'), Object.entries(d.versions).slice(0, 10), d.nodeCount);
