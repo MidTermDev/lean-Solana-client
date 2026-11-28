@@ -232,6 +232,8 @@ structure Contents where
   bankHash : ByteArray
   producedAt : UInt64
   certificates : ByteArray
+  /-- from the header: the id of the block this one is built on -/
+  parentId : ByteArray
   deriving Inhabited
 
 /-- Reads a block's transactions and footer out of its data shreds (all of them, in order). Nothing is verified here. -/
@@ -241,11 +243,14 @@ def contents (shreds : Array ByteArray) : Contents := Id.run do
   let mut bankHash := ByteArray.empty
   let mut producedAt : UInt64 := 0
   let mut certificates := ByteArray.empty
+  let mut parentId := ByteArray.empty
   for batch in batches shreds do
     if batch.size >= 13 && Wire.u64 batch 0 == 0 then
       let length := (Wire.u16 batch 11).toNat
       if Wire.u16 batch 8 != 1 || 13 + length > batch.size then
-        return ⟨"a block marker is malformed", transactions, blockhash, bankHash, 0, certificates⟩
+        return ⟨"a block marker is malformed", transactions, blockhash, bankHash, 0, certificates, parentId⟩
+      if Wire.u8 batch 10 == 1 && length >= 41 then
+        parentId := batch.extract 22 54
       if Wire.u8 batch 10 == 0 && length >= 42 then
         bankHash := batch.extract 14 46
         producedAt := Wire.u64 batch 46
@@ -254,7 +259,7 @@ def contents (shreds : Array ByteArray) : Contents := Id.run do
           certificates := batch.extract (55 + n) (13 + length)
     else
       match Entry.parseBatch batch with
-      | none => return ⟨"the entries do not parse", transactions, blockhash, bankHash, 0, certificates⟩
+      | none => return ⟨"the entries do not parse", transactions, blockhash, bankHash, 0, certificates, parentId⟩
       | some parsed =>
         for e in parsed do
           let mut o := e.start
@@ -263,9 +268,21 @@ def contents (shreds : Array ByteArray) : Contents := Id.run do
             o := next
             transactions := transactions.push tx
           blockhash := e.hash
-  return ⟨"", transactions, blockhash, bankHash, producedAt, certificates⟩
+  return ⟨"", transactions, blockhash, bankHash, producedAt, certificates, parentId⟩
 
 /-- The Merkle root of the set a shred belongs to. -/
 def rootOf (shred : ByteArray) : ByteArray := Shred.merkleRoot shred (Shred.parse shred)
+
+/-- A block's id, which votes and certificates name it by: the root of a Merkle tree over the roots of
+its sets of 32 shreds and, last, a leaf that says what it is built on (the parent's slot and id) and
+how many sets there are. -/
+def id (shreds : Array ByteArray) (parent : UInt64) (parentId : ByteArray) : ByteArray := Id.run do
+  let sets := (shreds.size + 31) / 32
+  let mut leaves : Array ByteArray := Array.emptyWithCapacity (sets + 1)
+  for k in [0:sets] do
+    leaves := leaves.push (rootOf shreds[32 * k]!)
+  leaves := leaves.push (Sha256.hash (Fast.push32 (Fast.push64 (ByteArray.emptyWithCapacity 44) parent ++ parentId) sets.toUInt64))
+  let nodes := Shred.tree leaves
+  return nodes[nodes.size - 1]!
 
 end Block

@@ -89,7 +89,8 @@ programs:
 # (through LiteSVM) and prints the same report; the two must agree exactly:
 # signatures, results, fees, compute units, logs, addresses, balances.
 # It is built twice from one source: against Agave 3.1 (tests/oracle) and
-# against Agave 4.3 (tests/oracle-next), which also runs sBPF v3.
+# against Agave 4.3 (tests/oracle-next), which also runs sBPF v3 and checks
+# the BLS12-381 signatures against the library the validators use.
 # Needs a Rust toolchain; not part of `make test`.
 P = tests/programs
 oracle:
@@ -99,6 +100,7 @@ oracle:
 	build/oracle/release/oracle builtins $(P)/counter.so $(P)/noop.so | diff - tests/expected/builtins.txt
 	build/oracle-next/release/oracle-next anchor $(P)/anchor_vault.so $(P)/anchor_vault_v3.so | diff - tests/expected/anchor.txt
 	build/oracle-next/release/oracle-next versions $(P)/sysvar_probe.so $(P)/sysvar_probe_v1.so $(P)/sysvar_probe_v2.so $(P)/sysvar_probe_v3.so | diff - tests/expected/versions.txt
+	build/oracle-next/release/oracle-next bls | diff - tests/expected/bls.txt
 	@echo "Agave's runtime and the Lean virtual machine agree on every scenario"
 
 # Optional: have the official Lean toolchain type-check every Lean file here

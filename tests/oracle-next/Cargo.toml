@@ -21,3 +21,10 @@ solana-keypair = "3.1.2"
 solana-message = "4.2.4"
 solana-signer = "3.0.1"
 solana-transaction = "4.1.5"
+# for `oracle-next bls`: the BLS12-381 library Agave's validators use
+blstrs = "0.7.1"
+group = "0.13"
+
+[features]
+default = ["bls"]
+bls = []

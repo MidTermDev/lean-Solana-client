@@ -1,5 +1,6 @@
 import Solana.Snapshot
 import Solana.LeaderSchedule
+import Crypto.Bls12381
 
 /-!
 # What a block's footer does to the vote accounts
@@ -15,7 +16,10 @@ Executing a block applies those certificates to the validators' vote
 accounts: the slot each last voted on, its root, its timestamp, and its
 credits, which now count the lamports of reward it has earned.
 
-The signatures themselves (BLS12-381) are not verified here.
+A certificate that a block is final is what lets a node execute that block
+without ever having to undo it, so its signature is checked (`finalProven`):
+the validators the bitmap names must hold enough of the stake, and the
+aggregate must be their signature of the vote.
 -/
 
 namespace Alpenglow
@@ -25,7 +29,11 @@ structure Certs where
   error : String
   /-- 0 if the footer finalises nothing -/
   finalSlot : UInt64
+  /-- the id of the block finalised -/
+  finalBlock : ByteArray
   finalBits : Array ByteArray
+  /-- the aggregate signature that goes with each of those bitmaps -/
+  finalSignatures : Array ByteArray
   /-- 0 if the footer rewards nothing -/
   rewardSlot : UInt64
   rewardBits : Array ByteArray
@@ -34,14 +42,16 @@ structure Certs where
 /-- Reads the certificates that follow the producer's name in a footer. -/
 def parse (c : ByteArray) : Certs := Id.run do
   let none_ : Array ByteArray := Array.emptyWithCapacity 0
-  let bad : Certs := ⟨"the footer's certificates do not parse", 0, none_, 0, none_⟩
+  let bad : Certs := ⟨"the footer's certificates do not parse", 0, ByteArray.empty, none_, none_, 0, none_⟩
   let mut finalSlot : UInt64 := 0
+  let mut finalBlock := ByteArray.empty
   let mut finalBits : Array ByteArray := Array.emptyWithCapacity 2
+  let mut finalSignatures : Array ByteArray := Array.emptyWithCapacity 2
   let mut rewardSlot : UInt64 := 0
   let mut rewardBits : Array ByteArray := Array.emptyWithCapacity 2
   let mut o := 0
   if c.size == 0 then
-    return ⟨"", 0, none_, 0, none_⟩
+    return ⟨"", 0, ByteArray.empty, none_, none_, 0, none_⟩
   -- finality: slot, block, an aggregate (signature, bitmap), optionally a second aggregate
   if c[o]! == 1 then
     if o + 139 > c.size then
@@ -50,6 +60,8 @@ def parse (c : ByteArray) : Certs := Id.run do
     let len := (Wire.u16 c (o + 137)).toNat
     if o + 139 + len + 1 > c.size then
       return bad
+    finalBlock := c.extract (o + 9) (o + 41)
+    finalSignatures := finalSignatures.push (c.extract (o + 41) (o + 137))
     finalBits := finalBits.push (c.extract (o + 139) (o + 139 + len))
     o := o + 139 + len
     if c[o]! == 1 then
@@ -58,6 +70,7 @@ def parse (c : ByteArray) : Certs := Id.run do
       let more := (Wire.u16 c (o + 97)).toNat
       if o + 99 + more > c.size then
         return bad
+      finalSignatures := finalSignatures.push (c.extract (o + 1) (o + 97))
       finalBits := finalBits.push (c.extract (o + 99) (o + 99 + more))
       o := o + 99 + more
     else
@@ -74,7 +87,7 @@ def parse (c : ByteArray) : Certs := Id.run do
         return bad
       let slot := Wire.u64 c (o + 1)
       if rewardSlot != 0 && slot != rewardSlot then
-        return ⟨"the footer's reward certificates are for different slots", 0, none_, 0, none_⟩
+        return ⟨"the footer's reward certificates are for different slots", 0, ByteArray.empty, none_, none_, 0, none_⟩
       rewardSlot := slot
       let len := (Wire.varint c (o + head)).toNat
       let start := Wire.skipVarint c (o + head)
@@ -84,7 +97,7 @@ def parse (c : ByteArray) : Certs := Id.run do
       o := start + len
     else
       o := o + 1
-  return ⟨"", finalSlot, finalBits, rewardSlot, rewardBits⟩
+  return ⟨"", finalSlot, finalBlock, finalBits, finalSignatures, rewardSlot, rewardBits⟩
 
 /-- Does a bitmap name the validator of this rank? A bitmap is a kind byte (0: one bit each), the number of bits, and the bits. -/
 def named (bitmap : ByteArray) (rank : Nat) : Bool :=
@@ -131,6 +144,80 @@ def ranks (voters : Array Snapshot.Voter) : Array Snapshot.Voter := Id.run do
       out := out.set! (j - 1) t
       j := j - 1
   return out
+
+-- ------------------------------------------------------------- signatures
+
+/-- The purpose validators' signatures of votes are made for. -/
+def voteDomain : ByteArray := "BLS_SIG_BLS12381G2_XMD:SHA-256_SSWU_RO_POP_".toUTF8
+
+/-- What a validator signs to vote: the kind of vote (1 for a block, 2 that a slot is final), the slot,
+the block's id if the vote is for a block, and the cluster's shred version. -/
+def vote (kind : UInt8) (slot : UInt64) (block : ByteArray) (version : UInt64) : ByteArray :=
+  Fast.push16 (Wire.putU64 (ByteArray.empty.push kind) slot ++ block) version
+
+/-- The validators of an epoch for checking certificates: their keys and stakes in rank order, the sum
+of the keys, and the sum of the stakes. -/
+structure Signers where
+  epoch : UInt64
+  keys : Array Bls12381.Point
+  stakes : Array UInt64
+  all : Bls12381.Point
+  total : UInt64
+  deriving Inhabited
+
+def signers (epoch : UInt64) (voters : Array Snapshot.Voter) : Signers := Id.run do
+  let mut keys : Array Bls12381.Point := Array.emptyWithCapacity voters.size
+  let mut stakes : Array UInt64 := Array.emptyWithCapacity voters.size
+  let mut all := Bls12381.Point.infinity
+  let mut total : UInt64 := 0
+  for v in ranks voters do
+    let key := match Bls12381.Point.ofBytes v.bls with
+      | some k => k
+      | none => Bls12381.Point.infinity
+    keys := keys.push key
+    stakes := stakes.push v.stake
+    all := all.add key
+    total := total + v.stake
+  return ⟨epoch, keys, stakes, all, total⟩
+
+/-- The stake of the validators a bitmap names, if `signature` is their signatures of `message` added
+up; otherwise 0. Their keys are added up too: the named ones, or everyone's less the others, whichever
+is fewer. -/
+def signedStake (s : Signers) (bitmap signature message : ByteArray) : UInt64 := Id.run do
+  let bits := if bitmap.size >= 3 then (Wire.u16 bitmap 1).toNat else 0
+  let mut count := 0
+  for rank in [0:bits] do
+    if named bitmap rank then
+      if rank >= s.keys.size then
+        return 0
+      count := count + 1
+  let most := 2 * count > s.keys.size
+  let mut key := Bls12381.Point.infinity
+  let mut stake : UInt64 := 0
+  for rank in [0:s.keys.size] do
+    if named bitmap rank then
+      stake := stake + s.stakes[rank]!
+    if named bitmap rank != most then
+      key := key.add s.keys[rank]!
+  if most then
+    key := s.all.add key.neg
+  match Bls12381.Point.ofBytes signature with
+  | none => return 0
+  | some point => return if Bls12381.verify key message voteDomain point then stake else 0
+
+/-- How many fifths of the stake (rounded down) signed, by `signedStake`. -/
+def fifths (s : Signers) (bitmap signature message : ByteArray) : UInt64 :=
+  if s.total == 0 then 0 else 5 * signedStake s bitmap signature message / s.total
+
+/-- Is a footer's claim that a block is final backed by the epoch's validators? Either four fifths of
+the stake voted for the block, or three fifths voted for it and three fifths that its slot is final. -/
+def finalProven (c : Certs) (s : Signers) (version : UInt64) : Bool :=
+  let block := vote 1 c.finalSlot c.finalBlock version
+  if c.finalBits.size == 1 then
+    fifths s c.finalBits[0]! c.finalSignatures[0]! block >= 4
+  else
+    c.finalBits.size == 2 && fifths s c.finalBits[0]! c.finalSignatures[0]! (vote 2 c.finalSlot ByteArray.empty version) >= 3
+      && fifths s c.finalBits[1]! c.finalSignatures[1]! block >= 3
 
 -- ------------------------------------------------------------ vote accounts
 

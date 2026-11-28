@@ -1705,6 +1705,8 @@ dependencies = [
 name = "oracle-next"
 version = "0.1.0"
 dependencies = [
+ "blstrs",
+ "group",
  "litesvm",
  "sha2 0.10.9",
  "solana-account",

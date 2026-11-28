@@ -35,10 +35,11 @@ def usage : String :=
   "  --state DIR    the store loaded by `leansol snapshot`\n" ++
   "  --blocks DIR   blocks saved by `leansol block SLOT --save DIR/SLOT.block`, or by a node run with --spool DIR\n" ++
   "  --count N      how many blocks (default 1; with --live, no limit)\n" ++
-  "  --live         follow the chain: execute each block in DIR once a later block's footer calls it final,\n" ++
-  "                 wait for more, fetch the ones that are missing, and save the state in STATE/live every\n" ++
-  "                 few minutes, where the next run with --live goes on from. Blocks are deleted once the\n" ++
-  "                 state past them is saved. Stops at the first bank hash that differs.\n" ++
+  "  --live         follow the chain: execute each block in DIR once a later block's footer proves it final\n" ++
+  "                 (a certificate signed by enough of the stake, which is checked), wait for more, fetch\n" ++
+  "                 the ones that are missing, and save the state in STATE/live every few minutes, where\n" ++
+  "                 the next run with --live goes on from. Blocks are deleted once the state past them is\n" ++
+  "                 saved. Stops at the first bank hash that differs.\n" ++
   "  --until SLOT   with --live: save the state and stop once this slot is reached\n" ++
   "  --resume       without --live: start from the state --live last saved instead of the snapshot's,\n" ++
   "                 leaving it as it is (not while a run with --live is going)\n" ++
@@ -49,8 +50,9 @@ def usage : String :=
   "  --follow       after a block whose hash differs, continue from the block's own hash\n" ++
   "  --timing       say where each block's time went\n" ++
   "  --interpret    run every program with the interpreter, none as machine code\n" ++
-  "  --signatures N check every transaction's signatures, in N other processes (default 3; 0 = not at all;\n" ++
-  "                 not with --live, whose blocks were verified by whoever saved them)\n" ++
+  "  --signatures N check every transaction's signatures, in N other processes, and every footer's\n" ++
+  "                 certificate (default 3; 0 = not at all). Not with --live, whose blocks were verified\n" ++
+  "                 by whoever saved them and whose certificates are checked as they are relied on\n" ++
   "  --trace N      print the log of transaction N of the first block\n"
 
 def fail (message : String) : IO Unit := do
@@ -248,8 +250,14 @@ structure Waiting where
   slot : UInt64
   /-- the slot of the block it is built on -/
   parent : UInt64
-  /-- the slot its footer says is final (0 if it says none) -/
-  final : UInt64
+  /-- its id, by which votes name it -/
+  id : ByteArray
+  /-- the shred version its leader sent it under -/
+  version : UInt64
+  /-- what its footer says of an earlier block being final (the slot is 0 if it says nothing, or once
+  its certificate has proved bad), and whether the certificate has been checked -/
+  final : Alpenglow.Certs
+  proven : Bool
   block : Block.Contents
   deriving Inhabited
 
@@ -257,12 +265,15 @@ structure Waiting where
 def savedBlock (blocksDir : String) (slot : UInt64) : IO Waiting := do
   let file ← Sys.readFile s!"{blocksDir}/{slot}.block" 0x8000000
   if file.size < 104 + Shred.dataPayload || (file.size - 104) % Shred.dataPayload != 0 then
-    return ⟨slot, 0, 0, { Block.contents (Array.emptyWithCapacity 0) with error := s!"{blocksDir}/{slot}.block is not a saved block" }⟩
+    return ⟨slot, 0, ByteArray.empty, 0, Alpenglow.parse ByteArray.empty, false,
+      { Block.contents (Array.emptyWithCapacity 0) with error := s!"{blocksDir}/{slot}.block is not a saved block" }⟩
   let mut shreds : Array ByteArray := Array.emptyWithCapacity ((file.size - 104) / Shred.dataPayload)
   for k in [0:(file.size - 104) / Shred.dataPayload] do
     shreds := shreds.push (file.extract (104 + Shred.dataPayload * k) (104 + Shred.dataPayload * (k + 1)))
   let block := Block.contents shreds
-  return ⟨slot, slot - (Shred.parse shreds[0]!).parentOffset, (Alpenglow.parse block.certificates).finalSlot, block⟩
+  let first := Shred.parse shreds[0]!
+  let parent := slot - first.parentOffset
+  return ⟨slot, parent, Block.id shreds parent block.parentId, first.version, Alpenglow.parse block.certificates, false, block⟩
 
 /-- Position in `waiting` of the block for `slot`, or `Sbpf.notFound`. -/
 def waitingAt (waiting : Array Waiting) (slot : UInt64) : Nat := Id.run do
@@ -279,25 +290,40 @@ def skipped (waiting : Array Waiting) (slot : UInt64) : Bool := Id.run do
   return false
 
 /-- Which block to execute after `slot`'s: the one built on it that leads to a block some footer calls
-final, so that nothing executed ever has to be undone. Returns its position in `waiting`, or
-`Sbpf.notFound` and the slot of a block that is needed to tell (0 if none is known to be). -/
-def next (waiting : Array Waiting) (slot : UInt64) : Nat × UInt64 := Id.run do
+final, so that nothing executed ever has to be undone. Only footers whose certificates are `proven`
+(or only those not checked yet) are listened to, the latest first, and the blocks are followed back by
+their ids. Returns the block's position in `waiting` and that of the footer, or `Sbpf.notFound` and the
+slot of a block that is needed to tell (0 if none is known to be). -/
+def next (waiting : Array Waiting) (slot : UInt64) (proven : Bool) : Nat × Nat × UInt64 := Id.run do
+  let mut found := Sbpf.notFound
+  let mut via := Sbpf.notFound
   let mut missing : UInt64 := 0
-  for w in waiting do
-    -- from the block a footer calls final, back from parent to parent
-    let mut s := w.final
-    for _ in [0:waiting.size] do
-      if s > slot then
-        let k := waitingAt waiting s
-        if k == Sbpf.notFound then
-          if missing == 0 || s < missing then
-            missing := s
-          s := 0
-        else if waiting[k]!.parent == slot then
-          return (k, 0)
-        else
-          s := waiting[k]!.parent
-  return (Sbpf.notFound, missing)
+  for j in [0:waiting.size] do
+    let w := waiting[j]!
+    if w.proven == proven && (via == Sbpf.notFound || w.slot > waiting[via]!.slot) then
+      -- from the block the footer calls final, back from parent to parent
+      let mut s := w.final.finalSlot
+      let mut id := w.final.finalBlock
+      for _ in [0:waiting.size] do
+        if s > slot then
+          let k := waitingAt waiting s
+          if k == Sbpf.notFound || waiting[k]!.id != id then
+            if missing == 0 || s < missing then
+              missing := s
+            s := 0
+          else if waiting[k]!.parent == slot then
+            found := k
+            via := j
+            s := 0
+          else
+            id := waiting[k]!.block.parentId
+            s := waiting[k]!.parent
+  return (found, via, missing)
+
+/-- The validators who can certify `slot`: those of its epoch, worked out anew only when the epoch changes. -/
+def signersFor (m : Snapshot.Manifest) (known : Alpenglow.Signers) (slot : UInt64) : Alpenglow.Signers :=
+  let epoch := if m.slotsPerEpoch == 0 then 0 else slot / m.slotsPerEpoch
+  if known.epoch == epoch && known.keys.size != 0 then known else Alpenglow.signers epoch (stakesOf m epoch).voters
 
 /-- A process that fetches blocks. For every slot number it is sent it asks validators for that slot's
 block, verifies it (its leader's signature, its proof of history, every transaction signature) and
@@ -845,6 +871,8 @@ def main : IO Unit := do
   let mut n := 0
   let mut rankedOrder : Array Snapshot.Voter := Array.emptyWithCapacity 0
   let mut rankedEpoch : UInt64 := 0
+  let mut signers : Alpenglow.Signers := Alpenglow.signers 0 (Array.emptyWithCapacity 0)
+  let mut certified := 0
   repeat
     if (count != 0 && n == count) || (until_ != 0 && slot >= until_) then
       break
@@ -857,8 +885,27 @@ def main : IO Unit := do
           let w ← savedBlock blocksDir (slot + s.toUInt64)
           if w.block.error == "" then
             waiting := waiting.push w
-      let (found, missing) := next waiting slot
+      let (found, _, known) := next waiting slot true
+      if found == Sbpf.notFound && waitingAt waiting known != Sbpf.notFound then
+        fail s!"the block held for slot {known} is not the one the chain made final: their ids differ"
       chosen := found
+      let mut missing := known
+      if chosen == Sbpf.notFound then
+        -- no footer already checked leads on: the latest that would is checked, and dropped if it does not hold
+        let (unproven, via, more) := next waiting slot false
+        if missing == 0 then
+          missing := more
+        if via != Sbpf.notFound then
+          let w := waiting[via]!
+          signers := signersFor manifest signers w.final.finalSlot
+          if Alpenglow.finalProven w.final signers w.version then
+            waiting := waiting.set! via { w with proven := true }
+            chosen := unproven
+            certified := certified + 1
+          else
+            IO.println s!"slot {w.slot}: its certificate that slot {w.final.finalSlot} is final does not hold, and is ignored"
+            waiting := waiting.set! via { w with final := Alpenglow.parse ByteArray.empty }
+            continue
       -- blocks that are not here are asked for: those the chain is known to need, and those old enough
       -- that the node should have delivered them by now
       let now ← Sys.nowMs
@@ -886,6 +933,12 @@ def main : IO Unit := do
       if waiting[0]!.parent != slot then
         fail s!"the block saved for slot {waiting[0]!.slot} is built on slot {waiting[0]!.parent}, and the state is that of slot {slot}"
       chosen := 0
+      -- (a block whose certificate does not hold is no block; checked with the signatures)
+      let w := waiting[0]!
+      if checkers != 0 && w.final.finalSlot != 0 then
+        signers := signersFor manifest signers w.final.finalSlot
+        if !(Alpenglow.finalProven w.final signers w.version) then
+          fail s!"slot {w.slot}: its certificate that slot {w.final.finalSlot} is final does not hold"
     let parent := slot
     slot := waiting[chosen]!.slot
     let block := waiting[chosen]!.block
@@ -1292,7 +1345,7 @@ def main : IO Unit := do
       IO.println s!"  the block's {Base58.encode block.bankHash}  {if bankHash == block.bankHash then "MATCH" else "(differs)"}{if checkers == 0 then "" else if bad == 0 then " · signatures valid" else s!" · {bad} SIGNATURES DO NOT VERIFY"}"
     -- (how it is going, for the node to show: see `Export.json`)
     if live && (bankHash != block.bankHash || (← Sys.nowMs) - reported >= 5000) then
-      let _ ← Sys.writeFileAtomic s!"{blocksDir}/replay.json" s!"\{\"slot\": {slot}, \"executed\": {n}, \"behind\": {if tip > slot then tip - slot else 0}, \"savedSlot\": {savedSlot}, \"at\": {← Sys.nowMs}, \"stopped\": {bankHash != block.bankHash}}".toUTF8
+      let _ ← Sys.writeFileAtomic s!"{blocksDir}/replay.json" s!"\{\"slot\": {slot}, \"executed\": {n}, \"certificates\": {certified}, \"behind\": {if tip > slot then tip - slot else 0}, \"savedSlot\": {savedSlot}, \"at\": {← Sys.nowMs}, \"stopped\": {bankHash != block.bankHash}}".toUTF8
     if live && bankHash != block.bankHash then
       fail s!"stopped at slot {slot}, built on slot {parent}. The state saved is that of slot {savedSlot}, and the blocks since are in {blocksDir}"
     if follow && block.bankHash.size == 32 then
@@ -1308,7 +1361,7 @@ def main : IO Unit := do
     else if world.full then
       world ← world.save slot
     if live && now - reported >= 5000 then
-      IO.println s!"slot {slot}: {n} blocks executed, every bank hash matching · {(now - reported) / (n - reportedAt).toUInt64} ms a block · {if tip > slot then tip - slot else 0} slots behind"
+      IO.println s!"slot {slot}: {n} blocks executed, every bank hash matching, {certified} certificates checked · {(now - reported) / (n - reportedAt).toUInt64} ms a block · {if tip > slot then tip - slot else 0} slots behind"
       reported := now
       reportedAt := n
   if live then

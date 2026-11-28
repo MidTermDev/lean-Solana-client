@@ -8,11 +8,13 @@
 //! units, logs and account contents.
 //!
 //! This file is built twice: by tests/oracle against Agave 3.1 and by
-//! tests/oracle-next against Agave 4.3, which also runs sBPF v3.
+//! tests/oracle-next against Agave 4.3, which also runs sBPF v3 and, with
+//! the BLS library the validators use, prints the report of tests/bls.lean.
 //!
 //!     oracle anchor anchor_vault.so anchor_vault_v3.so
 //!     oracle transaction sysvar_probe.so counter.so
 //!     oracle versions sysvar_probe_v1.so sysvar_probe_v2.so ...
+//!     oracle-next bls
 //!
 //! Set ORACLE_RAW=1 to also print Agave's complete log, which shows how many
 //! compute units each program consumed at each level of a call.
@@ -617,9 +619,160 @@ fn builtins(counter_so: &str, noop_so: &str) {
     chain.signed("an instruction for the old loader", &[], &[Instruction { program_id: address!("BPFLoader2111111111111111111111111111111111"), accounts: vec![], data: vec![0, 0, 0, 0] }]);
 }
 
+/// The report of tests/bls.lean, from blstrs: points, signatures, and when a certificate proves a block final.
+#[cfg(feature = "bls")]
+mod bls {
+    use {
+        blstrs::{pairing, G1Affine, G1Projective, G2Affine, G2Projective, Scalar},
+        group::{prime::PrimeCurveAffine, Curve, Group},
+    };
+
+    const DOMAIN: &[u8] = b"BLS_SIG_BLS12381G2_XMD:SHA-256_SSWU_RO_POP_";
+    const STRAY: &str = "81f9dfd3ee5e608fb85f55642c3d3bed4a69b88bd8296f97c4f48490502da3719c936021975dd7199150f08428f250040cf2ef94da514517fe35d5f02fca8414a72d7007b0718e145f4a4805b35323086d2b5a06ab56eb1d89567961edbd7091";
+
+    fn hex(bytes: &[u8]) -> String {
+        bytes.iter().map(|b| format!("{b:02x}")).collect()
+    }
+
+    fn point(message: &[u8]) -> G2Projective {
+        G2Projective::hash_to_curve(message, DOMAIN, &[])
+    }
+
+    fn holds(key: &G1Projective, message: &[u8], signature: &G2Projective) -> bool {
+        !bool::from(key.is_identity())
+            && pairing(&key.to_affine(), &point(message).to_affine()) == pairing(&G1Affine::generator(), &signature.to_affine())
+    }
+
+    fn verdict(ok: bool) -> &'static str {
+        if ok { "holds" } else { "does not hold" }
+    }
+
+    fn vote(kind: u8, slot: u64, block: &[u8], version: u16) -> Vec<u8> {
+        [&[kind][..], &slot.to_le_bytes(), block, &version.to_le_bytes()].concat()
+    }
+
+    struct Validators {
+        secrets: Vec<Scalar>,
+        keys: Vec<G1Projective>,
+        stakes: Vec<u64>,
+    }
+
+    impl Validators {
+        /// The signatures of `message` by the validators of these ranks, added up and compressed.
+        fn signed_by(&self, ranks: &[usize], message: &[u8]) -> [u8; 96] {
+            ranks.iter().map(|&r| point(message) * self.secrets[r]).sum::<G2Projective>().to_affine().to_compressed()
+        }
+
+        /// The stake of the validators named, if `signature` is their signatures of `message` added up; otherwise 0.
+        fn signed_stake(&self, ranks: &[usize], signature: &[u8; 96], message: &[u8]) -> u64 {
+            if ranks.iter().any(|&r| r >= self.keys.len()) {
+                return 0;
+            }
+            let key: G1Projective = ranks.iter().map(|&r| self.keys[r]).sum();
+            match Option::<G2Affine>::from(G2Affine::from_compressed(signature)) {
+                Some(s) if holds(&key, message, &s.into()) => ranks.iter().map(|&r| self.stakes[r]).sum(),
+                _ => 0,
+            }
+        }
+
+        /// Is the block final, with these ranks having voted for it and these that its slot is final (none: only the first vote)?
+        fn claim(&self, for_it: &[usize], is_final: &[usize], block: &[u8], signed: (u64, u16), read: (u64, u16), known: bool) -> bool {
+            let total: u64 = if known { self.stakes.iter().sum() } else { 0 };
+            let for_block = self.signed_stake(for_it, &self.signed_by(for_it, &vote(1, signed.0, block, signed.1)), &vote(1, read.0, block, read.1));
+            let for_slot = self.signed_stake(is_final, &self.signed_by(is_final, &vote(2, signed.0, &[], signed.1)), &vote(2, read.0, &[], read.1));
+            if total == 0 {
+                false
+            } else if is_final.is_empty() {
+                5 * for_block >= 4 * total
+            } else {
+                5 * for_slot >= 3 * total && 5 * for_block >= 3 * total
+            }
+        }
+    }
+
+    fn reading(bytes: &[u8; 96]) -> &'static str {
+        if bool::from(G2Affine::from_compressed(bytes).is_some()) { "accepted" } else { "rejected" }
+    }
+
+    pub fn report() {
+        let g = G1Projective::generator();
+        println!("generator        {}", hex(&g.to_affine().to_compressed()));
+        println!("twice it         {}", hex(&(g + g).to_affine().to_compressed()));
+        println!("minus it         {}", hex(&(-g).to_affine().to_compressed()));
+        let none = G2Projective::identity().to_affine().to_compressed();
+        println!("no point         {}", hex(&none));
+        for text in ["", "abc", "a vote"] {
+            println!("point of \"{text}\": {}", hex(&point(text.as_bytes()).to_affine().to_compressed()));
+        }
+        let secrets: Vec<Scalar> = [
+            [1, 0, 0, 0],
+            [0x1234567890abcdef, 0x0fedcba098765432, 7, 0],
+            [0x0102030405060708, 0x1112131415161718, 0x2122232425262728, 0x3132333435363738],
+            [42, 42, 42, 42],
+        ]
+        .iter()
+        .map(|words| Scalar::from_u64s_le(words).unwrap())
+        .collect();
+        let v = Validators { keys: secrets.iter().map(|s| g * s).collect(), secrets, stakes: vec![40, 30, 20, 10] };
+        let block: Vec<u8> = (0..32u32).map(|i| (7 * i + 1) as u8).collect();
+        let (slot, version) = (474737400u64, 50093u16);
+        let for_block = vote(1, slot, &block, version);
+        let for_slot = vote(2, slot, &[], version);
+        println!("a vote for a block:     {}", hex(&for_block));
+        println!("a vote a slot is final: {}", hex(&for_slot));
+        for k in 0..4 {
+            let signature = point(&for_block) * v.secrets[k];
+            let bytes = signature.to_affine().to_compressed();
+            println!("validator {k}: key {}", hex(&v.keys[k].to_affine().to_compressed()));
+            println!("  signs the block {}", hex(&bytes));
+            if k == 1 {
+                println!(
+                    "  which {}; for the other vote it {}; read back: {}",
+                    verdict(holds(&v.keys[k], &for_block, &signature)),
+                    verdict(holds(&v.keys[k], &for_slot, &signature)),
+                    G2Affine::from_compressed(&bytes).unwrap() == signature.to_affine()
+                );
+            }
+        }
+        let all_keys: G1Projective = v.keys.iter().sum();
+        println!("all keys added   {}, stake {}", hex(&all_keys.to_affine().to_compressed()), v.stakes.iter().sum::<u64>());
+        let all = [0, 1, 2, 3];
+        let stake = |named: &[usize], signed: &[usize]| v.signed_stake(named, &v.signed_by(signed, &for_block), &for_block);
+        println!("all four sign:   {}", hex(&v.signed_by(&all, &for_block)));
+        println!("stake behind it: {}; behind 0, 1 and 3: {}", stake(&all, &all), stake(&[0, 1, 3], &[0, 1, 3]));
+        println!(
+            "a bitmap naming one who did not sign: {}; the other vote: {}",
+            stake(&all, &[0, 1, 2]),
+            v.signed_stake(&all, &v.signed_by(&all, &for_block), &for_slot)
+        );
+        println!("a rank that does not exist: {}; nobody: {}", stake(&[0, 1, 2, 5], &[0, 1, 2]), v.signed_stake(&[], &none, &for_block));
+        let claim = |for_it: &[usize], is_final: &[usize]| v.claim(for_it, is_final, &block, (slot, version), (slot, version), true);
+        println!("80 of 100 vote for the block: final {}; 70: {}", claim(&[0, 1, 3], &[]), claim(&[0, 1], &[]));
+        println!("60 for the block and 60 that the slot is final: {}; 60 and 50: {}", claim(&[0, 2], &[1, 2, 3]), claim(&[0, 2], &[0, 3]));
+        println!(
+            "another shred version: {}; no validators known: {}",
+            v.claim(&all, &[], &block, (slot, version), (slot, version + 1), true),
+            v.claim(&all, &[], &block, (slot, version), (slot, version), false)
+        );
+        let stray: Vec<u8> = (0..96).map(|i| u8::from_str_radix(&STRAY[2 * i..2 * i + 2], 16).unwrap()).collect();
+        let stray: [u8; 96] = stray.try_into().unwrap();
+        println!("a point outside the group: {}", hex(&stray));
+        let mut changed = v.signed_by(&all, &for_block);
+        changed[95] = 0;
+        println!(
+            "read as a signature: {} (it is on the curve: {}); a byte of a good one changed: {}",
+            reading(&stray),
+            bool::from(G2Affine::from_compressed_unchecked(&stray).is_some()),
+            reading(&changed)
+        );
+    }
+}
+
 fn main() {
     let args: Vec<String> = std::env::args().collect();
     match args.get(1).map(String::as_str) {
+        #[cfg(feature = "bls")]
+        Some("bls") => bls::report(),
         Some("versions") if args.len() >= 3 => versions(&args[2..]),
         Some("builtins") if args.len() == 4 => builtins(&args[2], &args[3]),
         Some("anchor") if args.len() >= 3 => args[2..].iter().for_each(|file| anchor(file)),

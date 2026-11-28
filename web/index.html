@@ -415,10 +415,10 @@ account   vaultB   data 5a60e8a6…   <i>(changed)</i></pre>
         <h2>What it is not</h2>
         <div class="stack">
           <div class="defs">
-            <div class="def"><h3>Not a voting validator</h3><p>It verifies gossip and every block, holds the state, and executes the chain to the leaders' bank hashes. It does not vote or produce blocks: that needs BLS signatures, the consensus messages, and stake.</p></div>
+            <div class="def"><h3>Not a voting validator</h3><p>It verifies gossip and every block, holds the state, and executes the chain to the leaders' bank hashes. It checks the validators' BLS signatures but does not make them: it does not vote or produce blocks, which needs the consensus messages and stake.</p></div>
             <div class="def"><h3>Listen-only</h3><p>It answers pings but does not yet serve or push records to other nodes.</p></div>
-            <div class="def"><h3>It stops when it does not know</h3><p>Mainnet uses things no test set holds: a dozen of them stopped the executor in its first 47,000 blocks. It stops at the first bank hash that differs, with its state as last saved, rather than carry on wrong. Most of the vote program is not written yet.</p></div>
-            <div class="def"><h3>The executor is a second process</h3><p>The node saves the blocks it verifies and the executor reads them; it trusts the certificates in their footers for what is final, without checking the BLS signatures. At 0.1 seconds a block it has twice the chain's pace, no more.</p></div>
+            <div class="def"><h3>It stops when it does not know</h3><p>Mainnet uses things no test set holds: a dozen of them stopped the executor in its first 47,000 blocks, another after 120,000 more. It stops at the first bank hash that differs, with its state as last saved, rather than carry on wrong. Most of the vote program is not written yet.</p></div>
+            <div class="def"><h3>The executor is a second process</h3><p>The node saves the blocks it verifies and the executor reads them. At 0.1 seconds a block it has twice the chain's pace, no more.</p></div>
             <div class="def"><h3>Nothing is sent on-chain</h3><p>Programs execute locally. The client does not build, sign or submit transactions.</p></div>
             <div class="def"><h3>x86-64 Linux</h3><p>The code generator and the system-call numbers are specific to it.</p></div>
             <div class="def"><h3>A subset of Lean</h3><p>No type classes, lambdas or polymorphism. The compiler does not check proofs; official Lean does that.</p></div>
@@ -461,13 +461,13 @@ account   vaultB   data 5a60e8a6…   <i>(changed)</i></pre>
                 <li><b>Faster than the chain</b>The same 600 blocks in 73 seconds: programs translated from sBPF into machine code, by Lean, with the interpreter as the definition.</li>
                 <li><b>Executing the chain</b>From a fresh snapshot, block after block: 23,700 in a row between two stops, state saved as it goes, missing blocks fetched from validators.</li>
                 <li><b>The turn of an epoch</b>Mainnet's epoch 1099: stakes, rewards to a million accounts over 522 blocks, and a budget computed in doubles made of integers. Every hash matched.</li>
+                <li><b>Certificates checked</b>BLS12-381 in 600 lines of Lean: a block is executed only when a certificate signed by enough of the stake says it is final. 19 ms a check, and the same answers as the validators' own library.</li>
               </ul>
             </div>
             <div class="stage next">
               <h3><i></i>Next</h3>
               <ul>
                 <li><b>At the tip, and staying there</b>The executor inside the node, the rest of the vote program, feature activations, a log of changes that is trimmed.</li>
-                <li><b>BLS12-381</b>Verify the certificates that say a block is final, instead of trusting them: the first step toward voting.</li>
                 <li><b>Voting</b>Execute blocks before they are final, sign votes, and stake behind a vote account.</li>
                 <li><b>Full gossip participant</b>Serve pull requests and push records, not only listen.</li>
                 <li><b>Record ageing</b>Expire old records one by one instead of flushing the store.</li>
@@ -599,7 +599,7 @@ async function tick() {
       const r = d.replay;
       $('b-run').textContent = r.stopped ? `stopped at slot ${fmt(r.slot)}: something mainnet uses that is not written yet`
         : d.timestampMs - r.at > 60000 ? `up to slot ${fmt(r.slot)}; not running now`
-        : `slot ${fmt(r.slot)}: ${fmt(r.executed)} blocks in a row to the bank hashes their leaders signed; ${fmt(r.behind)} slots behind the chain`;
+        : `slot ${fmt(r.slot)}: ${fmt(r.executed)} blocks in a row to the bank hashes their leaders signed${r.certificates ? `, ${fmt(r.certificates)} certificates of finality checked` : ''}; ${fmt(r.behind)} slots behind the chain`;
     }
     bars($('clients'), Object.entries(d.clients), d.nodeCount);
     bars($('versions'), Object.entries(d.versions).slice(0, 10), d.nodeCount);

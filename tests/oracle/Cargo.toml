@@ -16,3 +16,7 @@ solana-keypair = "3.1.2"
 solana-message = "3.0.1"
 solana-signer = "3.0.0"
 solana-transaction = "3.0.1"
+
+# (tests/oracle-next builds the same source with this on, and the library it needs)
+[features]
+bls = []

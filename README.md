@@ -427,7 +427,7 @@ The state is the snapshot's store, never written; accounts that blocks change ar
 
 How it was found, since a hash that does not match says nothing about why: a public RPC gives, for each transaction of a block, its status, fee, compute units and the balance of every account afterwards. The replay prints the same (`--lines`), and the first disagreement names the transaction. That took the first block from 9 of its first 11 transactions to 333 of 333; then the leader's fee reward matched the RPC's to the lamport; and then, with the footer applied, the hash. The same loop found everything after it, one block at a time. Two findings were not in any transaction. Programs hand the pairing check points whose top bits are set; the library Agave reads them with treats those bits as flags and ignores one of them, so this must too. And once, every transaction of a block agreed and its hash did not: that block's leader collects its fees in its own vote account, which the footer had just rewritten, and the fee deposit was putting the old version back.
 
-**What is not checked.** The BLS signatures on the footer's certificates are not verified (who voted is taken from the bitmaps), and a transaction's blockhash is checked for being recent but not for having been used before: both are things a block's producer is trusted for here, and neither changes the hash of a valid block.
+**What is checked beyond the hash.** A footer's certificate that a block is final is verified: the validators its bitmap names must hold enough of the stake, and the aggregate must be their BLS signature of the vote ([below](#certificates)). The certificate of who voted eight slots back is not verified separately (the block that carries it is itself made final by a later certificate), and a transaction's blockhash is checked for being recent but not for having been used before: neither changes the hash of a valid block.
 
 ## Execute the chain
 
@@ -443,11 +443,11 @@ epoch 1099: 1347124 stake accounts, 655 validators admitted; 16,261,043,772,215 
 slot 474768099: 109 blocks executed, every bank hash matching · 125 ms a block · 65397 slots behind
 ```
 
-- **Which block is next.** Blocks are files in a directory: a node run with `--spool` saves every block it verifies there, and the executor fetches the ones that are missing itself, from validators, with a few dozen processes (each block verified as `leansol block` verifies one). A block is executed only once a later block's footer names a final slot that leads back to it, parent by parent, so nothing executed is ever undone. Slots the chain skipped are simply not on that path.
+- **Which block is next.** Blocks are files in a directory: a node run with `--spool` saves every block it verifies there, and the executor fetches the ones that are missing itself, from validators, with a few dozen processes (each block verified as `leansol block` verifies one). A block is executed only once a later block's footer carries a certificate, [checked](#certificates), that a block is final which leads back to it, parent by parent and id by id, so nothing executed is ever undone. Slots the chain skipped are simply not on that path.
 - **Keeping the state.** Changes stay in memory; every few minutes the changed accounts are appended to a log and a small file beside it records the slot, the bank hash, the lattice hash, the supply and where the log ends. That file is the state: a later run opens the log up to that point and goes on from there, and a process killed at any moment loses only what it had not saved. Executed blocks are deleted once the state past them is saved.
 - **Stopping.** At the first bank hash that differs, it stops: the state on disk is the last one saved, the blocks since are still there, and `--resume --lines` replays them from that state with a line per transaction, to be compared with a public RPC's record of the block. Everything below was found that way.
 
-**What mainnet used that 600 blocks had not.** Run from a snapshot, it stopped a dozen times in its first 47,000 blocks, each time at something real (and once before that, at the fourth block: the snapshot lists its recent blockhashes in no order): a transaction closing a program names the program's code account itself; the **Ristretto** forms of the curve system calls (RFC 9496, in [`lib/Crypto/Ed25519.lean`](lib/Crypto/Ed25519.lean)); the **vote program**, which validators still use to withdraw from their vote accounts and to change their commission; the limit of 64 instructions a transaction, nested calls included; the system program's newest instruction, for creating an account that already holds lamports, and the loader's oldest way of making a program larger; a transfer of zero lamports from an account the system program does not own, which programs use to have balances they changed written back; a program wrongly taken for closed, which only a process that had run for an hour could show; the system call that tells a program how much stake is active, used by one transaction in thousands of blocks; addition in the second group of the alt_bn128 curve, least significant byte first, for a zero-knowledge program; and the rule that an account changes owner only when its data is all zeros. Between the eighth stop and the ninth lay 23,700 blocks.
+**What mainnet used that 600 blocks had not.** Run from a snapshot, it stopped a dozen times in its first 47,000 blocks, each time at something real (and once before that, at the fourth block: the snapshot lists its recent blockhashes in no order): a transaction closing a program names the program's code account itself; the **Ristretto** forms of the curve system calls (RFC 9496, in [`lib/Crypto/Ed25519.lean`](lib/Crypto/Ed25519.lean)); the **vote program**, which validators still use to withdraw from their vote accounts, to change their commission and to say who collects it; the limit of 64 instructions a transaction, nested calls included; the system program's newest instruction, for creating an account that already holds lamports, and the loader's oldest way of making a program larger; a transfer of zero lamports from an account the system program does not own, which programs use to have balances they changed written back; a program wrongly taken for closed, which only a process that had run for an hour could show; the system call that tells a program how much stake is active, used by one transaction in thousands of blocks; addition in the second group of the alt_bn128 curve, least significant byte first, for a zero-knowledge program; and the rule that an account changes owner only when its data is all zeros. Between the eighth stop and the ninth lay 23,700 blocks.
 
 **The turn of an epoch.** Every 432,000 slots, a day, the chain settles an epoch in the first block of the next ([`lib/Solana/Epoch.lean`](lib/Solana/Epoch.lean), [`tests/epoch.lean`](tests/epoch.lean)), and all of it goes into that block's hash:
 
@@ -458,7 +458,18 @@ slot 474768099: 109 blocks executed, every bank hash matching · 125 ms a block 
 
 The first block of epoch 1099 matched the first time it ran; so did each of the 522 blocks that paid the rewards. Reading the stake accounts takes about 20 seconds, once a day.
 
-**What is still missing.** Feature activations (they happen only at a turn; none was pending); most of the vote program (authority changes, new accounts with their proofs of possession); the log of changes only grows (about 40 GB a day at the chain's pace), so a store wants reloading from a snapshot every few days; and the certificates that the "final" rule trusts are not verified, which is the next thing: BLS12-381.
+### Certificates
+
+Under Alpenglow a block is final when validators holding four fifths of the stake have voted for it, or three fifths have and three fifths have voted that its slot is final. They sign with BLS keys, whose signatures add: a certificate is one signature (96 bytes) and a bitmap of who signed, and checking it is two pairings whoever signed. Until this was written the executor took a leader's word that such a certificate existed. Now it checks ([`lib/Crypto/Bls12381.lean`](lib/Crypto/Bls12381.lean), [`tests/bls.lean`](tests/bls.lean)):
+
+- **The curve**, in 600 lines. Numbers modulo a 381-bit prime are six 64-bit words in Montgomery form. One kind of point serves the curve and its twist (a point of the plain curve is a point over pairs of numbers whose second halves are zero), and the twelve-fold field is polynomials in `w` over pairs, `w⁶ = 1 + u`. The final power uses `3(p⁴ − p² + 1)/r = (x − 1)²(x + p)(x² + p² − 1) + 3`, five powers by the curve's parameter instead of one of 1,270 bits.
+- **A message's point** (RFC 9380). A vote is hashed with SHA-256 to two pairs of numbers, each mapped to a point of another curve and carried over by a map of degree three, whose published coefficients, 381 bits each, all turn out to be small fractions (304/9, −8/3, …), so no table is needed.
+- **Whose keys.** The validators of the slot's epoch in order of stake, as the bitmap counts them. Their keys are added once; a certificate's key is that sum less the few who did not sign.
+- **Which block.** The certificate names a block by its id: the root of a Merkle tree over the roots of the block's sets of shreds and of what it is built on. The executor computes the id of every block it holds, and follows a certificate back only through blocks whose ids fit.
+
+A check takes about 19 ms. The report of [`tests/bls.lean`](tests/bls.lean) (points, hashes, signatures alone and added up, the thresholds) is reproduced line for line by blstrs, the library the validators use (`make oracle`); the 600 blocks of the test set carry 599 real certificates, all of which hold, and with one bit of one bitmap flipped the replay stops at that block.
+
+**What is still missing.** Feature activations (they happen only at a turn; none was pending); most of the vote program (authority changes, new accounts with their proofs of possession); and the log of changes only grows (8.5 GB over the first 170,000 slots), so a store wants reloading from a snapshot now and then.
 
 ## Run on-chain programs
 
@@ -941,12 +952,12 @@ A home-made compiler for a subset is only interesting if it agrees with the real
 
 ```sh
 make lean-check    # = lake build && tests/run.sh --oracle     (needs the official toolchain)
-make oracle        # Agave's runtime must print what five of the tests print  (needs Rust)
+make oracle        # Agave's runtime and its BLS library must print what six of the tests print  (needs Rust)
 ```
 
 - **`lake build`** makes the official Lean 4 toolchain type-check every Lean file here: runtime, libraries, client. The whole client is accepted by both compilers from the same source.
 - **Differential tests.** Each program in `tests/` is compiled by `leanc` and run; its output must equal `tests/expected/`, which was generated by running the same file under official Lean. They cover value semantics under aliasing, pattern matching, control flow, integer edge cases, SHA-2 at every message length from 0 to 300, Ed25519 signing and verification, lean-svm's programs in the sBPF virtual machine with Agave's compute-unit counts, three of them calling the SPL token programs, an Anchor program (as sBPF v0 and v3), one program compiled for every sBPF version, 1,500 random programs run as machine code and held to the interpreter, twenty whole transactions and 49 more through the built-in programs, all of whose output must also equal what Agave's runtime prints, the transaction wire format under fuzzing, and a fuzz run that throws 16,000 random and corrupted records at the wire parsers (which must neither crash nor disagree). Continuous integration runs both this and the plain build on every push.
-- **External references.** The crypto is additionally checked against Python's `hashlib` and `cryptography`, RFC 8032 vectors, the cases Ethereum's clients test their alt_bn128 precompiles with, Poseidon's published values, P-256 signatures made by OpenSSL ([`tests/curves.lean`](tests/curves.lean)), and, continuously, mainnet itself.
+- **External references.** The crypto is additionally checked against Python's `hashlib` and `cryptography`, RFC 8032 vectors, the cases Ethereum's clients test their alt_bn128 precompiles with, Poseidon's published values, P-256 signatures made by OpenSSL ([`tests/curves.lean`](tests/curves.lean)), the validators' BLS library for BLS12-381 ([`tests/bls.lean`](tests/bls.lean)), and, continuously, mainnet itself.
 
 ```console
 $ make lean-check
@@ -954,6 +965,7 @@ Build completed successfully (130 jobs).
 ok    anchor (official Lean agrees)
 ok    basics (official Lean agrees)
 ok    blake3 (official Lean agrees)
+ok    bls (official Lean agrees)
 ok    block (official Lean agrees)
 ok    builtins (official Lean agrees)
 ok    cpi (official Lean agrees)
@@ -980,7 +992,7 @@ ok    transaction (official Lean agrees)
 ok    txformat (official Lean agrees)
 ok    versions (official Lean agrees)
 ok    zstd (official Lean agrees)
-31 passed, 0 failed
+32 passed, 0 failed
 ```
 
 The tests not marked "official Lean agrees" either use raw syscalls (`fork`, futexes), which exist only as machine code, or check behaviour specific to `leanc` (aborting on a bounds error, in-place updates).
@@ -993,7 +1005,7 @@ Measured on one machine (Xeon Gold 5515+), single core unless noted. They are he
 |---|---|
 | `leanc` source | about 6,400 lines of C |
 | `leanc` binary | 166 KB, static, zero undefined symbols |
-| Lean in this repo | 19,300 lines: runtime 814, libraries 13,480, client 5,020 |
+| Lean in this repo | 20,100 lines: runtime 814, libraries 14,220, client 5,080 |
 | Compiling the whole client | **about 0.1 s** |
 | `leansol` binary | **1.2 MB**, static |
 | Full build from a fresh clone | about 0.1 s |
@@ -1035,13 +1047,14 @@ lib/
   Ipc.lean          futex-backed rings and counters in shared memory
   Crypto/           SHA-256, SHA-512, Ed25519 (field, curve, scalars, sign, verify) and Ristretto, Reed–Solomon,
                     BLAKE3, ChaCha20 as a random number generator, Keccak-256, secp256k1 key recovery,
-                    Montgomery arithmetic, Poseidon, alt_bn128 (BN254) with its pairing, P-256 signatures, SipHash
+                    Montgomery arithmetic, Poseidon, alt_bn128 (BN254) with its pairing, P-256 signatures, SipHash,
+                    BLS12-381 with its pairing and the signatures that add up
   Solana/           wire formats, all CRDS record layouts, gossip messages, hash tables,
                     the sBPF virtual machine (SbpfBase: loading, memory, accounts; Native: the
                     built-in programs; Sbpf: the interpreter; Jit: programs as x86-64), transactions, and the bank,
                     shreds and their recovery, entries and proof of history, repair, block checking,
                     snapshots (manifest, account files), the lattice hash, the accounts store,
-                    the leader schedule, the footer's certificates and what they do to vote accounts,
+                    the leader schedule, the footer's certificates, their check, and what they do to vote accounts,
                     the end of an epoch (stakes, rewards, the next epoch's budget)
   Net/              IPv4 helpers and a DNS stub resolver
   Encoding/         hex, Base58, Base64, Zstandard decompression, tar
@@ -1065,9 +1078,9 @@ lakefile.toml     lets the official toolchain check all of the above
 
 Being straightforward about what this is:
 
-- **Not a voting validator.** It verifies gossip; it receives and verifies every block; it holds mainnet's state as of a snapshot, verified account by account; and from there it [executes the chain](#execute-the-chain), block by block, to the bank hashes mainnet's leaders signed, through the turn of an epoch. It does not vote and does not produce blocks: voting needs BLS12-381 signatures, the consensus messages, the ability to execute a block before it is final (and to undo it), and a vote account with stake behind it.
-- **It stops when it does not know.** Mainnet uses things no test set holds: a dozen of them stopped the executor in its first 47,000 blocks, and there will be more (most of the vote program is not written, nor are feature activations). It stops at the first bank hash that differs, with the state as last saved, rather than carry on wrong.
-- **The executor is not part of the node yet.** The node saves verified blocks (`--spool`) and the executor is a second process reading them; it trusts the footers' certificates for what is final, without checking their signatures, and it does not notice a transaction that was already processed. Its log of changes only grows.
+- **Not a voting validator.** It verifies gossip; it receives and verifies every block; it holds mainnet's state as of a snapshot, verified account by account; and from there it [executes the chain](#execute-the-chain), block by block, to the bank hashes mainnet's leaders signed, through the turn of an epoch. It does not vote and does not produce blocks: it now checks the validators' BLS signatures, but voting needs it to make them: the consensus messages, the ability to execute a block before it is final (and to undo it), and a vote account with stake behind it.
+- **It stops when it does not know.** Mainnet uses things no test set holds: a dozen of them stopped the executor in its first 47,000 blocks, another after 120,000 more, and there will be more (most of the vote program is not written, nor are feature activations). It stops at the first bank hash that differs, with the state as last saved, rather than carry on wrong.
+- **The executor is not part of the node yet.** The node saves verified blocks (`--spool`) and the executor is a second process reading them. It does not notice a transaction that was already processed, and its log of changes only grows.
 - **Translated programs are kept.** A program's machine code stays in memory for as long as the process runs: about 35 bytes for each sBPF instruction, more than half a gigabyte over 600 blocks. Nothing is evicted yet.
 - **Listen-only.** It answers pings but does not serve pull requests or push records to others.
 - **A simple store.** Records are remembered by hash, up to 400,000; when that fills (every several minutes on mainnet) the hash set is flushed and refilled rather than aged out record by record. The node table survives the flush.
@@ -1075,7 +1088,7 @@ Being straightforward about what this is:
 - **The compiler is not self-hosted.** Its source is C. Nothing in the build uses a C toolchain, because a prebuilt compiler is checked in, but changing the compiler does.
 - **A subset of Lean.** No type classes or higher-order functions is a real restriction; the libraries here are written around it.
 - **`Nat` is 64 bits** (overflow traps rather than wraps; see above).
-- **Young code.** The compiler has been exercised by about 19,300 lines of Lean and the test suite, not by years of users. The Ed25519 implementation is variable-time, which is fine for verifying public data and not what you want around long-lived secret keys.
+- **Young code.** The compiler has been exercised by about 20,100 lines of Lean and the test suite, not by years of users. The Ed25519 implementation is variable-time, which is fine for verifying public data and not what you want around long-lived secret keys.
 - **The network moves.** Wire formats follow agave's current gossip code; when the protocol changes, this needs to follow.
 
 ## How this relates to lean-svm
