@@ -1,0 +1,7 @@
+name = "jitproof"
+version = "0.1.0"
+defaultTargets = ["Proof"]
+
+[[lean_lib]]
+name = "Proof"
+roots = ["KernelBV", "Alu", "Interpreter", "Step", "X86", "Encoding", "Plan", "Execution", "Extraction", "Headers", "Sign", "Arithmetic", "Semantics", "Body", "Division", "Relocation", "Coverage", "Proof"]

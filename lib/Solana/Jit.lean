@@ -341,6 +341,68 @@ def pushFrame (b : ByteArray) (next : UInt64) : ByteArray := Id.run do
 
 -- ------------------------------------------------------------ the translation
 
+/-- Append one admitted ALU instruction. A guarded division records its rel32 field
+at the same absolute offset used by the final fault-stub relocation pass. -/
+def aluCode (b : ByteArray) (faults : Array UInt64) (pc : Nat) (uncounted : UInt64)
+    (cls op d s : UInt64) (named : Bool) (imm32 : UInt64) : ByteArray × Array UInt64 := Id.run do
+  let mut b := b
+  let mut faults := faults
+  let imm := Sbpf.sext32 imm32
+  let w : UInt64 := if cls == 7 then 1 else 0
+  let dh := hostOf d
+  -- the second operand, if it is a register: r10 is fetched into rax
+  if named && s == 10 then
+    b := rm b 1 0x8B rax rbp (slot 10)
+  let sh := if s == 10 then rax else hostOf s
+  if op == 0x00 || op == 0x10 || op == 0x40 || op == 0x50 || op == 0xa0 then
+    let ext : UInt64 := if op == 0x00 then 0 else if op == 0x10 then 5 else if op == 0x40 then 1 else if op == 0x50 then 4 else 6
+    b := if named then rr b w (ext * 8 + 1) sh dh else ri b w ext dh imm
+    if w == 0 && (op == 0x00 || op == 0x10) then
+      b := rr b 1 0x63 dh dh                                -- the 32-bit sum, sign-extended
+  else if op == 0x20 then
+    b := if named then rr b w 0x1AF dh sh else Fast.push32 (rr b w 0x69 dh dh) imm
+    if w == 0 then
+      b := rr b 1 0x63 dh dh
+  else if op == 0x30 || op == 0x90 then
+    if named then
+      b := rr b w 0x85 sh sh
+      b := jumpIf b 4
+      faults := fault faults (b.size - 4) pc uncounted
+    else
+      b := Fast.push32 (rm b w 0xC7 0 rbp (slot cTemp)) imm
+    b := rr b w 0x89 dh rax
+    b := rr b 0 0x31 rdx rdx
+    b := if named then rr b w 0xF7 6 sh else rm b w 0xF7 6 rbp (slot cTemp)
+    b := rr b w 0x89 (if op == 0x30 then rax else rdx) dh
+  else if op == 0x60 || op == 0x70 || op == 0xc0 then
+    let which : UInt64 := if op == 0x60 then 0 else if op == 0x70 then 1 else 2
+    if named then
+      b := shiftBy b w which dh dh sh
+    else
+      let n := imm &&& (if w == 1 then 63 else 31)
+      if n == 0 then
+        b := if w == 0 then rr b 0 0x89 dh dh else b
+      else
+        b := (rr b w 0xC1 (if which == 0 then 4 else if which == 1 then 5 else 7) dh).push n.toUInt8
+  else if op == 0x80 then
+    b := rr b w 0xF7 3 dh
+  else if op == 0xb0 then
+    if named then
+      b := if s == 10 then rr b w 0x89 rax dh else rr b w 0x89 sh dh
+    else
+      b := loadConstant b dh (if w == 1 then imm else imm32)
+  else
+    -- byte order: the low 2, 4 or 8 bytes, reversed if `named`
+    if imm32 == 16 then
+      if named then
+        b := (rr b 2 0xC1 0 dh).push 8                      -- rol r16, 8
+      b := rr b 0 0x1B7 dh dh                               -- movzx r32, r16
+    else if imm32 == 32 then
+      b := if named then ((lead b 0 0 0 dh).push 0x0F).push (0xC8 ||| (dh &&& 7)).toUInt8 else rr b 0 0x89 dh dh
+    else if named then
+      b := ((lead b 1 0 0 dh).push 0x0F).push (0xC8 ||| (dh &&& 7)).toUInt8
+  return (b, faults)
+
 /-- Translates a program. Returns the machine code and, for each instruction, whether the code can be
 entered there; or two empty arrays if this program is left to the interpreter altogether.
 
@@ -446,59 +508,9 @@ def compile (code syscalls calls : Array UInt64) (count entry : Nat) (v3 : Bool)
     let uncounted := (length - ran).toUInt64
     let mut step := 1
     if cls == 7 || cls == 4 then
-      let w : UInt64 := if cls == 7 then 1 else 0
-      let dh := hostOf d
-      -- the second operand, if it is a register: r10 is fetched into rax
-      if named && s == 10 then
-        b := rm b 1 0x8B rax rbp (slot 10)
-      let sh := if s == 10 then rax else hostOf s
-      if op == 0x00 || op == 0x10 || op == 0x40 || op == 0x50 || op == 0xa0 then
-        let ext : UInt64 := if op == 0x00 then 0 else if op == 0x10 then 5 else if op == 0x40 then 1 else if op == 0x50 then 4 else 6
-        b := if named then rr b w (ext * 8 + 1) sh dh else ri b w ext dh imm
-        if w == 0 && (op == 0x00 || op == 0x10) then
-          b := rr b 1 0x63 dh dh                                -- the 32-bit sum, sign-extended
-      else if op == 0x20 then
-        b := if named then rr b w 0x1AF dh sh else Fast.push32 (rr b w 0x69 dh dh) imm
-        if w == 0 then
-          b := rr b 1 0x63 dh dh
-      else if op == 0x30 || op == 0x90 then
-        if named then
-          b := rr b w 0x85 sh sh
-          b := jumpIf b 4
-          faults := fault faults (b.size - 4) pc uncounted
-        else
-          b := Fast.push32 (rm b w 0xC7 0 rbp (slot cTemp)) imm
-        b := rr b w 0x89 dh rax
-        b := rr b 0 0x31 rdx rdx
-        b := if named then rr b w 0xF7 6 sh else rm b w 0xF7 6 rbp (slot cTemp)
-        b := rr b w 0x89 (if op == 0x30 then rax else rdx) dh
-      else if op == 0x60 || op == 0x70 || op == 0xc0 then
-        let which : UInt64 := if op == 0x60 then 0 else if op == 0x70 then 1 else 2
-        if named then
-          b := shiftBy b w which dh dh sh
-        else
-          let n := imm &&& (if w == 1 then 63 else 31)
-          if n == 0 then
-            b := if w == 0 then rr b 0 0x89 dh dh else b
-          else
-            b := (rr b w 0xC1 (if which == 0 then 4 else if which == 1 then 5 else 7) dh).push n.toUInt8
-      else if op == 0x80 then
-        b := rr b w 0xF7 3 dh
-      else if op == 0xb0 then
-        if named then
-          b := if s == 10 then rr b w 0x89 rax dh else rr b w 0x89 sh dh
-        else
-          b := loadConstant b dh (if w == 1 then imm else imm32)
-      else
-        -- byte order: the low 2, 4 or 8 bytes, reversed if `named`
-        if imm32 == 16 then
-          if named then
-            b := (rr b 2 0xC1 0 dh).push 8                      -- rol r16, 8
-          b := rr b 0 0x1B7 dh dh                               -- movzx r32, r16
-        else if imm32 == 32 then
-          b := if named then ((lead b 0 0 0 dh).push 0x0F).push (0xC8 ||| (dh &&& 7)).toUInt8 else rr b 0 0x89 dh dh
-        else if named then
-          b := ((lead b 1 0 0 dh).push 0x0F).push (0xC8 ||| (dh &&& 7)).toUInt8
+      let (out, sites) := aluCode b faults pc uncounted cls op d s named imm32
+      b := out
+      faults := sites
     else if cls == 1 || cls == 2 || cls == 3 then
       let width := word &&& 0x18
       let size : UInt64 := if width == 0x00 then 4 else if width == 0x08 then 2 else if width == 0x10 then 1 else 8
