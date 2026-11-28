@@ -956,6 +956,13 @@ def main : IO Unit := do
     let restart ← world.get Sbpf.lastRestartSlotSysvar
     let clock : Sbpf.Clock := ⟨slot, Wire.u64 newClock.data 8, epoch, epoch + 1, Wire.u64 newClock.data 32⟩
     let sysvars : Sbpf.Sysvars := ⟨rent.data, schedule.data, rewards.data, newHashes.data, history.data, Wire.u64 restart.data 0⟩
+    -- (programs may ask for the stake active in this epoch: it was settled when the epoch began, as the next one's stakes)
+    if machine.stakes.size == 0 || turning then
+      let current := stakesOf manifest (epoch + 1)
+      let mut packed := u64 current.total
+      for v in current.voters do
+        packed := Wire.putU64 (packed ++ v.vote) v.stake
+      machine := { machine with stakes := packed }
     machine := { machine with clock := clock, blockhash := latest, lamportsPerSignature := 5000, sysvars := sysvars }
     -- ---- the transactions, in order
     let mut signatures : UInt64 := 0

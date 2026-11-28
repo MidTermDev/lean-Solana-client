@@ -741,13 +741,18 @@ partial def execute (m : Machine) (st0 : State) (programId : ByteArray) (metas :
             else
               mem := (whole.extract a3.toNat (a3 + length).toNat).copySlice 0 mem dest length.toNat
         else if id == sysEpochStake then
-          -- stake of the whole cluster (a1 = 0) or delegated to one vote account; nothing is staked here
+          -- the stake active in this epoch: the whole cluster's (a1 = 0), or what is delegated to one vote account
           if a1 == 0 then
             units := units + 100
+            result := if m.stakes.size >= 8 then Wire.u64 m.stakes 0 else 0
           else
             units := units + 110
-            if (readBytes p mem inputLen a1 32).isNone then
-              status := accessViolation
+            match readBytes p mem inputLen a1 32 with
+            | none => status := accessViolation
+            | some vote =>
+              for k in [0:m.stakes.size / 40] do
+                if Wire.eqAt m.stakes (8 + 40 * k) vote 0 32 then
+                  result := Wire.u64 m.stakes (40 + 40 * k)
         else if id == sysSetReturn then
           units := units + 100 + a2 / 250
           match readBytes p mem inputLen a1 a2 with

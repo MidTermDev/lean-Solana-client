@@ -750,6 +750,8 @@ structure Machine where
   index : Array UInt64
   /-- run every program with the interpreter, even one that has been translated into machine code -/
   interpret : Bool
+  /-- the stake active in the current epoch: the total, then each validator's vote account and its stake (40 bytes) -/
+  stakes : ByteArray
   deriving Inhabited
 
 /-- Everything an instruction can change. `status` is `finished` (0) while
@@ -798,7 +800,7 @@ def Sysvars.standard : Sysvars :=
 
 def Machine.create (clock : Clock) (budget : UInt64) : Machine :=
   ⟨Array.emptyWithCapacity 4, Array.emptyWithCapacity 4, clock, budget, Sysvars.standard, 32768, ByteArray.empty, 5000, 0,
-    Array.replicate 64 0, false⟩
+    Array.replicate 64 0, false, ByteArray.empty⟩
 
 /-- The smallest balance at which an account with `size` bytes of data is
 exempt from rent: (128 + size) bytes at the rate in the Rent sysvar. -/
