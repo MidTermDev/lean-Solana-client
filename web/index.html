@@ -417,7 +417,7 @@ account   vaultB   data 5a60e8a6…   <i>(changed)</i></pre>
           <div class="defs">
             <div class="def"><h3>Not a voting validator</h3><p>It verifies gossip and every block, holds the state, and executes the chain to the leaders' bank hashes. It checks the validators' BLS signatures but does not make them: it does not vote or produce blocks, which needs the consensus messages and stake.</p></div>
             <div class="def"><h3>Listen-only</h3><p>It answers pings but does not yet serve or push records to other nodes.</p></div>
-            <div class="def"><h3>It stops when it does not know</h3><p>Mainnet uses things no test set holds: a dozen of them stopped the executor in its first 47,000 blocks, another after 120,000 more. It stops at the first bank hash that differs, with its state as last saved, rather than carry on wrong. Most of the vote program is not written yet.</p></div>
+            <div class="def"><h3>It stops when it does not know</h3><p>Mainnet uses things no test set holds: a dozen of them stopped the executor in its first 47,000 blocks, three more in the next 165,000. It stops at the first bank hash that differs, with its state as last saved, rather than carry on wrong. Most of the vote program is not written yet.</p></div>
             <div class="def"><h3>The executor is a second process</h3><p>The node saves the blocks it verifies and the executor reads them. At 0.1 seconds a block it has twice the chain's pace, no more.</p></div>
             <div class="def"><h3>Nothing is sent on-chain</h3><p>Programs execute locally. The client does not build, sign or submit transactions.</p></div>
             <div class="def"><h3>x86-64 Linux</h3><p>The code generator and the system-call numbers are specific to it.</p></div>
@@ -462,6 +462,7 @@ account   vaultB   data 5a60e8a6…   <i>(changed)</i></pre>
                 <li><b>Executing the chain</b>From a fresh snapshot, block after block: 23,700 in a row between two stops, state saved as it goes, missing blocks fetched from validators.</li>
                 <li><b>The turn of an epoch</b>Mainnet's epoch 1099: stakes, rewards to a million accounts over 522 blocks, and a budget computed in doubles made of integers. Every hash matched.</li>
                 <li><b>Certificates checked</b>BLS12-381 in 600 lines of Lean: a block is executed only when a certificate signed by enough of the stake says it is final. 19 ms a check, and the same answers as the validators' own library.</li>
+                <li><b>Confidential transfers</b>The proof program behind encrypted token balances, all twelve kinds of proof up to Bulletproofs, in 360 lines. Line for line the same as Agave's on 65 transactions.</li>
               </ul>
             </div>
             <div class="stage next">

@@ -20,3 +20,4 @@ solana-transaction = "3.0.1"
 # (tests/oracle-next builds the same source with this on, and the library it needs)
 [features]
 bls = []
+zk = []

@@ -59,25 +59,31 @@ def permute (state : Array UInt64) : Array UInt64 := Id.run do
     a := a.set! 0 (a[0]! ^^^ roundConstants[round]!)
   return a
 
-/-- Keccak-256 of `data`: 32 bytes. -/
-def hash (data : ByteArray) : ByteArray := Id.run do
-  -- pad to a multiple of 136 bytes: a 1 bit, zeros, a final 1 bit
-  let mut padded := data.push 0x01
-  while padded.size % 136 != 0 do
+/-- The sponge: `data`, padded from the byte `pad` on, is mixed in `rate` bytes at a time, and `count`
+bytes are taken out. Keccak-256 is pad 1, rate 136; SHA3-512 pad 6, rate 72; SHAKE256 pad 0x1f, rate 136. -/
+def sponge (data : ByteArray) (pad : UInt8) (rate count : Nat) : ByteArray := Id.run do
+  let mut padded := data.push pad
+  while padded.size % rate != 0 do
     padded := padded.push 0
   padded := padded.set! (padded.size - 1) (padded[padded.size - 1]! ||| 0x80)
   let mut state : Array UInt64 := Array.replicate 25 0
-  for block in [0:padded.size / 136] do
-    for i in [0:17] do
+  for block in [0:padded.size / rate] do
+    for i in [0:rate / 8] do
       let mut word : UInt64 := 0
       for j in [0:8] do
-        word := word ||| (padded[136 * block + 8 * i + j]!.toUInt64 <<< (8 * j).toUInt64)
+        word := word ||| (padded[rate * block + 8 * i + j]!.toUInt64 <<< (8 * j).toUInt64)
       state := state.set! i (state[i]! ^^^ word)
     state := permute state
-  let mut out := ByteArray.emptyWithCapacity 32
-  for i in [0:4] do
-    for j in [0:8] do
-      out := out.push (state[i]! >>> (8 * j).toUInt64).toUInt8
+  let mut out := ByteArray.emptyWithCapacity count
+  while out.size < count do
+    for i in [0:rate] do
+      if out.size < count then
+        out := out.push (state[i / 8]! >>> (8 * (i % 8)).toUInt64).toUInt8
+    if out.size < count then
+      state := permute state
   return out
+
+/-- Keccak-256 of `data`: 32 bytes. -/
+def hash (data : ByteArray) : ByteArray := sponge data 0x01 136 32
 
 end Keccak

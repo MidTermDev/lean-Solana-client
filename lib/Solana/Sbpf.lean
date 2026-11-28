@@ -229,12 +229,13 @@ partial def execute (m : Machine) (st0 : State) (programId : ByteArray) (metas :
     if !(isRepeat metas i) then
       entrySum := entrySum + entry[metas[i]!.index]!.lamports
   if programId == systemProgram || programId == computeBudgetProgram || programId == loaderId || programId == loaderV1
-      || programId == loaderV2 || programId == voteProgram then
+      || programId == loaderV2 || programId == voteProgram || programId == zkProofProgram then
     -- built into the runtime. The compute budget program's work is done before the transaction runs, and the
     -- two older loaders no longer accept instructions.
     let after := if programId == systemProgram then systemInstruction m st0 metas data
       else if programId == loaderId then loaderInstruction m st0 metas data
       else if programId == voteProgram then voteInstruction m st0 metas data
+      else if programId == zkProofProgram then zkInstruction st0 metas data
       else if programId == computeBudgetProgram then st0.charge 150
       else refused (st0.charge (if programId == loaderV2 then 570 else 1140)) "UnsupportedProgramId"
     if after.units > m.budget then

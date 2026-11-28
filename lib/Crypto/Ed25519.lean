@@ -491,6 +491,28 @@ def encode (p : Point) : ByteArray :=
   let s := Fe.mul (if rotate then Fe.mul den1 invSqrtAMinusD else den2) (Fe.sub p.z (if Fe.isNegative (Fe.mul x zInverse) then Fe.neg y else y))
   Fe.toBytes (if Fe.isNegative s then Fe.neg s else s)
 
+def sqrtADMinusOne : Fe := Fe.fromBytes (Hex.decode "1b2e7b49a0f6977ebd54781b0c8e9daffdd1f531c9fc3c0fac48832bbf316937")
+
+/-- The map from any number modulo p to a group element (Elligator 2, as RFC 9496 gives it). -/
+def map (t : Fe) : Point :=
+  let r := Fe.mul sqrtM1 (Fe.sq t)
+  let u := Fe.mul (Fe.add r Fe.one) (Fe.sub Fe.one (Fe.sq d))
+  let v := Fe.mul (Fe.sub (Fe.neg Fe.one) (Fe.mul r d)) (Fe.add r d)
+  let (square, root) := sqrtRatio u v
+  let other := Fe.mul root t
+  let s := if square then root else if Fe.isNegative other then other else Fe.neg other
+  let c := if square then Fe.neg Fe.one else r
+  let n := Fe.sub (Fe.mul (Fe.mul c (Fe.sub r Fe.one)) (Fe.sq (Fe.sub d Fe.one))) v
+  let w0 := Fe.mul (Fe.add s s) v
+  let w1 := Fe.mul n sqrtADMinusOne
+  let w2 := Fe.sub Fe.one (Fe.sq s)
+  let w3 := Fe.add Fe.one (Fe.sq s)
+  ⟨Fe.mul w0 w3, Fe.mul w2 w1, Fe.mul w1 w3, Fe.mul w0 w2⟩
+
+/-- A group element from 64 uniform bytes: each half mapped, and the two added. -/
+def fromUniform (b : ByteArray) : Point :=
+  Point.add (map (Fe.fromBytes (b.extract 0 32))) (map (Fe.fromBytes (b.extract 32 64)))
+
 end Ristretto
 
 /-- The base point B: y = 4/5 with x positive. -/
@@ -602,6 +624,27 @@ def scMulAdd (a b c : ByteArray) : ByteArray := Id.run do
     out := out.push v.toUInt8
     carry := v >>> 8
   return scReduce out
+
+def scZero : ByteArray := Hex.decode "0000000000000000000000000000000000000000000000000000000000000000"
+def scOne : ByteArray := Hex.decode "0100000000000000000000000000000000000000000000000000000000000000"
+/-- L − 1, which is −1 modulo L. -/
+def scMinusOne : ByteArray := Hex.decode "ecd3f55c1a631258d69cf7a2def9de1400000000000000000000000000000010"
+
+def scMul (a b : ByteArray) : ByteArray := scMulAdd a b scZero
+def scAdd (a b : ByteArray) : ByteArray := scMulAdd a scOne b
+def scSub (a b : ByteArray) : ByteArray := scMulAdd b scMinusOne a
+def scNeg (a : ByteArray) : ByteArray := scMulAdd a scMinusOne scZero
+
+/-- `1 / a` modulo L, as `a` to the power L − 2. -/
+def scInvert (a : ByteArray) : ByteArray := Id.run do
+  let power := Hex.decode "ebd3f55c1a631258d69cf7a2def9de1400000000000000000000000000000010"
+  let mut r := scOne
+  for i in [0:253] do
+    let bit := 252 - i
+    r := scMul r r
+    if (power[bit / 8]! >>> (bit % 8).toUInt8) &&& 1 == 1 then
+      r := scMul r a
+  return r
 
 -- ---------------------------------------------------------------- signatures
 

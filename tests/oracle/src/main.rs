@@ -9,12 +9,16 @@
 //!
 //! This file is built twice: by tests/oracle against Agave 3.1 and by
 //! tests/oracle-next against Agave 4.3, which also runs sBPF v3 and, with
-//! the BLS library the validators use, prints the report of tests/bls.lean.
+//! the BLS library the validators use, prints the report of tests/bls.lean,
+//! and with their ZK library makes the proofs of tests/zkproof.lean and
+//! checks them with Agave's proof program.
 //!
 //!     oracle anchor anchor_vault.so anchor_vault_v3.so
 //!     oracle transaction sysvar_probe.so counter.so
 //!     oracle versions sysvar_probe_v1.so sysvar_probe_v2.so ...
 //!     oracle-next bls
+//!     oracle-next zkproof tests/zkproofs.bin
+//!     oracle-next zkproof-make FILE        (new proofs: a new fixture)
 //!
 //! Set ORACLE_RAW=1 to also print Agave's complete log, which shows how many
 //! compute units each program consumed at each level of a call.
@@ -768,11 +772,197 @@ mod bls {
     }
 }
 
+/// The reference for tests/zkproof.lean: proofs made by the library the validators use, checked by
+/// Agave's ZK ElGamal proof program.
+#[cfg(feature = "zk")]
+mod zk {
+    use {
+        super::*,
+        curve25519_dalek::scalar::Scalar,
+        solana_zk_sdk::{
+            encryption::{
+                elgamal::ElGamalKeypair,
+                grouped_elgamal::GroupedElGamal,
+                pedersen::{Pedersen, PedersenOpening},
+            },
+            zk_elgamal_proof_program::*,
+        },
+    };
+
+    const PROGRAM: Address = address!("ZkE1Gama1Proof11111111111111111111111111111");
+
+    /// Writes proofs of every kind to `file`, each as its kind, its length in two bytes, and its
+    /// bytes (what it is about, then the proof). Proofs are made with fresh randomness, so every
+    /// run writes a different file; tests/zkproofs.bin is one such run, kept.
+    pub fn make(file: &str) {
+        let mut out = Vec::new();
+        let mut put = |kind: u8, bytes: &[u8]| {
+            out.push(kind);
+            out.extend_from_slice(&(bytes.len() as u16).to_le_bytes());
+            out.extend_from_slice(bytes);
+        };
+        let (first, second, third) = (ElGamalKeypair::new_rand(), ElGamalKeypair::new_rand(), ElGamalKeypair::new_rand());
+        let amount = 55u64;
+
+        let nothing = first.pubkey().encrypt(0u64);
+        put(1, bytemuck::bytes_of(&build_zero_ciphertext_proof_data(&first, &nothing).unwrap()));
+
+        let ciphertext = first.pubkey().encrypt(amount);
+        let opening = PedersenOpening::new_rand();
+        let other = second.pubkey().encrypt_with(amount, &opening);
+        put(2, bytemuck::bytes_of(&build_ciphertext_ciphertext_equality_proof_data(&first, second.pubkey(), &ciphertext, &other, &opening, amount).unwrap()));
+
+        let (commitment, opening) = Pedersen::new(amount);
+        put(3, bytemuck::bytes_of(&build_ciphertext_commitment_equality_proof_data(&first, &ciphertext, &commitment, &opening, amount).unwrap()));
+
+        put(4, bytemuck::bytes_of(&build_pubkey_validity_proof_data(&first).unwrap()));
+
+        // a fee of 4% of 1, rounded up to 1, below the cap of 3; then a fee that is the cap
+        let (base, base_opening) = Pedersen::new(1u64);
+        let (fee, fee_opening) = Pedersen::new(1u64);
+        let rate = Scalar::from(400u64);
+        let delta = &fee * Scalar::from(10_000u64) - &base * &rate;
+        let delta_opening = &fee_opening * &Scalar::from(10_000u64) - &base_opening * &rate;
+        let (claimed, claimed_opening) = Pedersen::new(9_600u64);
+        put(5, bytemuck::bytes_of(&build_percentage_with_cap_proof_data(&fee, &fee_opening, 1, &delta, &delta_opening, 9_600, &claimed, &claimed_opening, 3).unwrap()));
+        let (fee, fee_opening) = Pedersen::new(3u64);
+        let (delta, delta_opening) = Pedersen::new(100u64);
+        let (claimed, claimed_opening) = Pedersen::new(100u64);
+        put(5, bytemuck::bytes_of(&build_percentage_with_cap_proof_data(&fee, &fee_opening, 3, &delta, &delta_opening, 100, &claimed, &claimed_opening, 3).unwrap()));
+
+        // amounts that just fit their bits: 64 bits in four parts, 128 in eight, 256 in four
+        let committed = |amounts: &[u64]| amounts.iter().map(|a| Pedersen::new(*a)).collect::<Vec<_>>();
+        let pairs = committed(&[255, 0, 65_535, u32::MAX as u64]);
+        put(6, bytemuck::bytes_of(&build_batched_range_proof_u64_data(pairs.iter().map(|p| &p.0).collect(), vec![255, 0, 65_535, u32::MAX as u64],
+            vec![8, 8, 16, 32], pairs.iter().map(|p| &p.1).collect()).unwrap()));
+        let amounts = [65_535u64, 77, 99, 0, 11, 33, 1, 40_000];
+        let pairs = committed(&amounts);
+        put(7, bytemuck::bytes_of(&build_batched_range_proof_u128_data(pairs.iter().map(|p| &p.0).collect(), amounts.to_vec(),
+            vec![16; 8], pairs.iter().map(|p| &p.1).collect()).unwrap()));
+        let amounts = [u64::MAX, 1, 0, 1 << 63];
+        let pairs = committed(&amounts);
+        put(8, bytemuck::bytes_of(&build_batched_range_proof_u256_data(pairs.iter().map(|p| &p.0).collect(), amounts.to_vec(),
+            vec![64; 4], pairs.iter().map(|p| &p.1).collect()).unwrap()));
+
+        let (low, high) = (PedersenOpening::new_rand(), PedersenOpening::new_rand());
+        let (p1, p2, p3) = (first.pubkey(), second.pubkey(), third.pubkey());
+        let two = GroupedElGamal::encrypt_with([p1, p2], amount, &low);
+        put(9, bytemuck::bytes_of(&build_grouped_ciphertext_2_handles_validity_proof_data(p1, p2, &two, amount, &low).unwrap()));
+        let two_high = GroupedElGamal::encrypt_with([p1, p2], 7u64, &high);
+        put(10, bytemuck::bytes_of(&build_batched_grouped_ciphertext_2_handles_validity_proof_data(p1, p2, &two, &two_high, amount, 7, &low, &high).unwrap()));
+        let three = GroupedElGamal::encrypt_with([p1, p2, p3], amount, &low);
+        put(11, bytemuck::bytes_of(&build_grouped_ciphertext_3_handles_validity_proof_data(p1, p2, p3, &three, amount, &low).unwrap()));
+        let three_high = GroupedElGamal::encrypt_with([p1, p2, p3], 7u64, &high);
+        put(12, bytemuck::bytes_of(&build_batched_grouped_ciphertext_3_handles_validity_proof_data(p1, p2, p3, &three, &three_high, amount, 7, &low, &high).unwrap()));
+        std::fs::write(file, out).unwrap();
+    }
+
+    fn proof(data: &[u8], accounts: Vec<AccountMeta>) -> Instruction {
+        Instruction { program_id: PROGRAM, accounts, data: data.to_vec() }
+    }
+
+    fn with_kind(kind: u8, bytes: &[u8]) -> Vec<u8> {
+        [&[kind][..], bytes].concat()
+    }
+
+    /// Runs the transactions of tests/zkproof.lean on Agave, with the proofs in `file`.
+    pub fn run(file: &str) {
+        let bytes = std::fs::read(file).unwrap();
+        let mut records = Vec::new();
+        let mut at = 0;
+        while at < bytes.len() {
+            let size = u16::from_le_bytes([bytes[at + 1], bytes[at + 2]]) as usize;
+            records.push((bytes[at], bytes[at + 3..at + 3 + size].to_vec()));
+            at += 3 + size;
+        }
+        let mut svm = LiteSVM::new();
+        let wallet = |lamports| Account { lamports, owner: SYSTEM, ..Default::default() };
+        let payer_keys = Keypair::new_from_array(hash("payer"));
+        let alice_keys = Keypair::new_from_array(hash("alice"));
+        svm.set_account(payer_keys.pubkey(), wallet(10_000_000_000)).unwrap();
+        svm.set_account(alice_keys.pubkey(), wallet(2_000_000_000)).unwrap();
+        // an account that holds a proof (the third of the file) after seven other bytes
+        let held = Address::new_from_array(hash("held"));
+        svm.set_account(held, Account { lamports: 10_000_000, owner: SYSTEM, data: [&[9u8; 7][..], &records[2].1].concat(), ..Default::default() }).unwrap();
+        println!("blockhash {}", svm.latest_blockhash());
+        let mut chain = Chain { svm, payer: payer_keys, alice: alice_keys };
+        let payer = chain.payer.pubkey();
+        let alice = chain.alice.pubkey();
+        let alice_keys = Keypair::new_from_array(hash("alice"));
+
+        // --- every kind of proof: as made, with a bit of the proof changed, with a bit of what it is about changed
+        for (number, (kind, bytes)) in records.iter().enumerate() {
+            chain.signed(&format!("proof {number}, of kind {kind}"), &[], &[unit_limit(400_000), proof(&with_kind(*kind, bytes), vec![])]);
+            let mut changed = bytes.clone();
+            let last = changed.len() - 40;
+            changed[last] ^= 1;
+            chain.signed(&format!("proof {number} with a bit of the proof changed"), &[], &[unit_limit(400_000), proof(&with_kind(*kind, &changed), vec![])]);
+            let mut changed = bytes.clone();
+            changed[5] ^= 1;
+            chain.signed(&format!("proof {number} with a bit of what it is about changed"), &[], &[unit_limit(400_000), proof(&with_kind(*kind, &changed), vec![])]);
+        }
+        chain.signed("a 64-bit range proof on the default budget", &[], &[proof(&with_kind(6, &records[6].1), vec![])]);
+        chain.signed("a 256-bit range proof on the default budget", &[], &[proof(&with_kind(8, &records[8].1), vec![])]);
+        chain.signed("an instruction with no data", &[], &[proof(&[], vec![])]);
+        chain.signed("an instruction of no kind", &[], &[proof(&[13], vec![])]);
+        let key_proof = with_kind(4, &records[3].1);
+        chain.signed("a proof cut short", &[], &[proof(&key_proof[..96], vec![])]);
+        chain.signed("a proof with a byte too many", &[], &[proof(&[&key_proof[..], &[0]].concat(), vec![])]);
+
+        // --- what a proof was about, stored in an account for later instructions to rely on
+        let stored_keys = Keypair::new_from_array(hash("stored"));
+        let stored = stored_keys.pubkey();
+        chain.signed("check a proof and store what it was about", &[&stored_keys], &[create_account(&payer, &stored, 1_343_280, 65, &PROGRAM),
+            proof(&key_proof, vec![w(stored), r(alice)])]);
+        chain.show("stored", &stored);
+        chain.signed("store into it again", &[], &[transfer(&payer, &alice, 1), proof(&key_proof, vec![w(stored), r(alice)])]);
+        let wide_keys = Keypair::new_from_array(hash("wide"));
+        let wide = wide_keys.pubkey();
+        chain.signed("store into an account of another size", &[&wide_keys], &[create_account(&payer, &wide, 1_350_240, 66, &PROGRAM),
+            proof(&key_proof, vec![w(wide), r(alice)])]);
+        chain.signed("store into an account of another program", &[], &[proof(&key_proof, vec![w(alice), r(payer)])]);
+        let blank_keys = Keypair::new_from_array(hash("blank"));
+        let blank = blank_keys.pubkey();
+        chain.signed("create an account that stores nothing yet", &[&blank_keys], &[create_account(&payer, &blank, 1_343_280, 65, &PROGRAM)]);
+        chain.signed("store into it, passed read-only", &[], &[proof(&key_proof, vec![r(blank), r(alice)])]);
+        chain.show("blank", &blank);
+
+        // --- a proof read from an account
+        let offset = |at: u32| [&[3u8][..], &at.to_le_bytes()].concat();
+        chain.signed("a proof read from an account", &[], &[proof(&offset(7), vec![r(held)])]);
+        chain.signed("read from the wrong place", &[], &[proof(&offset(6), vec![r(held)])]);
+        chain.signed("read past the account's end", &[], &[proof(&offset(8), vec![r(held)])]);
+        chain.signed("read from no account", &[], &[proof(&offset(7), vec![])]);
+        let third_keys = Keypair::new_from_array(hash("third"));
+        let third = third_keys.pubkey();
+        chain.signed("read from an account and store", &[&third_keys], &[create_account(&payer, &third, 2_011_440, 161, &PROGRAM),
+            proof(&offset(7), vec![r(held), w(third), r(payer)])]);
+        chain.show("third", &third);
+
+        // --- closing a stored context: only its authority may, and gets (or directs) the lamports
+        chain.signed("someone else closes it", &[], &[proof(&[0], vec![w(stored), w(payer), rs(payer)])]);
+        chain.signed("close without the authority signing", &[], &[proof(&[0], vec![w(stored), w(payer), r(alice)])]);
+        chain.signed("close into itself", &[&alice_keys], &[proof(&[0], vec![w(stored), w(stored), rs(alice)])]);
+        chain.signed("close with too few accounts", &[], &[proof(&[0], vec![w(stored), w(alice)])]);
+        chain.signed("close an account that stores nothing", &[&alice_keys], &[proof(&[0], vec![w(blank), w(alice), rs(alice)])]);
+        chain.signed("close an account of another program", &[&alice_keys], &[proof(&[0], vec![w(held), w(alice), rs(alice)])]);
+        chain.signed("close into a read-only account", &[&alice_keys], &[proof(&[0], vec![w(stored), r(held), rs(alice)])]);
+        chain.signed("the authority closes it", &[&alice_keys], &[proof(&[0], vec![w(stored), w(alice), rs(alice)])]);
+        chain.show("stored", &stored);
+        chain.signed("the payer closes the other, to alice", &[], &[proof(&[0], vec![w(third), w(alice), rs(payer)])]);
+        chain.show("third", &third);
+    }
+}
+
 fn main() {
     let args: Vec<String> = std::env::args().collect();
     match args.get(1).map(String::as_str) {
         #[cfg(feature = "bls")]
         Some("bls") => bls::report(),
+        #[cfg(feature = "zk")]
+        Some("zkproof-make") if args.len() == 3 => zk::make(&args[2]),
+        #[cfg(feature = "zk")]
+        Some("zkproof") if args.len() == 3 => zk::run(&args[2]),
         Some("versions") if args.len() >= 3 => versions(&args[2..]),
         Some("builtins") if args.len() == 4 => builtins(&args[2], &args[3]),
         Some("anchor") if args.len() >= 3 => args[2..].iter().for_each(|file| anchor(file)),

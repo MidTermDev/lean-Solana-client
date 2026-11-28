@@ -1,0 +1,201 @@
+blockhash CmpNeggWJ4JaWJeJ8YKN1Zypmk7uvQq3PECGUCAEMbky
+proof 0, of kind 1: success, fee 5000, 6150 units
+  signature 2Hv8ZX9JGX9u7osoyWzY8Mm2ecd1qprm613ENe2QPeUMdAvEycWGZFMcQ3rtn6Q8rdzFFvVLaqCphmQRF2p7hhYe
+  payer 9999995000, alice 2000000000
+proof 0 with a bit of the proof changed: InstructionError(1, InvalidInstructionData), fee 5000, 6150 units
+  signature 5YYa4E9nUrjf6Pm6qpwrhQJh9vHVDC8Gyct7iP7NoUP7GLS532L6oUuCBfVotjsGe237oESf7zFZ9vMp1GUtBjSW
+  payer 9999990000, alice 2000000000
+proof 0 with a bit of what it is about changed: InstructionError(1, InvalidInstructionData), fee 5000, 6150 units
+  signature EnCiEK13QmKDpgBMGPYqJDrA7VmRcDEhDaSuZfw2WAWaQmR78rMRDMRLo7NAZAwqtkBLQn2NRrrpSa1SZF4bgpm
+  payer 9999985000, alice 2000000000
+proof 1, of kind 2: success, fee 5000, 8150 units
+  signature 5czczUK27YYayUC7mDN264LxosxByMV71UpHAva6qBZHn7R5XsZrVDeHfu3YtVYEioUDPu5JzpvzFxdDFfDNnVfg
+  payer 9999980000, alice 2000000000
+proof 1 with a bit of the proof changed: InstructionError(1, InvalidInstructionData), fee 5000, 8150 units
+  signature 4vrqoA2VS6pM8WxDtzZtWcdUgaxLEu8QKBXLAZyXkd7Yi2v5Crkp543zLLWDAm8aVLSxkmrh9ghWbqLPFpP867oL
+  payer 9999975000, alice 2000000000
+proof 1 with a bit of what it is about changed: InstructionError(1, InvalidInstructionData), fee 5000, 8150 units
+  signature 3n7Tnan1tDxV7DeHbVwRzuFNppc2njJNFTiYhDj4kcLBWtJTnBsNQDuQVNvMjfu5KivENsK2PHax5evpyxyBYiXz
+  payer 9999970000, alice 2000000000
+proof 2, of kind 3: success, fee 5000, 6550 units
+  signature 1Gx41Lb7kJsz7Tc9h83QYoZqw7ixT1CHgAjy65pVhJJpCpTJwsQEcoGdCek8oRrY2Sqm8X7TtHhkEAK6CJJbSdb
+  payer 9999965000, alice 2000000000
+proof 2 with a bit of the proof changed: InstructionError(1, InvalidInstructionData), fee 5000, 6550 units
+  signature 2E8CS2YPHi4Qk5oTwM5MfHpcrNWvWyCkkjrgZFJrkzQBi34sySUmG1yhfVcEeypbL2Vjnix5LUyFboRg6jDV3t6b
+  payer 9999960000, alice 2000000000
+proof 2 with a bit of what it is about changed: InstructionError(1, InvalidInstructionData), fee 5000, 6550 units
+  signature 34jqo7yxSj3WR9RjpdrnJCXDjzyRrpW3b42fneKyBjaGxsseS9cnDZTrA5JniwBNCDJoEd6f1w2BXezSWzpHgGp9
+  payer 9999955000, alice 2000000000
+proof 3, of kind 4: success, fee 5000, 2750 units
+  signature 2DRuR8xkYJjd9NHkThXdwKtMXLS4DrnwT4toQjzCY6curawWJX5exE465Sh8LK6cpDZTdUWmaPbJRr1FJKkpVMgx
+  payer 9999950000, alice 2000000000
+proof 3 with a bit of the proof changed: InstructionError(1, InvalidInstructionData), fee 5000, 2750 units
+  signature 3PFoRLHRgBE1rDYN4WLuBkXxnhUMtJH2gciTg6MGEXwuGTNeiM3sBAKhcx5BFnaWDCM3KPWJ2gzEoRxC2WMUEXSf
+  payer 9999945000, alice 2000000000
+proof 3 with a bit of what it is about changed: InstructionError(1, InvalidInstructionData), fee 5000, 2750 units
+  signature 5wofhritCX8a6dSLHcQChSBxR6qumbCpE4AHMPzSwAewCKvvCzz7uxTvZUFbPsLJbSoiBtBTQutnXsfxakuiJuD9
+  payer 9999940000, alice 2000000000
+proof 4, of kind 5: success, fee 5000, 6650 units
+  signature 3jHZPrPyrZQjAjZ7SXqdjYHbpDMMYTVJANLaJxJhBdW9QBYonpSRQ4BLRVvLgSqX3ssLuBESQd9LbjCXYYc7HGz8
+  payer 9999935000, alice 2000000000
+proof 4 with a bit of the proof changed: InstructionError(1, InvalidInstructionData), fee 5000, 6650 units
+  signature 3uB6uHLkEDBfME9pbs5wQ1iNxgSAK3HGZiXPGzWsPKvFPtKwiCGPPWC96RwgMebreGt5ifaCc2CMvgY8aEWYHbuo
+  payer 9999930000, alice 2000000000
+proof 4 with a bit of what it is about changed: InstructionError(1, InvalidInstructionData), fee 5000, 6650 units
+  signature 2XqnRHLWEneiAhF8evNW9nw2DnaAjmcxSdUbBhv7rXCMAusYPjzi7kvCJPFgUfwsnwzwYM9C4PV41vAWrBW83YkM
+  payer 9999925000, alice 2000000000
+proof 5, of kind 5: success, fee 5000, 6650 units
+  signature uvTpoBmKUiTgfxXPNtieZFfcZsNFVPFts4QLDF3KBdur4P2cMonovsQ43jQVmKwngJRpFAKprgXg1sb64mdy4NK
+  payer 9999920000, alice 2000000000
+proof 5 with a bit of the proof changed: InstructionError(1, InvalidInstructionData), fee 5000, 6650 units
+  signature 4RhexX5s2HUMd5R68Pyjfh7ySxVYbYX6hNJyjsya3mh3DSaWsoj3HCBE1u21AAE6vXepHHqKywW8FR1PfMWjdxDn
+  payer 9999915000, alice 2000000000
+proof 5 with a bit of what it is about changed: InstructionError(1, InvalidInstructionData), fee 5000, 6650 units
+  signature 3SEbZzucpodjeR1VrHJ67gBbHTQr1ML7Aoi4ctDcVtAs7xGgsaWhfYFKurahXPJr7fCFEUi4zY5cMiqGpGDKzkvv
+  payer 9999910000, alice 2000000000
+proof 6, of kind 6: success, fee 5000, 111150 units
+  signature 24umjzq2wDP4fSCpoRL2K2YbeYeFhP61xQiUF92UiSPDmMxhHpK7QyM7TZ8t7WoDA9peLfnqHPtVTwie9DzLHn73
+  payer 9999905000, alice 2000000000
+proof 6 with a bit of the proof changed: InstructionError(1, InvalidInstructionData), fee 5000, 111150 units
+  signature sinpeqy2hH8nn1fEyanFRUkhxLd62bLGziK1fBVNkHPZWYBDafG4Ym2NoFL2Wqtrj2Uep2tUMEq5LxgDLhtGv6f
+  payer 9999900000, alice 2000000000
+proof 6 with a bit of what it is about changed: InstructionError(1, InvalidInstructionData), fee 5000, 111150 units
+  signature 2nuDaau5TADEkJ6qhP5ErdcfvZFEAkPttVLzHP8e7sx4NhJCfmVhygeZSCe46NgNzRwkZq6nvHHSqS6Yp8WTdiMN
+  payer 9999895000, alice 2000000000
+proof 7, of kind 7: success, fee 5000, 200150 units
+  signature moa8XnJ37jMXVrTPbQYPh9WiQhcshX3NMKYFce3x3WH7YGGpgS3JzNJfu1aZXquqNZWQw9PCCMhfRYiSCFYjGnz
+  payer 9999890000, alice 2000000000
+proof 7 with a bit of the proof changed: InstructionError(1, InvalidInstructionData), fee 5000, 200150 units
+  signature 5F1Y1ibXSPwDscMPxbUHHaNuQ9VUUbuP2bofBArNCz95oY7uti5SNuGopDGYDaRZo3ei6WdSJsRurJvYE97LQdJS
+  payer 9999885000, alice 2000000000
+proof 7 with a bit of what it is about changed: InstructionError(1, InvalidInstructionData), fee 5000, 200150 units
+  signature 3ihBh5kazU9nV4E4zbRub9Nj8ic8bbNFhGUmA4uw996vUVd3d1XKXCt3CBXFm5eLQyWH8LnnsThfrms1EQw1gTwG
+  payer 9999880000, alice 2000000000
+proof 8, of kind 8: success, fee 5000, 368150 units
+  signature ZdCY5tHgGLhzgUCnpu9TQLS5tQafDJDiZerWLb6GNtF4HmFaxeR13EoD1L1wnbLP4YjdzD8Z8nPi5Gm3Y3NxWv5
+  payer 9999875000, alice 2000000000
+proof 8 with a bit of the proof changed: InstructionError(1, InvalidInstructionData), fee 5000, 368150 units
+  signature 3f1cKu2HJfunyEEX9w8ohWyeeLMNE3ChMc2qFVFgnjqGN4o5HTpsxcFHt4ZF6TJ6zszGVE8DE1MHwVF8meNpWQqQ
+  payer 9999870000, alice 2000000000
+proof 8 with a bit of what it is about changed: InstructionError(1, InvalidInstructionData), fee 5000, 368150 units
+  signature 2CX8RZgqeoLe7trjBE47Rd33jZ8DPPWUP81fJSVFKybAcLnYgvnkhLNUPHDTr9neYFt7GA3KQThzVAUKVxWQtzHM
+  payer 9999865000, alice 2000000000
+proof 9, of kind 9: success, fee 5000, 6550 units
+  signature ewCXX1KAz2TJSg7h9MTJXPUU3Vqm6mng6u5GzZ4AXTGGm5sxtS7pqK6xQTiJN45gGYbyrDkgTuKK5N7ZzHihC7Q
+  payer 9999860000, alice 2000000000
+proof 9 with a bit of the proof changed: InstructionError(1, InvalidInstructionData), fee 5000, 6550 units
+  signature xYHhjwEmjoVswFGVHBj1KP5e1wFHz5cn7CeQhs2vJeNdjbit57ofJUQcuwYCVF2n5qEgVmGvwKVhQXPKBi5rrKF
+  payer 9999855000, alice 2000000000
+proof 9 with a bit of what it is about changed: InstructionError(1, InvalidInstructionData), fee 5000, 6550 units
+  signature ojK37wPLCjrED4pKPpgazHEYik4vKwnrzZrUDTbDNCmFpnGZUujTtknNeX1rt1wH3Badg1KtJy33ttDBmrHCAG3
+  payer 9999850000, alice 2000000000
+proof 10, of kind 10: success, fee 5000, 13150 units
+  signature wCzzfPvasgvY6A9XAT6W41eZEJKHYjpQaJM4GT16wk6GDXLyWdwHQJna9By1kFwt9bFqKAZsHUvXmK5yUxaBpjp
+  payer 9999845000, alice 2000000000
+proof 10 with a bit of the proof changed: InstructionError(1, InvalidInstructionData), fee 5000, 13150 units
+  signature 28NKaz4rqiutoPyVamWtRHfaucEiYkp9yENTSH4dSZh9PhFFJyfLzgtwcHGtSan9sw8vptezRCcF3TyASkFGPsCe
+  payer 9999840000, alice 2000000000
+proof 10 with a bit of what it is about changed: InstructionError(1, InvalidInstructionData), fee 5000, 13150 units
+  signature 53XxqczqVhwAUsYCZZU1z7F8T8HUecJP4RmZuTyzpTkzKsbnuLBLGEms9MZFGQJ4LKoKsyWV833NYx6r78HyM2CB
+  payer 9999835000, alice 2000000000
+proof 11, of kind 11: success, fee 5000, 8250 units
+  signature Bj23RC8oRFoeHvDnGamGufThm4jFo3PhrUvjPxz2T1RFFXLCN8bqRUKXufAD38RqwWR63HrqMQ9SgtNADFCxRU5
+  payer 9999830000, alice 2000000000
+proof 11 with a bit of the proof changed: InstructionError(1, InvalidInstructionData), fee 5000, 8250 units
+  signature 5W8e3JXbbcRKzQVhiz5hfFJLP76HcxjYmQL5Ajy6MNyugAt1KKsqrbXEKMDk4DwP9m2BLRuXeG6RyLewk3Wybrhe
+  payer 9999825000, alice 2000000000
+proof 11 with a bit of what it is about changed: InstructionError(1, InvalidInstructionData), fee 5000, 8250 units
+  signature 3wqFYZ6qN51n3pQX53HxxwEHJZJTUqgmzdXsNMuhjAJ2HEGj5EYG1pR1KEtqMcWKqMWqh45WyTsmTjdN1LbMUvU6
+  payer 9999820000, alice 2000000000
+proof 12, of kind 12: success, fee 5000, 16550 units
+  signature JKBymVT7nR3z99bvmT3DinvxYgWN6fnXNH3ph4y4iUoeLAnzsrhA1GpaF3sLFRu3utdMFSe9jDHrVZco2GLkS5S
+  payer 9999815000, alice 2000000000
+proof 12 with a bit of the proof changed: InstructionError(1, InvalidInstructionData), fee 5000, 16550 units
+  signature cgMUNzXeC4VNz1R1cyZLTui8KR26WdWaivLutSecHGqrRLUTpG1x4Am4uMfWkgbY6wiouNWxbvkXV7TNSNa3iTd
+  payer 9999810000, alice 2000000000
+proof 12 with a bit of what it is about changed: InstructionError(1, InvalidInstructionData), fee 5000, 16550 units
+  signature egE5soeD8yi8hdr3Q5RpPsLB9Z7ub9jME2TPQxpZnUPsiPugKZPy3xvyTPysNcMnauD3LH8LdRtSfYdbkyoPM6C
+  payer 9999805000, alice 2000000000
+a 64-bit range proof on the default budget: success, fee 5000, 111000 units
+  signature 517RW5LyC1C9cbwsujTFHomqJhUUVvNstZMz9sFYD3udhyhEeRUuhTKMK1RdctdugB6VL5BLnaYaTuASv8oaP6kL
+  payer 9999800000, alice 2000000000
+a 256-bit range proof on the default budget: InstructionError(0, ComputationalBudgetExceeded), fee 5000, 200000 units
+  signature wMKaPsDVAqFCz4K2GdmUq5SEFBaN1Q6qMNTiiu8rRwL7WXGPWukPah8zn9V7EFghZ3ybZHuEGfp1H1zVHQm1BGN
+  payer 9999795000, alice 2000000000
+an instruction with no data: InstructionError(0, InvalidInstructionData), fee 5000, 0 units
+  signature 3dftCR57ZpHj3bpKuYBNSm27X1VdzNvT4qnX5gvh2JeSmAY8PQCHQSSMU1oZwnDgTmcTPYKJyfitYL5rcq1vqQLn
+  payer 9999790000, alice 2000000000
+an instruction of no kind: InstructionError(0, InvalidInstructionData), fee 5000, 0 units
+  signature 46y3V26Nsi8xc8AVgTv8tTH9cW7B1p4U1MbgwNyTRmjSBWR8zkKsD1f4Gr5Xd1X2jQH8NqF1d5hsiWPTet1BwjX1
+  payer 9999785000, alice 2000000000
+a proof cut short: InstructionError(0, InvalidInstructionData), fee 5000, 2600 units
+  signature 2HcwVJvws1BHUpLdFhAqH61KM695N6YcyyAnx9Cv5vgpRvPzJY5kGZJC58Sob4SoKkuTTqtBHqXnGB3nwDWYCAP2
+  payer 9999780000, alice 2000000000
+a proof with a byte too many: InstructionError(0, InvalidInstructionData), fee 5000, 2600 units
+  signature 4tRkPoTKyffkyAmjJ5kgouPcTJpiq22EfkFh1UZsXEyiWzTq12diRCEb4ngdWnP4Se5cXrwf4mvxFY5wCxbQaLdb
+  payer 9999775000, alice 2000000000
+check a proof and store what it was about: success, fee 10000, 2750 units
+  signature 5LK5uYr7V71FG9h3ncMPcbYCoAHYEcAqZWQArj3XzwBm197vc9Nq5a9KeLSK81KXqXndMF2VS8HA48qFE2Sepczf
+  payer 9998421720, alice 2000000000
+  stored: 1343280 lamports, 65 bytes, owner ZkE1Gama1Proof11111111111111111111111111111, data 6ZwrGrUPLjimNTHGYcSrux9ftTHg6PZd6AoDNEvB2j1C
+store into it again: InstructionError(1, AccountAlreadyInitialized), fee 5000, 2750 units
+  signature 9AtkE8rk5hr53FFfdx1d6DEUjaZJigdQovWgHDCJn5BajXiq6j98qw4zUtWnq37SViKE5gAJ2qPChr1BqibiUK1
+  payer 9998416720, alice 2000000000
+store into an account of another size: InstructionError(1, InvalidAccountData), fee 10000, 2750 units
+  signature 5Tiq4qWyezHh9S7BN9Y5t5SBk3EjPU3PGPQ84tH6RQeGvDAiRoQyEsG4wB8FuqbZCgMhXTyBw1rs6tc1S6dgLpDB
+  payer 9998406720, alice 2000000000
+store into an account of another program: InstructionError(0, InvalidAccountOwner), fee 5000, 2600 units
+  signature 5ucbSbQ7ETts2nqeb2sqYnmZwVvb4VUCeWHghPHvKg5abtS347WSoqGJiYmsZE74xvHmsBP4FDwpnjrythh78i2Q
+  payer 9998401720, alice 2000000000
+create an account that stores nothing yet: success, fee 10000, 150 units
+  signature 4MfK8dvqe6cZooEWnxgQrioQCxt4DtzLKWpCYHWDmWqnedhAV87gh7xMCJVpWtUcR4JTNVhC2dV6RqqozGG4kLHo
+  payer 9997048440, alice 2000000000
+store into it, passed read-only: InstructionError(0, ReadonlyDataModified), fee 5000, 2600 units
+  signature 3gx2L4xTGeMys1TdNrTbL416a9nbNJSLs5r6zgDzK9HGC2Ez45LVYRUHWncpdKBcnFv2BfvZhW7qpRTvnmbkz6Xv
+  payer 9997043440, alice 2000000000
+  blank: 1343280 lamports, 65 bytes, owner ZkE1Gama1Proof11111111111111111111111111111, data BHVPXzXznQ8hqa76NcarF9B8LPgSyvzSebTfBBardGcW
+a proof read from an account: success, fee 5000, 6400 units
+  signature 3SpwvSNKTbVB8Lje7iq9W99qAvvgWNBRbhZzw9moePKMkQKcJv6kzFTe1GbJxUTq2ZZsHp9TAuBRZ6gXo9aFbMnp
+  payer 9997038440, alice 2000000000
+read from the wrong place: InstructionError(0, InvalidInstructionData), fee 5000, 6400 units
+  signature jgw5GCGKoyVANcymLuPAzvHxLJwd4yXGoGh8tpJHprgZYXzrsjxYbLT5btpHBPqNAtJrXXqQ3WQ69b1NKjRMqZh
+  payer 9997033440, alice 2000000000
+read past the account's end: InstructionError(0, InvalidAccountData), fee 5000, 6400 units
+  signature 52xXh4DLTH5ahSHZyDvU4agnrdXqS7AVYobgMg4f74K3NcexGhYZprU1LiFCsGJiri9cwpfxGFs6rKz5fgiPmSqA
+  payer 9997028440, alice 2000000000
+read from no account: InstructionError(0, MissingAccount), fee 5000, 6400 units
+  signature F6zW3X73WFvpyRX1SH22p9hhdj9hQGnX3AL5TaDCwMbrRVFMDHbKsqrs2MfjjJeikTXiq7KKCECAFjEU6H1iwUh
+  payer 9997023440, alice 2000000000
+read from an account and store: success, fee 10000, 6550 units
+  signature CnRk3XyD9EFaTGMBasaxLePr5kq7snvWEXDbVFgZNYP36KZCw4d2U4rDsgXNVGXxcxamJesjW388VefmSVvzUrr
+  payer 9995002000, alice 2000000000
+  third: 2011440 lamports, 161 bytes, owner ZkE1Gama1Proof11111111111111111111111111111, data CtGcVh2EPCuxZMg1Dez3E9rtcVffwx97xkY9LHp2Vw3W
+someone else closes it: InstructionError(0, InvalidAccountOwner), fee 5000, 3300 units
+  signature 4U7t5zz65ZZD1KYxXx47oS4npfhHVGAo1mZHZBa8z88fvDjVWtyusT6iKdKC4JNZWvRBsDi6nCbAHVUYaN3t4apR
+  payer 9994997000, alice 2000000000
+close without the authority signing: InstructionError(0, MissingRequiredSignature), fee 5000, 3300 units
+  signature fKoF9e1o3kTZ5QDb6hqF3NRc61FbeixfxT1S9immbxL8eYRR8kLvXdJBkNCeyBtwEJQdYAVUq6iCDzubSgqmDXK
+  payer 9994992000, alice 2000000000
+close into itself: InstructionError(0, InvalidInstructionData), fee 10000, 3300 units
+  signature 5wHAo3AG3c6ZDhjeZ6FFcLYgmMS2PSfqXK3imxFK3Dy9YigiffUG15R2RmU1TAdyCjYv1s1cdZc6yY3j7cDSzSHm
+  payer 9994982000, alice 2000000000
+close with too few accounts: InstructionError(0, MissingAccount), fee 5000, 3300 units
+  signature 5eMJhtrKfUZrqNpZYtHhxRnw9MQ7CLe6HKmbf9YTCJ9WkA4XmYg3BF5BFoyqcNR52iweNVrupPzocT6QCpdfmMrP
+  payer 9994977000, alice 2000000000
+close an account that stores nothing: InstructionError(0, UninitializedAccount), fee 10000, 3300 units
+  signature 1Snom51q57AUz1MrDNy6vVJCzJxJb2weScm7fz4wzxfkWcJuU7XhyLEFzwn5tsCZtKWopwPeNVrPE5PZqcm3cYf
+  payer 9994967000, alice 2000000000
+close an account of another program: InstructionError(0, InvalidAccountOwner), fee 10000, 3300 units
+  signature 2A8E4ycvvqtt1PSZYNJ3EwyEuT84uaPmBg3U1LxjLpMtsWAYavzviJe366qfm24qtxMtUdX8HanaShiKXwkK94ym
+  payer 9994957000, alice 2000000000
+close into a read-only account: InstructionError(0, ReadonlyLamportChange), fee 10000, 3300 units
+  signature 2N3URuLukCQGnEtZdk4waQ2t2QDisU1ME5MixsZwShx8nVcw8jB9GKo1P8QkUQZhT6GFiK36eb6dXJjEt4VFj3RW
+  payer 9994947000, alice 2000000000
+the authority closes it: success, fee 10000, 3300 units
+  signature 4NcYk1tkJQuawTXiVDFuLqrqvYrSuFSGGNDts8hz43pH6rDANHwESPkuuAsi5giDL2qc6fZUSKSR7r6jtP43qdiu
+  payer 9994937000, alice 2001343280
+  stored: no such account
+the payer closes the other, to alice: success, fee 5000, 3300 units
+  signature 59EAv16ZJFCxHFsbg9MJka1YViwingRYsPyor7dzTYvsstrKAg9MGARSiTes28EaesmY6uMSwsHw88eFvqeJyjp8
+  payer 9994932000, alice 2003354720
+  third: no such account

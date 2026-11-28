@@ -1,5 +1,6 @@
 import Solana.SbpfBase
 import Solana.Alpenglow
+import Solana.ZkProof
 
 /-!
 # Programs that are part of the runtime
@@ -427,6 +428,70 @@ def voteInstruction (m : Machine) (st0 : State) (metas : Array Meta) (data : Byt
   else if account.lamports - lamports < m.rentMinimum account.data.size + (if older then 0 else Wire.u64 account.data 136) then
     return programError st 6
   return moveLamports left metas[0]! metas[1]! lamports
+
+def zkProofProgram : ByteArray := Base58.decode "ZkE1Gama1Proof11111111111111111111111111111"
+
+/-- The ZK ElGamal proof program. Instructions 1 to 12 each check one kind of proof, given in the
+instruction's data, or (when the data is just an offset) in the data of account 0. If two more accounts
+follow, what the proof was about (its context) is stored in the first, for a later instruction to rely
+on, and the second's holder may close it. Instruction 0 closes such an account (0) and gives its
+lamports to account 1; account 2 is its authority and must sign. -/
+def zkInstruction (st0 : State) (metas : Array Meta) (data : ByteArray) : State := Id.run do
+  if data.size == 0 || data[0]! > 12 then
+    return programError st0 3
+  let kind := data[0]!
+  let st := st0.charge ZkProof.costs[kind.toNat]!
+  if kind == 0 then
+    if metas.size < 3 then
+      return st.stop missingAccount "the proof program was given too few accounts"
+    let stored := st.accounts[metas[0]!.index]!
+    if !metas[2]!.signer then
+      return programError st 8
+    if stored.key == keyOf st metas[1]! then
+      return programError st 3
+    if stored.owner != zkProofProgram then
+      return programError st 23
+    if stored.data.size < 33 then
+      return programError st 4
+    if stored.data[32]! == 0 then
+      return programError st 10
+    if keyOf st metas[2]! != stored.data.extract 0 32 then
+      return programError st 23
+    if !metas[0]!.writable then
+      return st.stop accountRule ruleReadOnly
+    return setAccount (moveLamports st metas[0]! metas[1]! stored.lamports) metas[0]!
+      { stored with lamports := 0, data := ByteArray.empty, owner := systemProgram }
+  if ZkProof.sizes[kind.toNat]! == 0 then
+    return st.stop unsupportedInstruction s!"proof {kind} of the ZK ElGamal proof program is not provided"
+  let size := ZkProof.sizes[kind.toNat]!
+  let mut proof := data.extract 1 data.size
+  let mut next := 0
+  if data.size == 5 then
+    if metas.size < 1 then
+      return st.stop missingAccount "the proof program was given too few accounts"
+    let held := st.accounts[metas[0]!.index]!.data
+    let start := (Wire.u32 data 1).toNat
+    if start + size > held.size then
+      return programError st 4
+    proof := held.extract start (start + size)
+    next := 1
+  if proof.size != size || !(ZkProof.holds kind proof) then
+    return programError st 3
+  if metas.size < next + 2 then
+    return st
+  let stored := st.accounts[metas[next]!.index]!
+  if stored.owner != zkProofProgram then
+    return programError st 23
+  if stored.data.size < 33 then
+    return programError st 4
+  if stored.data[32]! != 0 then
+    return programError st 9
+  let context := (keyOf st metas[next + 1]!).push kind ++ proof.extract 0 ZkProof.contexts[kind.toNat]!
+  if stored.data.size != context.size then
+    return programError st 4
+  if !metas[next]!.writable then
+    return st.stop accountRule ruleReadOnly
+  return setAccount st metas[next]! { stored with data := context }
 
 def loaderInstruction (m : Machine) (st0 : State) (metas : Array Meta) (data : ByteArray) : State := Id.run do
   let st := st0.charge 2370

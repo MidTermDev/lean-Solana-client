@@ -39,6 +39,10 @@ def lookupTableProgram : ByteArray := Base58.decode "AddressLookupTab1e111111111
 def voteProgram : ByteArray := Sbpf.voteProgram
 def stakeProgram : ByteArray := Base58.decode "Stake11111111111111111111111111111111111111"
 def configProgram : ByteArray := Base58.decode "Config1111111111111111111111111111111111111"
+def zkTokenProgram : ByteArray := Base58.decode "ZkTokenProof1111111111111111111111111111111"
+def featureProgram : ByteArray := Base58.decode "Feature111111111111111111111111111111111111"
+def stakeConfig : ByteArray := Base58.decode "StakeConfig11111111111111111111111111111111"
+def rewardsSysvar : ByteArray := Base58.decode "SysvarRewards111111111111111111111111111111"
 /-- What is sent here is destroyed at the end of the slot. -/
 def incinerator : ByteArray := Base58.decode "1nc1nerator11111111111111111111111111111111"
 def loaderV2 : ByteArray := Sbpf.loaderV2
@@ -196,7 +200,8 @@ def reserved (key : ByteArray) : Bool :=
   || key == Sbpf.lastRestartSlotSysvar || key == instructionsSysvar || key == feesSysvar
   || key == recentBlockhashesSysvar || key == slotHistorySysvar || key == ed25519Program || key == secp256k1Program
   || key == secp256r1Program || key == lookupTableProgram || key == voteProgram || key == stakeProgram
-  || key == configProgram || key == loaderV2 || key == loaderV1 || key == loaderV4
+  || key == configProgram || key == loaderV2 || key == loaderV1 || key == loaderV4 || key == Sbpf.zkProofProgram
+  || key == zkTokenProgram || key == featureProgram || key == stakeConfig || key == rewardsSysvar
 
 /-- The `Instructions` sysvar: the transaction's own instructions, so a
 program can check what else is in the transaction it is part of. Offsets of
@@ -623,7 +628,7 @@ def Bank.process (bank : Bank) (tx : Tx.Transaction) (verify : Bool) : Receipt :
     let program := keys[ix.program]!
     if loadError == "" && !(program == Sbpf.systemProgram || program == Sbpf.computeBudgetProgram || program == ed25519Program
         || program == secp256k1Program || program == secp256r1Program || program == Sbpf.loaderId || program == loaderV1 || program == loaderV2
-        || program == voteProgram || hasProgram bank program) then
+        || program == voteProgram || program == Sbpf.zkProofProgram || hasProgram bank program) then
       loadError := if (bank.get program).lamports == 0 then "ProgramAccountNotFound" else "InvalidProgramForExecution"
   let charged := bank.set { payer with lamports := payer.lamports - fee }
 

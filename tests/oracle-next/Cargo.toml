@@ -25,6 +25,12 @@ solana-transaction = "4.1.5"
 blstrs = "0.7.1"
 group = "0.13"
 
+# for `oracle-next zkproof`: the library that makes and checks the ZK ElGamal proof program's proofs
+solana-zk-sdk = "7.0.1"
+bytemuck = "1"
+curve25519-dalek = "4.1.3"
+
 [features]
-default = ["bls"]
+default = ["bls", "zk"]
 bls = []
+zk = []
