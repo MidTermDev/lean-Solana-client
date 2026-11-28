@@ -213,6 +213,7 @@ def sub (x y : Fp2) : Fp2 := ⟨fsub x.a y.a, fsub x.b y.b⟩
 def neg (x : Fp2) : Fp2 := ⟨fneg x.a, fneg x.b⟩
 def conj (x : Fp2) : Fp2 := ⟨x.a, fneg x.b⟩
 def twice (x : Fp2) : Fp2 := add x x
+def thrice (x : Fp2) : Fp2 := add (add x x) x
 def scale (x : Fp2) (k : Fp) : Fp2 := ⟨fmul x.a k, fmul x.b k⟩
 def mul (x y : Fp2) : Fp2 :=
   let aa := fmul x.a y.a
@@ -236,6 +237,8 @@ def pow (x : Fp2) (e : Array UInt64) : Fp2 := Id.run do
       r := mul r x
   return r
 
+def half : Fp := finv (small 2)
+
 /-- A square root, if there is one. -/
 def sqrt (x : Fp2) : Option Fp2 := Id.run do
   if Bls12381.isZero x.b then
@@ -249,7 +252,6 @@ def sqrt (x : Fp2) : Option Fp2 := Id.run do
   match fsqrt (fadd (fmul x.a x.a) (fmul x.b x.b)) with
   | none => return none
   | some alpha =>
-    let half := finv (small 2)
     let mut real := fsqrt (fmul (fadd x.a alpha) half)
     if real.isNone then
       real := fsqrt (fmul (fsub x.a alpha) half)
@@ -299,7 +301,7 @@ def double (a : Point) : Point :=
   let yy := a.y.sqr
   let yyyy := yy.sqr
   let d := ((((a.x.add yy).sqr).sub xx).sub yyyy).twice
-  let e := xx.twice.add xx
+  let e := xx.thrice
   let x := (e.sqr.sub d).sub d
   ⟨x, (e.mul (d.sub x)).sub yyyy.twice.twice.twice, (a.y.mul a.z).twice⟩
 
@@ -353,9 +355,11 @@ def parameter : UInt64 := 0xd201000000010000
 /-- The point times the curve's parameter. -/
 def timesParameter (a : Point) : Point := (a.scale #[parameter]).neg
 
+def psiX : Fp2 := (gammas[2]!).inv
+def psiY : Fp2 := (gammas[3]!).inv
+
 /-- A map of the twisted curve to itself that multiplies the points of the group by `p`. -/
-def psi (a : Point) : Point :=
-  ⟨a.x.conj.mul (gammas[2]!).inv, a.y.conj.mul (gammas[3]!).inv, a.z.conj⟩
+def psi (a : Point) : Point := ⟨a.x.conj.mul psiX, a.y.conj.mul psiY, a.z.conj⟩
 
 /-- Is a point of the twisted curve in the group signatures live in (the points of order r)? There
 `psi` is multiplication by the parameter, and only there. -/
@@ -535,7 +539,7 @@ def line (c0 c2 c3 : Fp2) : Fp12 := #[c0, Fp2.zero, c2, c3, Fp2.zero, Fp2.zero]
 
 /-- The tangent at `t`, taken at `(x, y)`. -/
 def tangent (t : Point) (x y : Fp) : Fp12 :=
-  let e := t.x.sqr.twice.add t.x.sqr
+  let e := t.x.sqr.thrice
   let zz := t.z.sqr
   line ((t.x.mul e).sub t.y.sqr.twice) ((e.mul zz).scale x).neg ((((t.y.mul t.z).twice).mul zz).scale y)
 
@@ -563,13 +567,29 @@ def miller (plain twisted : Array Point) : Fp12 := Id.run do
         ts := ts.set! k (ts[k]!.add twisted[k]!)
   return f
 
+/-- The square of `a + b·s`, where `s = w³` (so `s²` is `1 + u`): its two halves. -/
+def sqr4 (a b : Fp2) : Fp2 × Fp2 :=
+  let aa := a.sqr
+  let bb := b.sqr
+  (aa.add bb.timesXi, (((a.add b).sqr).sub aa).sub bb)
+
+/-- The square of a number whose conjugate is its inverse, as the numbers a pairing ends in are
+(Granger and Scott): written `a + b·w + c·w²` with `a`, `b`, `c` of the form above, it is
+`(3a² − 2ā) + (3s·c² + 2b̄)·w + (3b² − 2c̄)·w²`, the bar changing the sign of `s`. -/
+def sqrUnitary (x : Fp12) : Fp12 :=
+  let (a0, a1) := sqr4 x[0]! x[3]!
+  let (b0, b1) := sqr4 x[1]! x[4]!
+  let (c0, c1) := sqr4 x[2]! x[5]!
+  #[a0.thrice.sub x[0]!.twice, c1.timesXi.thrice.add x[1]!.twice, b0.thrice.sub x[2]!.twice,
+    a1.thrice.add x[3]!.twice, c0.thrice.sub x[4]!.twice, b1.thrice.add x[5]!.twice]
+
 /-- The power minus the parameter, of a number whose conjugate is its inverse. -/
 def powParameter (x : Fp12) : Fp12 := Id.run do
   let mut r := x
   let mut i := 63
   while i > 0 do
     i := i - 1
-    r := sqr12 r
+    r := sqrUnitary r
     if (Point.parameter >>> i.toUInt64) &&& 1 == 1 then
       r := mul12 r x
   return conj12 r
@@ -583,7 +603,7 @@ def finalPower (f : Fp12) : Fp12 :=
   let a := mul12 (powParameter t) (conj12 t)
   let b := mul12 (powParameter a) (frobenius a)
   let c := mul12 (mul12 (powParameter (powParameter b)) (frobenius (frobenius b))) (conj12 b)
-  mul12 c (mul12 (sqr12 g) g)
+  mul12 c (mul12 (sqrUnitary g) g)
 
 /-- Do the pairings of each plain point with its twisted point multiply to one? None may be the point at infinity. -/
 def pairingsCancel (plain twisted : Array Point) : Bool := Id.run do
