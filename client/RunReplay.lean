@@ -915,6 +915,9 @@ def main : IO Unit := do
     let turning := Wire.u64 oldClock.data 16 != epoch
     let newClock := { oldClock with data := clockData slot (Wire.u64 oldClock.data (if turning then 32 else 8)) epoch (epoch + 1) (Wire.u64 oldClock.data 32) }
     height := height + 1
+    -- (what an account must hold is asked of the machine below: it needs the chain's rent from the start)
+    let rent ← world.get Sbpf.rentSysvar
+    machine := { machine with sysvars := { machine.sysvars with rent := rent.data } }
     let mut opening : Array Sbpf.Account := Array.emptyWithCapacity 2
     if turning then
       let (writes, supplyNow, rows, starts, nextStakes) ← turn world machine manifest (Epoch.distinct stakeKeys) epoch supply height latest
@@ -947,7 +950,6 @@ def main : IO Unit := do
       touched := touched.push was
       touchedHashes := touchedHashes.push (world.hashOf was.key)
       world := world.keep a true
-    let rent ← world.get Sbpf.rentSysvar
     let schedule ← world.get Sbpf.epochScheduleSysvar
     let rewards ← world.get Sbpf.epochRewardsSysvar
     let history ← world.get Sbpf.stakeHistorySysvar

@@ -1,0 +1,20 @@
+budget of epoch 1099: 61809996919773
+years to slot 474768000: 4617341069746096191
+siphash: 2712805323129864476 15130871412783076140 3785724242978802311
+partition: 317
+distinct: 3 of 5
+history: 10 entries, the newest for epoch 100, epoch 95 at 168, epoch 90 at 0
+stake of 250,000 from 95 to 18446744073709551615: 0/0/0 0/250000/0 225000/25000/0 247500/2500/0 249750/250/0 249975/25/0 249997/3/0 249999/1/0
+stake of 250,000 from 95 to 98: 0/0/0 0/250000/0 225000/25000/0 247500/2500/0 249750/0/249750 0/0/0 0/0/0 0/0/0
+stake of 250,000 from 80 to 18446744073709551615: 250000/0/0 250000/0/0 250000/0/0 250000/0/0 250000/0/0 250000/0/0 250000/0/0 250000/0/0
+stake of 250,000 from 80 to 97: 250000/0/0 250000/0/0 250000/0/0 250000/0/250000 0/0/0 0/0/0 0/0/0 0/0/0
+stake of 250,000 from 18446744073709551615 to 18446744073709551615: 250000/0/0 250000/0/0 250000/0/0 250000/0/0 250000/0/0 250000/0/0 250000/0/0 250000/0/0
+stake of 250,000 from 96 to 96: 0/0/0 0/0/0 0/0/0 0/0/0 0/0/0 0/0/0 0/0/0 0/0/0
+a quarter of the stake, 7% commission: reward 930, commission 70, stake 250930, credits 9000
+credits seen up to 7,000 already:      reward 465, commission 35, stake 250465, credits 9000
+credits seen beyond the validator's:   reward 0, commission 0, stake 250000, credits 9000
+a validator with no credits this epoch: nothing
+a stake made in this epoch:            reward 0, commission 0, stake 250000, credits 9000
+a validator not admitted:              nothing
+the same, its balance short:           reward 0, commission 0, stake 250000, credits 5000
+all commission, none:                  reward 0, commission 1000, stake 250000, credits 9000 / reward 1000, commission 0, stake 251000, credits 9000

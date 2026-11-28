@@ -363,10 +363,11 @@ def authorityError (st : State) (metas : Array Meta) (authority : ByteArray) (wh
 
 def voteProgram : ByteArray := Base58.decode "Vote111111111111111111111111111111111111111"
 
-/-- The vote program, as far as it is provided: Withdraw (3), by which a validator takes lamports out
-of its vote account (account 0) to account 1. The account's withdraw authority must sign; what stays
-must cover the account's size, or be nothing, which empties the account, and that only once the
-validator has earned no credits for a whole epoch. -/
+/-- The vote program, as far as it is provided, now that votes are no longer transactions: Withdraw (3),
+by which a validator takes lamports out of its vote account (account 0) to account 1, and
+UpdateCommission (5). The account's withdraw authority must sign. What a withdrawal leaves must cover
+the account's size, or be nothing, which empties the account, and that only once the validator has
+earned no credits for a whole epoch. -/
 def voteInstruction (m : Machine) (st0 : State) (metas : Array Meta) (data : ByteArray) : State := Id.run do
   let st := st0.charge 2100
   if metas.size < 1 then
@@ -374,11 +375,14 @@ def voteInstruction (m : Machine) (st0 : State) (metas : Array Meta) (data : Byt
   let account := st.accounts[metas[0]!.index]!
   if account.owner != voteProgram then
     return programError st 23
-  if data.size < 4 || (Wire.u32 data 0 == 3 && data.size < 12) then
+  if data.size < 4 then
     return programError st 3
-  if Wire.u32 data 0 != 3 then
-    return st.stop unsupportedInstruction s!"instruction {Wire.u32 data 0} of the vote program is not provided"
-  if metas.size < 2 then
+  let tag := Wire.u32 data 0
+  if tag != 3 && tag != 5 then
+    return st.stop unsupportedInstruction s!"instruction {tag} of the vote program is not provided"
+  if data.size < (if tag == 3 then 12 else 5) then
+    return programError st 3
+  if tag == 3 && metas.size < 2 then
     return programError st 11
   let state := Alpenglow.VoteState.parse account.data
   if !state.ok then
@@ -387,6 +391,11 @@ def voteInstruction (m : Machine) (st0 : State) (metas : Array Meta) (data : Byt
     return programError st 10
   if !(signedBy st metas (account.data.extract 36 68)) then
     return programError st 8
+  if !metas[0]!.writable && (tag == 5 || account.lamports == Wire.u64 data 4) then
+    return st.stop accountRule ruleReadOnly
+  if tag == 5 then
+    -- (a percentage, kept in hundredths of a percent)
+    return setAccount st metas[0]! { account with data := storeAt account.data 132 2 (data[4]!.toUInt64 * 100) }
   let lamports := Wire.u64 data 4
   if account.lamports < lamports then
     return programError st 6
