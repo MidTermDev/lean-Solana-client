@@ -399,6 +399,9 @@ def toBytes (a : Point) (twisted : Bool) : ByteArray :=
     b.set! 0 (b[0]! ||| (if q.y.larger then 0xA0 else 0x80))
 end Point
 
+/-- The order of both groups: a point of either, times this, is nothing. -/
+def order : Array UInt64 := #[0xffffffff00000001, 0x53bda402fffe5bfe, 0x3339d80809a1d805, 0x73eda753299d7d48]
+
 /-- The generator of the plain curve's group. -/
 def generator : Point :=
   match Point.ofBytes (Hex.decode "97f1d3a73197d7942695638c4fa9ac0fc3688c4f9774b905a14e3a3f171bac586c55e83ff97a1aeffb3af00adb22c6bb") with

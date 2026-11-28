@@ -24,9 +24,9 @@ hashcheck: success, 413 units
   stored hash matches sha256(payload): true, slot 123456789
 scribbler, own account: success, 3 units
   first byte 42
-scribbler, read-only account: account rule violated: an account that was not passed as writable was modified, 3 units
+scribbler, read-only account: account rule violated: an account that was not passed as writable was modified, 200000 units
   first byte 0
-scribbler, someone else's account: account rule violated: the data of an account the program does not own was modified, 3 units
+scribbler, someone else's account: account rule violated: the data of an account the program does not own was modified, 200000 units
 forger: lamports were created or destroyed, 5 units
 mover, own purse: success, 8 units
   purse 499, destination 101

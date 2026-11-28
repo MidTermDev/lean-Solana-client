@@ -364,68 +364,166 @@ def authorityError (st : State) (metas : Array Meta) (authority : ByteArray) (wh
 
 def voteProgram : ByteArray := Base58.decode "Vote111111111111111111111111111111111111111"
 
-/-- The vote program, as far as it is provided, now that votes are no longer transactions: Withdraw (3),
-by which a validator takes lamports out of its vote account (account 0) to account 1, UpdateCommission
-(5) and UpdateCommissionCollector (17). The account's withdraw authority must sign. What a withdrawal
-leaves must cover the account's size, or be nothing, which empties the account, and that only once the
-validator has earned no credits for a whole epoch. -/
+/-- Has the holder of `key` agreed? By signing; or, where the authority is an address derived from a
+base key and a seed (`derived`: that address if its base signed, else empty), by being that address. -/
+def agreed (st : State) (metas : Array Meta) (seeded : Bool) (derived key : ByteArray) : Bool :=
+  if seeded then derived == key else signedBy st metas key
+
+/-- Writes a vote state into account `mt` as the validators do: over the start of its data, whatever lay
+beyond staying. An account in the oldest layout is 31 bytes short and is made larger, if its lamports
+cover the larger size. -/
+def storeVote (m : Machine) (st : State) (mt : Meta) (state : Alpenglow.VoteState) : State :=
+  let account := st.accounts[mt.index]!
+  let short := account.data.size < 3762
+  let data := if short then zeros account.data (3762 - account.data.size) else account.data
+  let wire := state.serial
+  if short && (account.lamports < m.rentMinimum 3762 || !mt.writable) then programError st 16
+  else if !mt.writable then st.stop accountRule ruleReadOnly
+  else if wire.size > data.size then programError st 5
+  else setAccount st mt { account with data := wire ++ data.extract wire.size data.size }
+
+/-- The vote program. Votes are no longer transactions, so what is left of it is the keeping of vote
+accounts (account 0): setting one up (0); naming a new voter or withdrawer (1, and 7 where the new one
+signs too, 10 and 11 where the present one is an address derived from a seed), a voter under Alpenglow
+with a BLS key and a proof of holding it; withdrawing lamports to account 1 (3); a new node identity
+(4); the commission in percent (5) or hundredths of a percent (18), and who collects it (17). Changes
+other than a new voter need the withdrawer's agreement. Everything else it once did is refused. -/
 def voteInstruction (m : Machine) (st0 : State) (metas : Array Meta) (data : ByteArray) : State := Id.run do
   let st := st0.charge 2100
+  let missing := st.stop missingAccount "the vote program was given too few accounts"
   if metas.size < 1 then
-    return programError st 11
+    return missing
   let account := st.accounts[metas[0]!.index]!
   if account.owner != voteProgram then
     return programError st 23
   if data.size < 4 then
     return programError st 3
   let tag := Wire.u32 data 0
-  if tag != 3 && tag != 5 && tag != 17 then
-    return st.stop unsupportedInstruction s!"instruction {tag} of the vote program is not provided"
-  if data.size < (if tag == 3 then 12 else if tag == 17 then 8 else 5) || (tag == 17 && Wire.u32 data 4 > 1) then
+  -- the instruction's data: (1, 7, 10, 11) what is changed, 0 the voter, 1 the withdrawer, 2 the voter
+  -- with a BLS key (48 bytes) and its proof (96); then (10, 11) the owner and the seed of the derived address
+  let authorizes := tag == 1 || tag == 7 || tag == 10 || tag == 11
+  let seeded := tag == 10 || tag == 11
+  let kindAt := if tag == 1 then 36 else 4
+  let kind := if authorizes && data.size >= kindAt + 4 then Wire.u32 data kindAt else 0
+  let seedAt := kindAt + 4 + (if kind == 2 then 144 else 0)
+  let seedSize := if seeded && data.size >= seedAt + 40 then Wire.u64 data (seedAt + 32) else 0
+  if kind > 2 || seedSize > 1232 then
     return programError st 3
-  if metas.size < (if tag == 3 then 2 else if tag == 17 then 3 else 1) then
-    return programError st 11
-  let state := Alpenglow.VoteState.read account.data
+  let need := if tag == 0 then 101 else if tag == 3 then 12 else if tag == 4 then 4 else if tag == 5 then 5
+    else if tag == 17 then 8 else if tag == 18 then 10 else if tag == 1 || tag == 7 then seedAt
+    else if seeded then seedAt + 40 + seedSize.toNat + (if tag == 10 then 32 else 0) else 0
+  if need == 0 || data.size < need || (tag == 17 && Wire.u32 data 4 > 1) || (tag == 18 && Wire.u32 data 6 != 0) then
+    -- (votes and what is not switched on yet: a commission on block fees, among others)
+    return programError st 3
+  -- the accounts each instruction needs
+  if metas.size < (if tag == 7 || tag == 11 then 4 else if tag == 10 || tag == 17 then 3 else if tag == 3 || tag == 4 then 2 else 1) then
+    return missing
+  if (tag == 7 || tag == 11) && !metas[3]!.signer then
+    return programError st 8
+  if tag == 0 || authorizes then
+    -- (accounts 1 and 2 of a new account are the rent and clock sysvars; account 1 of an authorisation the clock)
+    if metas.size < 2 then
+      return missing
+    if keyOf st metas[1]! != (if tag == 0 then rentSysvar else clockSysvar) then
+      return programError st 2
+  let layout := if account.data.size < 4 then 0 else Wire.u32 account.data 0
+  let state := Alpenglow.VoteState.read account.data account.key
+  if tag == 0 then
+    if account.lamports < m.rentMinimum account.data.size then
+      return programError st 6
+    if metas.size < 3 then
+      return missing
+    if keyOf st metas[2]! != clockSysvar then
+      return programError st 2
+    if account.data.size != 3762 || (layout != 0 && !state.ok) then
+      return programError st 4
+    if layout == 3 || (layout != 0 && Wire.u64 state.voters 0 != 0) then
+      return programError st 9
+    if !(signedBy st metas (data.extract 4 36)) then
+      return programError st 8
+    return storeVote m st metas[0]! (Alpenglow.VoteState.fresh account.key (data.extract 4 36) (data.extract 36 68) (data.extract 68 100) data[100]! m.clock.epoch)
+  let mut derived := ByteArray.empty
+  if seeded && metas[2]!.signer then
+    derived := seedAddress (keyOf st metas[2]!) (data.extract (seedAt + 40) (seedAt + 40 + seedSize.toNat)) (data.extract seedAt (seedAt + 32))
+    if derived.size == 1 then
+      return customError st derived[0]!.toUInt64
   if !state.ok then
     return programError st 4
-  -- (an account in an older layout is one nobody has written since: it may be withdrawn from as it is,
-  -- and names no voters if it was never set up)
-  let older := Wire.u32 account.data 0 != 3
-  if older && Wire.u64 state.voters 0 == 0 then
+  -- (an account in an older layout that names no voter was never set up)
+  if layout != 3 && Wire.u64 state.voters 0 == 0 then
     return programError st 10
-  if older && tag != 3 then
-    return st.stop unsupportedInstruction "bringing a vote account in an older layout up to the present one is not provided"
-  if !(signedBy st metas (account.data.extract 36 68)) then
+  let byWithdrawer := agreed st metas seeded derived (state.head.extract 36 68)
+  if authorizes then
+    let authorized := if tag == 1 then data.extract 4 36 else if tag == 10 then data.extract (need - 32) need else keyOf st metas[3]!
+    if kind == 1 then
+      if !byWithdrawer then
+        return programError st 8
+      return storeVote m st metas[0]! { state with head := authorized.copySlice 0 state.head 36 32 }
+    -- a new voter. One with a BLS key can only be replaced by one with a BLS key, proven
+    if kind == 0 && state.head[144]! == 1 then
+      return programError st 3
+    let mut left := st
+    let mut head := state.head
+    if kind == 2 then
+      left := st.charge 34500
+      let blsKey := data.extract (kindAt + 4) (kindAt + 52)
+      if !(Alpenglow.possessed account.key blsKey (data.extract (kindAt + 52) (kindAt + 148))) then
+        return programError left 2
+      head := (head.extract 0 144).push 1 ++ blsKey
+    -- the withdrawer or this epoch's voter must agree; the new one votes from the epoch after the next
+    -- leader schedule's, once: that epoch cannot be given away twice
+    let entry := Alpenglow.voterAt state.voters m.clock.epoch
+    if entry.size == 0 then
+      return programError left 4
+    if !byWithdrawer && !(agreed st metas seeded derived (entry.extract 8 40)) then
+      return programError left 8
+    let kept := Alpenglow.votersWith state.voters (m.clock.epoch - (if m.clock.epoch == 0 then 0 else 1)) m.clock.epoch (entry.extract 8 40)
+    let target := m.clock.leaderScheduleEpoch + 1
+    let there := Alpenglow.voterAt kept target
+    if there.size != 0 && Wire.u64 there 0 == target then
+      return customError left 5
+    return storeVote m left metas[0]! { state with head := head, voters := Alpenglow.votersWith kept 0 target authorized }
+  if !byWithdrawer then
     return programError st 8
-  -- UpdateCommissionCollector: who receives the rewards' commission (0) or the block fees (1): the vote
-  -- account itself, or a plain account that needs no rent and may be written
-  let collector := st.accounts[metas[if tag == 17 then 1 else 0]!.index]!
-  if tag == 17 && collector.key != account.key then
-    if collector.owner != systemProgram then
-      return programError st 23
-    if collector.lamports < m.rentMinimum collector.data.size then
-      return programError st 6
-    if !metas[1]!.writable then
-      return programError st 2
-  if !metas[0]!.writable && (tag != 3 || account.lamports == Wire.u64 data 4) then
-    return st.stop accountRule ruleReadOnly
+  if tag == 4 then
+    -- a new node identity, which must sign too
+    let node := keyOf st metas[1]!
+    if !(signedBy st metas node) then
+      return programError st 8
+    return storeVote m st metas[0]! { state with head := node.copySlice 0 state.head 4 32 }
+  if tag == 5 || tag == 18 then
+    -- the commission on rewards, kept in hundredths of a percent
+    let rate := if tag == 5 then data[4]!.toUInt64 * 100 else Wire.u16 data 4
+    return storeVote m st metas[0]! { state with head := storeAt state.head 132 2 rate }
   if tag == 17 then
-    return setAccount st metas[0]! { account with data := collector.key.copySlice 0 account.data (if Wire.u32 data 4 == 0 then 68 else 100) 32 }
-  if tag == 5 then
-    -- (a percentage, kept in hundredths of a percent)
-    return setAccount st metas[0]! { account with data := storeAt account.data 132 2 (data[4]!.toUInt64 * 100) }
+    -- who receives the rewards' commission (0) or the block fees (1): the vote account itself, or a plain
+    -- account that needs no rent and may be written
+    let collector := st.accounts[metas[1]!.index]!
+    if collector.key != account.key then
+      if collector.owner != systemProgram then
+        return programError st 23
+      if collector.lamports < m.rentMinimum collector.data.size then
+        return programError st 6
+      if !metas[1]!.writable then
+        return programError st 2
+    return storeVote m st metas[0]! { state with head := collector.key.copySlice 0 state.head (if Wire.u32 data 4 == 0 then 68 else 100) 32 }
+  -- a withdrawal. What it leaves must cover the account's size and what is owed to delegators, or be
+  -- nothing, which empties the account, and that only once the validator has earned no credits for a whole epoch
   let lamports := Wire.u64 data 4
+  let owed := Wire.u64 state.head 136
   if account.lamports < lamports then
     return programError st 6
   let mut left := st
   if account.lamports == lamports then
     let entries := state.credits.size
-    if !older && Wire.u64 account.data 136 != 0 then
+    if owed != 0 then
       return programError st 6
     if entries >= 3 && m.clock.epoch < state.credits[entries - 3]! + 2 then
       return customError st 18
+    if !metas[0]!.writable then
+      return st.stop accountRule ruleReadOnly
     left := setAccount st metas[0]! { account with data := zeros ByteArray.empty account.data.size }
-  else if account.lamports - lamports < m.rentMinimum account.data.size + (if older then 0 else Wire.u64 account.data 136) then
+  else if account.lamports - lamports < m.rentMinimum account.data.size + owed then
     return programError st 6
   return moveLamports left metas[0]! metas[1]! lamports
 

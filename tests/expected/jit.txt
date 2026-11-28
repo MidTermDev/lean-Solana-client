@@ -12,7 +12,7 @@ program 10: success, 22 units, data 17107841171502863450
 program 11: compute budget exceeded, 48 units, data 531581752746508381
 program 12: unsupported instruction: at instruction 32, 28 units, data 531581752746508381
 program 13: unsupported instruction: at instruction 37, 16 units, data 531581752746508381
-program 14: access violation: at address 0x37a2df8e213361a5, instruction 32, 18 units, data 531581752746508381
+program 14: access violation: at address 0x37a2df8e213361a5, instruction 32, 51 units, data 531581752746508381
 program 15: success, 26 units, data 11632141695224116944
 program 16: success, 32 units, data 531581752746508381
 program 17: success, 25 units, data 1808322909740398421
@@ -33,7 +33,7 @@ program 31: unsupported instruction: at instruction 26, 12 units, data 531581752
 program 32: unsupported instruction: at instruction 49, 27 units, data 531581752746508381
 program 33: unsupported instruction: at instruction 39, 16 units, data 531581752746508381
 program 34: call depth exceeded, 92 units, data 531581752746508381
-program 35: access violation: at address 0xc77a64df873dcc8e, instruction 13, 8 units, data 531581752746508381
+program 35: access violation: at address 0xc77a64df873dcc8e, instruction 13, 72 units, data 531581752746508381
 program 36: unsupported instruction: at instruction 75, 28 units, data 531581752746508381
 program 37: unsupported instruction: at instruction 9, 10 units, data 531581752746508381
 program 38: execution ran past the end of the program, 25 units, data 531581752746508381
@@ -50,7 +50,7 @@ program 48: success, 8 units, data 531581752746508381
 program 49: compute budget exceeded, 150 units, data 531581752746508381
 program 50: unsupported instruction: at instruction 9, 9 units, data 531581752746508381
 program 51: divide by zero, 27 units, data 531581752746508381
-program 52: access violation: at address 0x2fffffd3a, instruction 68, 40 units, data 531581752746508381
+program 52: access violation: at address 0x2fffffd3a, instruction 68, 150 units, data 531581752746508381
 program 53: compute budget exceeded, 40 units, data 531581752746508381
 program 54: success, 72 units, data 4091472985165605371
 program 55: compute budget exceeded, 150 units, data 531581752746508381
@@ -59,7 +59,7 @@ program 57: unsupported instruction: at instruction 1, 40 units, data 5315817527
 program 58: success, 11 units, data 531581752746508381
 program 59: unsupported instruction: at instruction 54, 39 units, data 531581752746508381
 1500 programs: 330 finished, 369 ran out of budget, the rest failed otherwise
-all outcomes, units and data together: 16977448983368104643
+all outcomes, units and data together: 10645961672954646749
 machine code and interpreter differ on 0
 translated exactly where it should be: true
 mov r0, 0; exit: 422 bytes of machine code, entered at 010000

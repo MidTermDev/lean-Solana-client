@@ -83,6 +83,16 @@ def sysvarInMemory (m : Machine) (id : UInt64) : ByteArray :=
   else if id == sysEpochRewards then zeros m.sysvars.epochRewards 15
   else Wire.putU64 (ByteArray.emptyWithCapacity 8) m.sysvars.lastRestartSlot
 
+/-- How a refused access of `len` bytes at `addr` ends the program: its status, error code and detail.
+In an account's space the validators say what was wrong (the account may not be changed, or has less
+data than the program reached for); anywhere else it is a plain access violation. -/
+def refusal (input : Input) (addr : UInt64) (len : Nat) (write : Bool) : UInt64 × UInt64 × String :=
+  let why := if addr >>> 32 == 4 then input.why (addr &&& 0xFFFFFFFF).toNat len write else 0
+  if why == 1 then (accountRule, 0, ruleReadOnly)
+  else if why == 2 then (accountRule, 0, ruleData)
+  else if why != 0 then (programFailed, why <<< 32, "")
+  else (accessViolation, 0, s!"at address {hex64 addr}")
+
 mutual
 
 /-- One program calling another (`sol_invoke_signed_c`, or `sol_invoke_signed_rust`
@@ -96,26 +106,29 @@ callee is given is one the caller has (or that a seed-derived address
 provides); copy the caller's pending changes into the account store; run the
 callee; copy what the callee changed back into the caller's memory. -/
 partial def invoke (m : Machine) (st0 : State) (callerId : ByteArray) (callerMetas : Array Meta)
-    (entry : Array Account) (p : Program) (mem0 : ByteArray) (inputLen : Nat)
-    (callAddr infosAddr infosLen seedsAddr seedsLen : UInt64) (depth : Nat) (rust : Bool) : State × ByteArray := Id.run do
+    (entry : Array Account) (p : Program) (mem0 : ByteArray) (input0 : Input)
+    (callAddr infosAddr infosLen seedsAddr seedsLen : UInt64) (depth : Nat) (rust : Bool) : State × ByteArray × Input := Id.run do
   let mut st := st0.charge 946
   let mut mem := mem0
-  match readCall p mem inputLen callAddr rust, readInfos p mem inputLen infosAddr infosLen rust with
+  let mut input := input0
+  -- (the accounts' own bytes are read and written as the runtime does it, whatever of them the program may reach)
+  let plain := input0.plain
+  match readCall p mem input callAddr rust, readInfos p mem input infosAddr infosLen rust with
   | some call, some infos =>
     st := st.charge (call.data.size.toUInt64 / 250 + call.keys.size.toUInt64 * 34 / 250 + infos.size.toUInt64 * 80 / 250)
     -- addresses the caller can sign for because it derived them from seeds
     let mut derived : Array ByteArray := Array.emptyWithCapacity 2
     if seedsLen > 16 then
-      return (st.stop invalidSeeds "too many signers", mem)
+      return (st.stop invalidSeeds "too many signers", mem, input)
     for i in [0:seedsLen.toNat] do
-      match readBytes p mem inputLen (seedsAddr + 16 * i.toUInt64) 16 with
-      | none => return (st.stop accessViolation "signer seeds are not readable", mem)
+      match readBytes p mem input (seedsAddr + 16 * i.toUInt64) 16 with
+      | none => return (st.stop accessViolation "signer seeds are not readable", mem, input)
       | some pair =>
-        match readSlices p mem inputLen (Wire.u64 pair 0) (Wire.u64 pair 8) with
-        | none => return (st.stop accessViolation "signer seeds are not readable", mem)
+        match readSlices p mem input (Wire.u64 pair 0) (Wire.u64 pair 8) with
+        | none => return (st.stop accessViolation "signer seeds are not readable", mem, input)
         | some seeds =>
           match createProgramAddress seeds callerId with
-          | none => return (st.stop invalidSeeds "", mem)
+          | none => return (st.stop invalidSeeds "", mem, input)
           | some address => derived := derived.push address
     -- the callee's account references, each checked against what the caller holds
     let mut metas : Array Meta := Array.emptyWithCapacity call.keys.size
@@ -123,7 +136,7 @@ partial def invoke (m : Machine) (st0 : State) (callerId : ByteArray) (callerMet
       let key := call.keys[i]!
       let index := findAccount st.accounts key
       if index == notFound then
-        return (st.stop missingAccount (Base58.encode key), mem)
+        return (st.stop missingAccount (Base58.encode key), mem, input)
       let held := rights callerMetas index
       let mut maySign := held &&& 2 != 0
       for d in derived do
@@ -132,9 +145,9 @@ partial def invoke (m : Machine) (st0 : State) (callerId : ByteArray) (callerMet
       let wantSign := call.flags[i]! &&& 2 != 0
       let wantWrite := call.flags[i]! &&& 4 != 0
       if held == 0 then
-        return (st.stop missingAccount (Base58.encode key), mem)
+        return (st.stop missingAccount (Base58.encode key), mem, input)
       if (wantSign && !maySign) || (wantWrite && held &&& 4 == 0) then
-        return (st.stop privilegeEscalation (Base58.encode key), mem)
+        return (st.stop privilegeEscalation (Base58.encode key), mem, input)
       metas := metas.push ⟨index, wantSign, wantWrite⟩
     -- a reference repeated with different rights gets the union of them
     for i in [0:metas.size] do
@@ -150,34 +163,34 @@ partial def invoke (m : Machine) (st0 : State) (callerId : ByteArray) (callerMet
         else
           let k := findInfo infos account.key
           if k == notFound then
-            return (st.stop missingAccount (Base58.encode account.key), mem)
+            return (st.stop missingAccount (Base58.encode account.key), mem, input)
           let info := infos[k]!
           st := st.charge (info.dataLen / 250)
           -- Usually the caller has changed nothing since the account was last brought up to date, and
           -- its view holds exactly what the account does: seen by comparing in place, nothing copied.
           if info.dataLen == account.data.size.toUInt64 && account.owner.size == 32
-              && holds p mem inputLen info.lamportsAddr (Wire.putU64 (ByteArray.emptyWithCapacity 8) account.lamports)
-              && holds p mem inputLen info.ownerAddr account.owner && holds p mem inputLen info.dataAddr account.data then
+              && holds p mem plain info.lamportsAddr (Wire.putU64 (ByteArray.emptyWithCapacity 8) account.lamports)
+              && holds p mem plain info.ownerAddr account.owner && holds p mem plain info.dataAddr account.data then
             if account.data.size > entry[index]!.data.size + maxGrowth then
-              return (st.stop invalidRealloc "", mem)
-          else match readBytes p mem inputLen info.lamportsAddr 8, readBytes p mem inputLen info.ownerAddr 32,
-              readBytes p mem inputLen info.dataAddr info.dataLen with
+              return (st.stop invalidRealloc "", mem, input)
+          else match readBytes p mem plain info.lamportsAddr 8, readBytes p mem plain info.ownerAddr 32,
+              readBytes p mem plain info.dataAddr info.dataLen with
           | some balance, some owner, some data =>
             let lamports := Wire.u64 balance 0
             let why := changeError callerId (rights callerMetas index &&& 4 != 0) account lamports owner data
             if why != "" then
-              return (st.stop accountRule why, mem)
+              return (st.stop accountRule why, mem, input)
             if data.size > entry[index]!.data.size + maxGrowth then
-              return (st.stop invalidRealloc "", mem)
+              return (st.stop invalidRealloc "", mem, input)
             st := { st with accounts := st.accounts.set! index { account with lamports := lamports, owner := owner, data := data } }
-          | _, _, _ => return (st.stop accessViolation "an account view points outside the caller's memory", mem)
+          | _, _, _ => return (st.stop accessViolation "an account view points outside the caller's memory", mem, input)
     if st.units > m.budget then
-      return ({ st with units := m.budget, status := meterExceeded }, mem)
+      return ({ st with units := m.budget, status := meterExceeded }, mem, input)
     -- run the callee
     let handed := st.accounts
     st := execute m st call.programId metas call.data (depth + 1)
     if st.status != finished then
-      return (st, mem)
+      return (st, mem, input)
     -- what the callee changed becomes visible in the caller's memory
     for i in [0:metas.size] do
       let index := metas[i]!.index
@@ -186,31 +199,35 @@ partial def invoke (m : Machine) (st0 : State) (callerId : ByteArray) (callerMet
         let info := infos[findInfo infos account.key]!
         let size := account.data.size.toUInt64
         if account.data.size > entry[index]!.data.size + maxGrowth then
-          return (st.stop invalidRealloc "", mem)
-        let balanceAt := writable p inputLen info.lamportsAddr 8
-        let ownerAt := writable p inputLen info.ownerAddr 32
+          return (st.stop invalidRealloc "", mem, input)
+        let balanceAt := writable p plain info.lamportsAddr 8
+        let ownerAt := writable p plain info.ownerAddr 32
         let span := if size > info.dataLen then size else info.dataLen
-        let dataAt := writable p inputLen info.dataAddr span
+        let dataAt := writable p plain info.dataAddr span
         if !(Wire.ok balanceAt) || !(Wire.ok ownerAt) || !(Wire.ok dataAt) then
-          return (st.stop accessViolation "an account view points outside the caller's memory", mem)
+          return (st.stop accessViolation "an account view points outside the caller's memory", mem, input)
         -- (an account the callee left as it was handed over is in the caller's memory already)
         let was := handed[index]!
         if account.lamports != was.lamports || account.owner != was.owner || account.data != was.data then
           mem := storeAt mem balanceAt 8 account.lamports
           mem := account.owner.copySlice 0 mem ownerAt 32
           mem := account.data.copySlice 0 mem dataAt account.data.size
+        -- what of the account's room the caller can reach is now exactly its data: the rest is cleared
+        let start := if info.dataAddr >>> 32 == 4 then (info.dataAddr &&& 0xFFFFFFFF).toNat else 0
+        let reached := input.present start
+        input := input.resized start account.data.size (if rights callerMetas index &&& 4 == 0 then 1 else if account.owner != callerId then 2 else 0)
+        for k in [account.data.size:(if reached > info.dataLen.toNat then reached else info.dataLen.toNat)] do
+          mem := mem.set! (dataAt + k) 0
         if size != info.dataLen then
-          -- the account was resized: clear what it gave up, and update both places its length is kept
-          for k in [account.data.size:info.dataLen.toNat] do
-            mem := mem.set! (dataAt + k) 0
-          let lenInView := writable p inputLen info.lenAddr 8
-          let lenInInput := writable p inputLen (info.dataAddr - 8) 8
+          -- the account was resized: update both places its length is kept
+          let lenInView := writable p plain info.lenAddr 8
+          let lenInInput := writable p plain (info.dataAddr - 8) 8
           if !(Wire.ok lenInView) || !(Wire.ok lenInInput) then
-            return (st.stop accessViolation "an account view points outside the caller's memory", mem)
+            return (st.stop accessViolation "an account view points outside the caller's memory", mem, input)
           mem := storeAt mem lenInView 8 size
           mem := storeAt mem lenInInput 8 size
-    return (st, mem)
-  | _, _ => return (st.stop accessViolation "the arguments of the call are not readable", mem)
+    return (st, mem, input)
+  | _, _ => return (st.stop accessViolation "the arguments of the call are not readable", mem, input)
 
 /-- Processes one instruction: `programId` is run on the accounts `metas`
 refers to, with `data`. Returns the state afterwards; if `status` is not
@@ -264,13 +281,13 @@ partial def execute (m : Machine) (st0 : State) (programId : ByteArray) (metas :
   let packedInput := if p.packed then serializePacked accounts metas data programId else ByteArray.empty
   let mut mem := Fast.zeroed (stackBytes + p.heap) (stackBytes + p.heap + (if p.packed then packedInput.size else serializedSize accounts metas data) + 64)
   mem := if p.packed then mem ++ packedInput else serializeOnto mem accounts metas data programId
-  let inputLen := mem.size - (stackBytes + p.heap)
+  let mut input : Input := ⟨mem.size - (stackBytes + p.heap), zonesOf accounts metas programId p.packed⟩
   -- The registers, and after them what the program's translation into machine code keeps (`Jit`: the
   -- layout of `cpu`), which includes the saved registers of every call in progress inside the program.
   let mut regs : Array UInt64 := Array.replicate Jit.cpuWords 0
   regs := regs.set! 1 inputStart
   -- the second register points at the instruction's data in the input (its length sits just before it)
-  regs := regs.set! 2 (inputStart + (inputLen - 32 - data.size).toUInt64)
+  regs := regs.set! 2 (inputStart + (input.len - 32 - data.size).toUInt64)
   -- What the versions of sBPF change. In 1 and 2 a function moves the stack pointer itself. 2 re-encodes
   -- arithmetic and memory instructions. 3 goes back to version 0's instructions and adds 32-bit conditional
   -- jumps, calls that are either relative or name a system call by hash, and the stricter file format.
@@ -298,7 +315,9 @@ partial def execute (m : Machine) (st0 : State) (programId : ByteArray) (metas :
   let starts := p.starts
   if native != 0 then
     let held := if p.elf.size > p.roFile then p.roLow + (p.elf.size - p.roFile) else p.roLow
-    regs := Jit.prepare regs budget heapSize inputLen p.roRegion p.roLow (if p.roHigh < held then p.roHigh else held) p.roFile
+    regs := Jit.prepare regs budget heapSize input.len p.roRegion p.roLow (if p.roHigh < held then p.roHigh else held) p.roFile
+    -- (of the input, the translation is given one stretch at a time: the one last used)
+    regs := Jit.window regs heapSize (input.stretch 0)
   repeat
     if native != 0 then
       if pc < count then
@@ -339,11 +358,21 @@ partial def execute (m : Machine) (st0 : State) (programId : ByteArray) (metas :
         status := unsupportedInstruction
         break
       let addr := (if cls == 4 then regs[src]! else regs[dst]!) + off
-      let idx := locate p inputLen addr size (cls == 7)
+      let inInput := addr >>> 32 == 4
+      let mut idx := locate p input addr size (cls == 7)
+      if !(Wire.ok idx) && cls == 7 && inInput then
+        input := input.grown (addr &&& 0xFFFFFFFF).toNat size
+        idx := locate p input addr size true
       if !(Wire.ok idx) then
-        status := accessViolation
-        detail := s!"at address {hex64 addr}, instruction {pc}"
+        let (how, code, what) := refusal input addr size (cls == 7)
+        status := how
+        r0 := code
+        detail := if how == accessViolation then s!"{what}, instruction {pc}" else what
+        -- (a fault in the program's own instructions costs it all it had left)
+        units := budget
         break
+      if inInput && native != 0 then
+        regs := Jit.window regs heapSize (input.stretch (addr &&& 0xFFFFFFFF).toNat)
       if cls == 4 then
         regs := regs.set! dst (loadAt p mem idx size)
       else
@@ -463,7 +492,7 @@ partial def execute (m : Machine) (st0 : State) (programId : ByteArray) (metas :
         let mut result : UInt64 := 0
         if id == sysLog then
           units := units + (if a2 > 100 then a2 else 100)
-          match readBytes p mem inputLen a1 a2 with
+          match readBytes p mem input a1 a2 with
           | none => status := accessViolation
           | some text => logs := logs.push (printable text)
         else if id == sysLog64 then
@@ -471,7 +500,7 @@ partial def execute (m : Machine) (st0 : State) (programId : ByteArray) (metas :
           logs := logs.push s!"{hex64 a1}, {hex64 a2}, {hex64 a3}, {hex64 regs[4]!}, {hex64 regs[5]!}"
         else if id == sysLogPubkey then
           units := units + 100
-          match readBytes p mem inputLen a1 32 with
+          match readBytes p mem input a1 32 with
           | none => status := accessViolation
           | some key => logs := logs.push (Base58.encode key)
         else if id == sysLogUnits then
@@ -479,27 +508,37 @@ partial def execute (m : Machine) (st0 : State) (programId : ByteArray) (metas :
           logs := logs.push s!"consumption: {budget - units} units remaining"
         else if id == sysMemcpy || id == sysMemmove then
           units := units + memCost a3
-          let dest := writable p inputLen a1 a3
-          match readBytes p mem inputLen a2 a3 with
-          | none => status := accessViolation
-          | some bytes =>
-            if Wire.ok dest then
-              mem := bytes.copySlice 0 mem dest bytes.size
-            else
-              status := accessViolation
+          input := grownFor input a1 a3
+          let dest := writable p input a1 a3
+          if !(Wire.ok dest) then
+            let (how, code, what) := refusal input a1 a3.toNat true
+            status := how
+            r0 := code
+            detail := what
+          else match readBytes p mem input a2 a3 with
+          | none =>
+            let (how, code, what) := refusal input a2 a3.toNat false
+            status := how
+            r0 := code
+            detail := what
+          | some bytes => mem := bytes.copySlice 0 mem dest bytes.size
         else if id == sysMemset then
           units := units + memCost a3
-          let dest := writable p inputLen a1 a3
+          input := grownFor input a1 a3
+          let dest := writable p input a1 a3
           if Wire.ok dest then
             for i in [0:a3.toNat] do
               mem := mem.set! (dest + i) a2.toUInt8
           else
-            status := accessViolation
+            let (how, code, what) := refusal input a1 a3.toNat true
+            status := how
+            r0 := code
+            detail := what
         else if id == sysMemcmp then
           -- compares two ranges and stores the difference of the first unequal bytes as an i32
           units := units + memCost a3
-          let dest := writable p inputLen regs[4]! 4
-          match readBytes p mem inputLen a1 a3, readBytes p mem inputLen a2 a3 with
+          let dest := writable p input regs[4]! 4
+          match readBytes p mem input a1 a3, readBytes p mem input a2 a3 with
           | some x, some y =>
             if Wire.ok dest then
               let mut diff : UInt64 := 0
@@ -519,15 +558,15 @@ partial def execute (m : Machine) (st0 : State) (programId : ByteArray) (metas :
           else
             let mut message := ByteArray.empty
             for i in [0:a2.toNat] do
-              match readBytes p mem inputLen (a1 + 16 * i.toUInt64) 16 with
+              match readBytes p mem input (a1 + 16 * i.toUInt64) 16 with
               | none => status := accessViolation
               | some pair =>
                 let len := Wire.u64 pair 8
                 units := units + (if len / 2 > 10 then len / 2 else 10)
-                match readBytes p mem inputLen (Wire.u64 pair 0) len with
+                match readBytes p mem input (Wire.u64 pair 0) len with
                 | none => status := accessViolation
                 | some part => message := message ++ part
-            let dest := writable p inputLen a3 32
+            let dest := writable p input a3 32
             if status == finished && Wire.ok dest then
               let digest := if id == sysKeccak then Keccak.hash message else if id == sysBlake3 then Blake3.hash message else Sha256.hash message
               mem := digest.copySlice 0 mem dest 32
@@ -537,7 +576,7 @@ partial def execute (m : Machine) (st0 : State) (programId : ByteArray) (metas :
           -- is this a point of the curve? (a1 = how it is written: 0 Edwards, 1 Ristretto; a2 = the point)
           if a1 <= 1 then
             units := units + (if a1 == 0 then 159 else 169)
-            match readBytes p mem inputLen a2 32 with
+            match readBytes p mem input a2 32 with
             | none => status := accessViolation
             | some point => result := if (curvePoint a1 point).isSome then 0 else 1
           else
@@ -547,8 +586,8 @@ partial def execute (m : Machine) (st0 : State) (programId : ByteArray) (metas :
           -- add, subtract or multiply on the curve: a2 = which, a3 and r4 the operands, r5 where the result goes
           if a1 <= 1 && a2 <= 2 then
             units := units + (if a1 == 0 then (if a2 == 0 then 473 else if a2 == 1 then 475 else 2177) else if a2 == 0 then 521 else if a2 == 1 then 519 else 2208)
-            let dest := writable p inputLen regs[5]! 32
-            match readBytes p mem inputLen a3 32, readBytes p mem inputLen regs[4]! 32 with
+            let dest := writable p input regs[5]! 32
+            match readBytes p mem input a3 32, readBytes p mem input regs[4]! 32 with
             | some left, some right =>
               if !(Wire.ok dest) then
                 status := accessViolation
@@ -578,8 +617,8 @@ partial def execute (m : Machine) (st0 : State) (programId : ByteArray) (metas :
           let count := regs[4]!
           if a1 <= 1 && count <= 512 then
             units := units + (if a1 == 0 then 2273 else 2303) + (if a1 == 0 then 758 else 788) * (if count == 0 then 0 else count - 1)
-            let dest := writable p inputLen regs[5]! 32
-            match readBytes p mem inputLen a2 (32 * count), readBytes p mem inputLen a3 (32 * count) with
+            let dest := writable p input regs[5]! 32
+            match readBytes p mem input a2 (32 * count), readBytes p mem input a3 (32 * count) with
             | some scalars, some points =>
               if !(Wire.ok dest) then
                 status := accessViolation
@@ -621,8 +660,8 @@ partial def execute (m : Machine) (st0 : State) (programId : ByteArray) (metas :
             units := units + (if op == 0 then 334 else if op == 2 then 3840 else if op == 4 then 535 else if op == 6 then 15670
               else 36364 + 12121 * (if pairs == 0 then 0 else pairs - 1) + 85 + a3 + 32)
             let outSize : UInt64 := if op == 3 then 32 else if op >= 4 then 128 else 64
-            let dest := writable p inputLen regs[4]! outSize
-            match readBytes p mem inputLen a2 a3 with
+            let dest := writable p input regs[4]! outSize
+            match readBytes p mem input a2 a3 with
             | none => status := accessViolation
             | some raw =>
               -- the input's size: exact, except that most significant first the first group's may be short
@@ -654,15 +693,15 @@ partial def execute (m : Machine) (st0 : State) (programId : ByteArray) (metas :
                     | none => result := 1
                     | some second => mem := (Bn254.g2ToBytes (Bn254.g2Add first second) big).copySlice 0 mem dest 128
               else
-                let input := zeros raw (size - raw.size)
-                match Bn254.g1OfBytes input 0 big with
+                let padded := zeros raw (size - raw.size)
+                match Bn254.g1OfBytes padded 0 big with
                 | none => result := 1
                 | some first =>
                   if op == 2 then
-                    let product := Bn254.g1Scale (Mont.ofBytes input 64 big) first
+                    let product := Bn254.g1Scale (Mont.ofBytes padded 64 big) first
                     mem := (Bn254.g1ToBytes product big).copySlice 0 mem dest 64
                   else
-                    match Bn254.g1OfBytes input 64 big with
+                    match Bn254.g1OfBytes padded 64 big with
                     | none => result := 1
                     | some second => mem := (Bn254.g1ToBytes (Bn254.g1Add first second) big).copySlice 0 mem dest 64
           else
@@ -676,8 +715,8 @@ partial def execute (m : Machine) (st0 : State) (programId : ByteArray) (metas :
           else
             units := units + 100 + (if a1 == 0 then 30 else if a1 == 1 then 398 else if a1 == 2 then 86 else 13610)
             let outSize : UInt64 := if a1 == 0 then 32 else if a1 == 3 then 128 else 64
-            let dest := writable p inputLen regs[4]! outSize
-            match readBytes p mem inputLen a2 a3 with
+            let dest := writable p input regs[4]! outSize
+            match readBytes p mem input a2 a3 with
             | none => status := accessViolation
             | some raw =>
               if !(Wire.ok dest) then
@@ -699,8 +738,8 @@ partial def execute (m : Machine) (st0 : State) (programId : ByteArray) (metas :
             detail := "ProgramFailedToComplete"
           else
             units := units + 61 * count * count + 542
-            let dest := writable p inputLen regs[5]! 32
-            match readSlices p mem inputLen a3 count with
+            let dest := writable p input regs[5]! 32
+            match readSlices p mem input a3 count with
             | none => status := accessViolation
             | some inputs =>
               if !(Wire.ok dest) then
@@ -714,8 +753,8 @@ partial def execute (m : Machine) (st0 : State) (programId : ByteArray) (metas :
         else if id == sysSecpRecover then
           -- the public key behind an Ethereum-style signature: a1 the hash, a2 which candidate, a3 the signature, r4 where to put the key
           units := units + 25000
-          let dest := writable p inputLen regs[4]! 64
-          match readBytes p mem inputLen a1 32, readBytes p mem inputLen a3 64 with
+          let dest := writable p input regs[4]! 64
+          match readBytes p mem input a1 32, readBytes p mem input a3 64 with
           | some hash, some signature =>
             if !(Wire.ok dest) then
               status := accessViolation
@@ -732,7 +771,7 @@ partial def execute (m : Machine) (st0 : State) (programId : ByteArray) (metas :
           -- a sysvar, copied out the way a Rust program holds it in memory
           let bytes := sysvarInMemory m id
           units := units + 100 + bytes.size.toUInt64
-          let dest := writable p inputLen a1 bytes.size.toUInt64
+          let dest := writable p input a1 bytes.size.toUInt64
           if Wire.ok dest then
             mem := bytes.copySlice 0 mem dest bytes.size
           else
@@ -741,8 +780,8 @@ partial def execute (m : Machine) (st0 : State) (programId : ByteArray) (metas :
           -- part of a sysvar's serialized form: a1 names it, a2 is where to put it, a3 and r4 give offset and length
           let length := regs[4]!
           units := units + 100 + (if length / 250 > 10 then length / 250 else 10)
-          let dest := writable p inputLen a2 length
-          match readBytes p mem inputLen a1 32 with
+          let dest := writable p input a2 length
+          match readBytes p mem input a1 32 with
           | none => status := accessViolation
           | some name =>
             let whole := sysvarBytes m name
@@ -761,7 +800,7 @@ partial def execute (m : Machine) (st0 : State) (programId : ByteArray) (metas :
             result := if m.stakes.size >= 8 then Wire.u64 m.stakes 0 else 0
           else
             units := units + 110
-            match readBytes p mem inputLen a1 32 with
+            match readBytes p mem input a1 32 with
             | none => status := accessViolation
             | some vote =>
               for k in [0:m.stakes.size / 40] do
@@ -769,7 +808,7 @@ partial def execute (m : Machine) (st0 : State) (programId : ByteArray) (metas :
                   result := Wire.u64 m.stakes (40 + 40 * k)
         else if id == sysSetReturn then
           units := units + 100 + a2 / 250
-          match readBytes p mem inputLen a1 a2 with
+          match readBytes p mem input a1 a2 with
           | none => status := accessViolation
           | some bytes =>
             if bytes.size > 1024 then
@@ -783,8 +822,8 @@ partial def execute (m : Machine) (st0 : State) (programId : ByteArray) (metas :
             let payload := returnData.extract 32 returnData.size
             let n := if a2 < payload.size.toUInt64 then a2 else payload.size.toUInt64
             units := units + (n + 32) / 250
-            let dest := writable p inputLen a1 n
-            let idDest := writable p inputLen a3 32
+            let dest := writable p input a1 n
+            let idDest := writable p input a3 32
             if Wire.ok dest && Wire.ok idDest then
               mem := (payload.extract 0 n.toNat).copySlice 0 mem dest n.toNat
               mem := (returnData.extract 0 32).copySlice 0 mem idDest 32
@@ -794,7 +833,7 @@ partial def execute (m : Machine) (st0 : State) (programId : ByteArray) (metas :
         else if id == sysLogData then
           -- binary data for whoever reads the logs (Anchor's events): a1 points at (address, length) pairs
           units := units + 100 + 100 * a2
-          match readSlices p mem inputLen a1 a2 with
+          match readSlices p mem input a1 a2 with
           | none => status := accessViolation
           | some fields =>
             let mut line := "data:"
@@ -827,13 +866,13 @@ partial def execute (m : Machine) (st0 : State) (programId : ByteArray) (metas :
                 seen := seen + 1
           if found != notFound then
             let frame := trace[found]!
-            let header := writable p inputLen a2 16
+            let header := writable p input a2 16
             if !(Wire.ok header) then
               status := accessViolation
             else if Wire.u64 mem header == frame.data.size.toUInt64 && Wire.u64 mem (header + 8) == frame.metas.size.toUInt64 then
-              let idAt := writable p inputLen a3 32
-              let dataAt := writable p inputLen regs[4]! frame.data.size.toUInt64
-              let metasAt := writable p inputLen regs[5]! (34 * frame.metas.size).toUInt64
+              let idAt := writable p input a3 32
+              let dataAt := writable p input regs[4]! frame.data.size.toUInt64
+              let metasAt := writable p input regs[5]! (34 * frame.metas.size).toUInt64
               if Wire.ok idAt && Wire.ok dataAt && Wire.ok metasAt then
                 mem := frame.program.copySlice 0 mem idAt 32
                 mem := frame.data.copySlice 0 mem dataAt frame.data.size
@@ -851,7 +890,7 @@ partial def execute (m : Machine) (st0 : State) (programId : ByteArray) (metas :
         else if id == sysFindAddress || id == sysCreateAddress then
           -- seeds at a1 (a2 of them), program address at a3; results to r4 (and the bump to r5)
           units := units + 1500
-          match readSlices p mem inputLen a1 a2, readBytes p mem inputLen a3 32 with
+          match readSlices p mem input a1 a2, readBytes p mem input a3 32 with
           | some seeds, some owner =>
             let mut address := ByteArray.empty
             let mut bump : UInt64 := 0
@@ -870,8 +909,8 @@ partial def execute (m : Machine) (st0 : State) (programId : ByteArray) (metas :
                     result := 0
                   | none => units := units + 1500
             if result == 0 then
-              let dest := writable p inputLen regs[4]! 32
-              let bumpDest := if id == sysFindAddress then writable p inputLen regs[5]! 1 else 0
+              let dest := writable p input regs[4]! 32
+              let bumpDest := if id == sysFindAddress then writable p input regs[5]! 1 else 0
               if Wire.ok dest && Wire.ok bumpDest then
                 mem := address.copySlice 0 mem dest 32
                 if id == sysFindAddress then
@@ -880,9 +919,12 @@ partial def execute (m : Machine) (st0 : State) (programId : ByteArray) (metas :
                 status := accessViolation
           | _, _ => status := accessViolation
         else if id == sysInvoke || id == sysInvokeRust then
-          let (after, memAfter) := invoke m ⟨accounts, units, logs, returnData, finished, 0, "", trace⟩ programId metas entry
-            p mem inputLen a1 a2 a3 regs[4]! regs[5]! depth (id == sysInvokeRust)
+          let (after, memAfter, inputAfter) := invoke m ⟨accounts, units, logs, returnData, finished, 0, "", trace⟩ programId metas entry
+            p mem input a1 a2 a3 regs[4]! regs[5]! depth (id == sysInvokeRust)
           mem := memAfter
+          input := inputAfter
+          if native != 0 then
+            regs := Jit.window regs heapSize (input.stretch 0)
           let ⟨accounts1, units1, logs1, returnData1, status1, r01, detail1, trace1⟩ := after
           trace := trace1
           accounts := accounts1
@@ -895,7 +937,7 @@ partial def execute (m : Machine) (st0 : State) (programId : ByteArray) (metas :
         else if id == sysAbort || id == sysPanic then
           status := aborted
           if id == sysPanic then
-            match readBytes p mem inputLen a1 a2 with
+            match readBytes p mem input a1 a2 with
             | none => pure ()
             | some file => detail := s!"panicked at {printable file}:{a3}"
         else
@@ -933,11 +975,21 @@ partial def execute (m : Machine) (st0 : State) (programId : ByteArray) (metas :
         status := unsupportedInstruction
         break
       let addr := (if cls == 1 then regs[src]! else regs[dst]!) + off
-      let idx := locate p inputLen addr size (cls != 1)
+      let inInput := addr >>> 32 == 4
+      let mut idx := locate p input addr size (cls != 1)
+      if !(Wire.ok idx) && cls != 1 && inInput then
+        input := input.grown (addr &&& 0xFFFFFFFF).toNat size
+        idx := locate p input addr size true
       if !(Wire.ok idx) then
-        status := accessViolation
-        detail := s!"at address {hex64 addr}, instruction {pc}"
+        let (how, code, what) := refusal input addr size (cls != 1)
+        status := how
+        r0 := code
+        detail := if how == accessViolation then s!"{what}, instruction {pc}" else what
+        -- (a fault in the program's own instructions costs it all it had left)
+        units := budget
         break
+      if inInput && native != 0 then
+        regs := Jit.window regs heapSize (input.stretch (addr &&& 0xFFFFFFFF).toNat)
       if cls == 1 then
         regs := regs.set! dst (loadAt p mem idx size)
       else

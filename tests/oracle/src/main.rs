@@ -17,6 +17,8 @@
 //!     oracle transaction sysvar_probe.so counter.so
 //!     oracle versions sysvar_probe_v1.so sysvar_probe_v2.so ...
 //!     oracle-next bls
+//!     oracle-next vote
+//!     oracle-next memory memory_probe.so
 //!     oracle-next zkproof tests/zkproofs.bin
 //!     oracle-next zkproof-make FILE        (new proofs: a new fixture)
 //!
@@ -954,11 +956,276 @@ mod zk {
     }
 }
 
+/// The reference for tests/vote.lean: what is left of the vote program, on Agave with the features
+/// mainnet has switched on.
+#[cfg(feature = "vote")]
+mod vote {
+    use {
+        super::*,
+        blstrs::{G1Projective, G2Projective, Scalar},
+        group::{Curve, Group},
+        solana_clock::Clock,
+    };
+
+    const VOTE: Address = address!("Vote111111111111111111111111111111111111111");
+    const SIZE: u64 = 3762;
+    const RENT_FOR_IT: u64 = 27_074_400;
+
+    fn ix(tag: u32, fields: &[&[u8]], accounts: Vec<AccountMeta>) -> Instruction {
+        let mut data = tag.to_le_bytes().to_vec();
+        for field in fields {
+            data.extend_from_slice(field);
+        }
+        Instruction { program_id: VOTE, accounts, data }
+    }
+
+    /// A BLS key and the proof that its holder has the secret, for a vote account.
+    fn bls(secret: u64, account: &Address) -> Vec<u8> {
+        let s = Scalar::from(secret);
+        let key = (G1Projective::generator() * s).to_affine().to_compressed();
+        let message = [b"ALPENGLOW".as_ref(), account.as_ref(), &key].concat();
+        let proof = (G2Projective::hash_to_curve(&message, b"BLS_POP_BLS12381G2_XMD:SHA-256_SSWU_RO_POP_", &[]) * s).to_affine().to_compressed();
+        [&key[..], &proof[..]].concat()
+    }
+
+    /// A vote account as accounts were laid out before the present layout: 2 is the one before,
+    /// 1 the one before that (votes of 12 bytes, 31 bytes shorter).
+    fn older(layout: u32, node: &Address, withdrawer: &Address, voter: &Address) -> Vec<u8> {
+        let mut d = layout.to_le_bytes().to_vec();
+        d.extend_from_slice(node.as_ref());
+        d.extend_from_slice(withdrawer.as_ref());
+        d.push(9);
+        d.extend_from_slice(&2u64.to_le_bytes());
+        for (slot, confirmations) in [(100u64, 2u32), (101, 1)] {
+            if layout == 2 {
+                d.push(1);
+            }
+            d.extend_from_slice(&slot.to_le_bytes());
+            d.extend_from_slice(&confirmations.to_le_bytes());
+        }
+        d.push(1);
+        d.extend_from_slice(&99u64.to_le_bytes());
+        d.extend_from_slice(&1u64.to_le_bytes());
+        d.extend_from_slice(&3u64.to_le_bytes());
+        d.extend_from_slice(voter.as_ref());
+        d.extend_from_slice(&[0u8; 1536]);
+        d.extend_from_slice(&31u64.to_le_bytes());
+        d.push(1);
+        d.extend_from_slice(&2u64.to_le_bytes());
+        for (epoch, credits, before) in [(3u64, 500u64, 0u64), (4, 900, 500)] {
+            d.extend_from_slice(&epoch.to_le_bytes());
+            d.extend_from_slice(&credits.to_le_bytes());
+            d.extend_from_slice(&before.to_le_bytes());
+        }
+        d.extend_from_slice(&101u64.to_le_bytes());
+        d.extend_from_slice(&1_700_000_000u64.to_le_bytes());
+        d.resize(if layout == 1 { 3731 } else { 3762 }, 0);
+        d
+    }
+
+    pub fn run() {
+        // mainnet's features, as far as the vote program asks: BLS keys, commissions in hundredths of a
+        // percent and their collectors, but no commission on block fees and no second way of setting up
+        let mut features = LiteSVM::mainnet_feature_set();
+        for id in [agave_feature_set::bls_pubkey_management_in_vote_account::id(), agave_feature_set::commission_rate_in_basis_points::id(),
+            agave_feature_set::custom_commission_collector::id(), agave_feature_set::delay_commission_updates::id(),
+            agave_feature_set::deprecate_legacy_vote_ixs::id()] {
+            features.activate(&id, 0);
+        }
+        features.deactivate(&agave_feature_set::block_revenue_sharing::id());
+        features.deactivate(&agave_feature_set::vote_account_initialize_v2::id());
+        let mut svm = LiteSVM::default().with_feature_set(features).with_builtins().with_lamports(1_000_000_000_000_000)
+            .with_sysvars().with_feature_accounts().with_default_programs().with_sigverify(true).with_blockhash_check(true);
+        let wallet = |lamports| Account { lamports, owner: SYSTEM, ..Default::default() };
+        let keys = |name: &str| Keypair::new_from_array(hash(name));
+        let (payer_keys, alice_keys, node_keys, voter_keys, withdrawer_keys) = (keys("payer"), keys("alice"), keys("node"), keys("voter"), keys("withdrawer"));
+        let (vote_keys, second_keys, next_keys, other_node_keys) = (keys("vote"), keys("second"), keys("next"), keys("other node"));
+        let (payer, alice, node, voter, withdrawer) = (payer_keys.pubkey(), alice_keys.pubkey(), node_keys.pubkey(), voter_keys.pubkey(), withdrawer_keys.pubkey());
+        let (vote, second, next, other_node) = (vote_keys.pubkey(), second_keys.pubkey(), next_keys.pubkey(), other_node_keys.pubkey());
+        svm.set_account(payer, wallet(10_000_000_000)).unwrap();
+        svm.set_account(alice, wallet(2_000_000_000)).unwrap();
+        let (poor, rich) = (Address::new_from_array(hash("poor")), Address::new_from_array(hash("rich")));
+        svm.set_account(poor, wallet(500_000)).unwrap();
+        svm.set_account(rich, wallet(5_000_000)).unwrap();
+        // three accounts nobody has touched since the layouts before the present one
+        let (old, older_still, short_of_rent) = (Address::new_from_array(hash("old")), Address::new_from_array(hash("older still")), Address::new_from_array(hash("short of rent")));
+        svm.set_account(old, Account { lamports: 30_000_000, owner: VOTE, data: older(2, &node, &withdrawer, &voter), ..Default::default() }).unwrap();
+        svm.set_account(older_still, Account { lamports: 30_000_000, owner: VOTE, data: older(1, &node, &withdrawer, &voter), ..Default::default() }).unwrap();
+        svm.set_account(short_of_rent, Account { lamports: 26_858_640, owner: VOTE, data: older(1, &node, &withdrawer, &voter), ..Default::default() }).unwrap();
+        svm.set_sysvar(&Clock { slot: 0, epoch_start_timestamp: 0, epoch: 5, leader_schedule_epoch: 6, unix_timestamp: 0 });
+        println!("blockhash {}", svm.latest_blockhash());
+        let mut chain = Chain { svm, payer: payer_keys, alice: alice_keys };
+        let alice_keys = keys("alice");
+        let init = |commission: u8| [node.as_ref(), voter.as_ref(), withdrawer.as_ref(), &[commission]].concat();
+
+        // --- setting a vote account up: the node it votes for must sign
+        chain.signed("set up a vote account", &[&vote_keys, &node_keys], &[create_account(&payer, &vote, RENT_FOR_IT, SIZE, &VOTE),
+            ix(0, &[&init(7)], vec![w(vote), r(RENT), r(CLOCK), rs(node)])]);
+        chain.show("vote", &vote);
+        chain.signed("set it up again", &[&node_keys], &[ix(0, &[&init(8)], vec![w(vote), r(RENT), r(CLOCK), rs(node)])]);
+        chain.signed("set one up without the node signing", &[&second_keys], &[create_account(&payer, &second, RENT_FOR_IT, SIZE, &VOTE),
+            ix(0, &[&init(7)], vec![w(second), r(RENT), r(CLOCK), r(node)])]);
+        chain.signed("an account a byte too small", &[&second_keys, &node_keys], &[create_account(&payer, &second, RENT_FOR_IT, SIZE - 1, &VOTE),
+            ix(0, &[&init(7)], vec![w(second), r(RENT), r(CLOCK), rs(node)])]);
+        chain.signed("an account a lamport short of its rent", &[&second_keys, &node_keys], &[create_account(&payer, &second, RENT_FOR_IT - 1, SIZE, &VOTE),
+            ix(0, &[&init(7)], vec![w(second), r(RENT), r(CLOCK), rs(node)])]);
+        chain.signed("the clock where the rent should be", &[&second_keys, &node_keys], &[create_account(&payer, &second, RENT_FOR_IT, SIZE, &VOTE),
+            ix(0, &[&init(7)], vec![w(second), r(CLOCK), r(CLOCK), rs(node)])]);
+        chain.signed("no clock", &[&second_keys], &[create_account(&payer, &second, RENT_FOR_IT, SIZE, &VOTE),
+            ix(0, &[&init(7)], vec![w(second), r(RENT)])]);
+        chain.signed("no accounts at all", &[], &[ix(0, &[&init(7)], vec![])]);
+        chain.signed("an account of another program", &[], &[ix(5, &[&[1]], vec![w(alice)])]);
+        chain.signed("data cut short", &[&node_keys], &[ix(0, &[&init(7)[..96]], vec![w(vote), r(RENT), r(CLOCK), rs(node)])]);
+
+        // --- a new withdrawer, a new voter
+        let authorize = |authorized: &Address, kind: u32, signer: Address| ix(1, &[authorized.as_ref(), &kind.to_le_bytes()], vec![w(vote), r(CLOCK), rs(signer)]);
+        chain.signed("the withdrawer names alice withdrawer", &[&withdrawer_keys], &[authorize(&alice, 1, withdrawer)]);
+        chain.show("vote", &vote);
+        chain.signed("the old withdrawer tries again", &[&withdrawer_keys], &[authorize(&withdrawer, 1, withdrawer)]);
+        chain.signed("the voter names the next voter", &[&voter_keys], &[authorize(&next, 0, voter)]);
+        chain.show("vote", &vote);
+        chain.signed("and another for the same epoch", &[&voter_keys], &[authorize(&node, 0, voter)]);
+        chain.signed("someone else names a voter", &[&node_keys], &[authorize(&node, 0, node)]);
+        chain.signed("a kind of authority there is not", &[&voter_keys], &[authorize(&node, 3, voter)]);
+        chain.signed("no clock for it", &[], &[ix(1, &[node.as_ref(), &0u32.to_le_bytes()], vec![w(vote)])]);
+        chain.signed("the rent where the clock should be", &[&voter_keys], &[ix(1, &[node.as_ref(), &0u32.to_le_bytes()], vec![w(vote), r(RENT), rs(voter)])]);
+        chain.svm.set_sysvar(&Clock { slot: 0, epoch_start_timestamp: 0, epoch: 8, leader_schedule_epoch: 9, unix_timestamp: 0 });
+        chain.signed("three epochs on, the old voter names one", &[&voter_keys], &[authorize(&alice, 0, voter)]);
+        chain.signed("the next voter does", &[&next_keys], &[authorize(&voter, 0, next)]);
+        chain.show("vote", &vote);
+
+        // --- a voter with a BLS key: the key comes with a proof that its holder has the secret
+        let with_key = |authorized: &Address, key_and_proof: &[u8], signer: Address| ix(1, &[authorized.as_ref(), &2u32.to_le_bytes(), key_and_proof],
+            vec![w(vote), r(CLOCK), rs(signer)]);
+        chain.signed("a proof made for another account", &[&alice_keys], &[with_key(&node, &bls(77, &second), alice)]);
+        chain.signed("a proof with a bit changed", &[&alice_keys], &[with_key(&node, &{ let mut b = bls(77, &vote); b[140] ^= 1; b }, alice)]);
+        chain.signed("a key that is no point", &[&alice_keys], &[with_key(&node, &{ let mut b = bls(77, &vote); b[1] ^= 1; b }, alice)]);
+        chain.signed("a key and proof on too small a budget", &[&alice_keys], &[unit_limit(30_000), with_key(&node, &bls(77, &vote), alice)]);
+        chain.signed("the epoch after next is taken", &[&alice_keys], &[with_key(&node, &bls(76, &vote), alice)]);
+        chain.svm.set_sysvar(&Clock { slot: 0, epoch_start_timestamp: 0, epoch: 9, leader_schedule_epoch: 10, unix_timestamp: 0 });
+        chain.signed("an epoch later, a voter with a BLS key", &[&alice_keys], &[with_key(&node, &bls(77, &vote), alice)]);
+        chain.show("vote", &vote);
+        chain.svm.set_sysvar(&Clock { slot: 0, epoch_start_timestamp: 0, epoch: 12, leader_schedule_epoch: 13, unix_timestamp: 0 });
+        chain.signed("now a voter without one is refused", &[&alice_keys], &[authorize(&next, 0, alice)]);
+        chain.signed("another key replaces it, by the voter", &[&node_keys], &[with_key(&next, &bls(78, &vote), node)]);
+        chain.show("vote", &vote);
+
+        // --- where the new authority must sign too
+        let checked = |kind: u32, accounts: Vec<AccountMeta>| ix(7, &[&kind.to_le_bytes()], accounts);
+        chain.signed("a withdrawer who signs for it", &[&alice_keys, &withdrawer_keys], &[checked(1, vec![w(vote), r(CLOCK), rs(alice), rs(withdrawer)])]);
+        chain.signed("one who does not", &[&withdrawer_keys], &[checked(1, vec![w(vote), r(CLOCK), rs(withdrawer), r(alice)])]);
+        chain.signed("too few accounts for it", &[&withdrawer_keys], &[checked(1, vec![w(vote), r(CLOCK), rs(withdrawer)])]);
+
+        // --- an authority that is an address derived from a base key and a seed
+        let derived = with_seed(&payer, "treasury", &SYSTEM);
+        chain.signed("the withdrawer names a derived address", &[&withdrawer_keys], &[authorize(&derived, 1, withdrawer)]);
+        let seeded = |tag: u32, seed: &str, new: Option<&Address>, accounts: Vec<AccountMeta>| ix(tag, &[&1u32.to_le_bytes(), SYSTEM.as_ref(), &text(seed),
+            new.map(|a| a.as_ref()).unwrap_or(&[])], accounts);
+        chain.signed("the wrong seed", &[], &[seeded(10, "treasure", Some(&alice), vec![w(vote), r(CLOCK), rs(payer)])]);
+        chain.signed("a seed too long", &[], &[seeded(10, "a seed that is much longer than is allowed", Some(&alice), vec![w(vote), r(CLOCK), rs(payer)])]);
+        chain.signed("the base does not sign", &[], &[transfer(&payer, &alice, 1), seeded(10, "treasury", Some(&alice), vec![w(vote), r(CLOCK), r(alice)])]);
+        chain.signed("the base signs: alice is withdrawer again", &[], &[seeded(10, "treasury", Some(&alice), vec![w(vote), r(CLOCK), rs(payer)])]);
+        chain.signed("back to the derived address", &[&alice_keys], &[authorize(&derived, 1, alice)]);
+        chain.signed("derived, and the new one signs", &[&withdrawer_keys], &[seeded(11, "treasury", None, vec![w(vote), r(CLOCK), rs(payer), rs(withdrawer)])]);
+        chain.show("vote", &vote);
+
+        // --- a new node; commissions and who collects them
+        chain.signed("a new node, which must sign", &[&withdrawer_keys], &[ix(4, &[], vec![w(vote), r(other_node), rs(withdrawer)])]);
+        chain.signed("it signs, the withdrawer does not", &[&other_node_keys], &[ix(4, &[], vec![w(vote), rs(other_node), r(withdrawer)])]);
+        chain.signed("both sign", &[&withdrawer_keys, &other_node_keys], &[ix(4, &[], vec![w(vote), rs(other_node), rs(withdrawer)])]);
+        chain.signed("no node named", &[], &[ix(4, &[], vec![w(vote)])]);
+        chain.signed("a commission of 10 percent", &[&withdrawer_keys], &[ix(5, &[&[10]], vec![w(vote), rs(withdrawer)])]);
+        chain.signed("without the withdrawer", &[], &[ix(5, &[&[11]], vec![w(vote), r(withdrawer)])]);
+        chain.signed("a commission of 12.34 percent", &[&withdrawer_keys], &[ix(18, &[&1234u16.to_le_bytes(), &0u32.to_le_bytes()], vec![w(vote), rs(withdrawer)])]);
+        chain.signed("a commission on block fees", &[&withdrawer_keys], &[ix(18, &[&1234u16.to_le_bytes(), &1u32.to_le_bytes()], vec![w(vote), rs(withdrawer)])]);
+        chain.show("vote", &vote);
+        let collector = |kind: u32, to: AccountMeta| ix(17, &[&kind.to_le_bytes()], vec![w(vote), to, rs(withdrawer)]);
+        chain.signed("alice collects the rewards' commission", &[&withdrawer_keys], &[collector(0, w(alice))]);
+        chain.signed("and the block fees", &[&withdrawer_keys], &[collector(1, w(alice))]);
+        chain.signed("a collector passed read-only", &[&withdrawer_keys], &[collector(0, r(rich))]);
+        chain.signed("a collector that is not a plain account", &[&withdrawer_keys], &[collector(0, w(old))]);
+        chain.signed("a collector that could not pay its rent", &[&withdrawer_keys], &[collector(0, w(poor))]);
+        chain.signed("the account itself collects", &[&withdrawer_keys], &[collector(0, w(vote))]);
+        chain.show("vote", &vote);
+
+        // --- accounts in the layouts before: withdrawn from as they are, brought up to date when changed
+        let withdraw = |from: Address, lamports: u64| ix(3, &[&lamports.to_le_bytes()], vec![w(from), w(alice), rs(withdrawer)]);
+        chain.signed("withdraw from an account in the old layout", &[&withdrawer_keys], &[withdraw(old, 1_000_000)]);
+        chain.show("old", &old);
+        chain.signed("withdraw below its rent", &[&withdrawer_keys], &[withdraw(old, 2_000_000)]);
+        chain.signed("change its commission", &[&withdrawer_keys], &[ix(5, &[&[20]], vec![w(old), rs(withdrawer)])]);
+        chain.show("old", &old);
+        chain.signed("give the older one a voter", &[&voter_keys], &[ix(1, &[next.as_ref(), &0u32.to_le_bytes()], vec![w(older_still), r(CLOCK), rs(voter)])]);
+        chain.show("older still", &older_still);
+        chain.signed("one that cannot pay for growing", &[&withdrawer_keys], &[ix(5, &[&[20]], vec![w(short_of_rent), rs(withdrawer)])]);
+        chain.svm.set_sysvar(&Clock { slot: 0, epoch_start_timestamp: 0, epoch: 5, leader_schedule_epoch: 6, unix_timestamp: 0 });
+        chain.signed("empty an account whose credits are fresh", &[&withdrawer_keys], &[withdraw(short_of_rent, 26_858_640)]);
+        chain.svm.set_sysvar(&Clock { slot: 0, epoch_start_timestamp: 0, epoch: 12, leader_schedule_epoch: 13, unix_timestamp: 0 });
+        chain.signed("withdraw more than there is", &[&withdrawer_keys], &[withdraw(short_of_rent, 26_858_641)]);
+        chain.signed("withdraw without the withdrawer", &[], &[ix(3, &[&1u64.to_le_bytes()], vec![w(old), w(alice), r(withdrawer)])]);
+        chain.signed("withdraw to nowhere", &[], &[ix(3, &[&1u64.to_le_bytes()], vec![w(old)])]);
+        chain.signed("empty it, its credits long past", &[&withdrawer_keys], &[transfer(&payer, &alice, 2), withdraw(short_of_rent, 26_858_640)]);
+        chain.show("short of rent", &short_of_rent);
+
+        // --- what the program no longer does
+        chain.signed("a vote, as votes were sent", &[&voter_keys], &[ix(2, &[&1u64.to_le_bytes(), &100u64.to_le_bytes(), &[0u8; 32], &[0]], vec![w(vote), r(CLOCK), r(CLOCK), rs(voter)])]);
+        chain.signed("setting up the newer way", &[], &[ix(16, &[&[0u8; 244]], vec![w(vote), rs(payer), w(alice), w(alice)])]);
+        chain.signed("a deposit for delegators", &[], &[ix(19, &[&5u64.to_le_bytes()], vec![w(vote), ws(payer)])]);
+        chain.signed("an instruction there is not", &[], &[ix(20, &[], vec![w(vote)])]);
+    }
+}
+
+/// The reference for tests/memory.lean: where a program's memory ends, on Agave with accounts mapped
+/// into it the way mainnet now does.
+#[cfg(feature = "vote")]
+mod memory {
+    use super::*;
+
+    pub const DOES: [&str; 16] = ["reads the last byte", "reads the byte after the last", "reads eight bytes across the end",
+        "reads the last byte of the room", "reads what follows the room", "writes a byte back as it is",
+        "writes into the room and reads elsewhere in it", "writes into the room and grows by a byte",
+        "writes eight bytes across the end and grows", "grows without writing, then reads", "copies its data out by system call",
+        "copies across the end by system call", "fills across the end by system call and grows",
+        "copies from its header into its data by system call", "reads an address where nothing is", "does something else"];
+
+    pub fn run(file: &str) {
+        let mut features = LiteSVM::mainnet_feature_set();
+        features.activate(&agave_feature_set::virtual_address_space_adjustments::id(), 0);
+        features.activate(&agave_feature_set::account_data_direct_mapping::id(), 0);
+        let mut svm = LiteSVM::default().with_feature_set(features).with_builtins().with_lamports(1_000_000_000_000_000)
+            .with_sysvars().with_feature_accounts().with_default_programs().with_sigverify(true).with_blockhash_check(true);
+        let probe = Address::new_from_array(hash("memory probe"));
+        svm.add_program(probe, &std::fs::read(file).unwrap()).unwrap();
+        let wallet = |lamports| Account { lamports, owner: SYSTEM, ..Default::default() };
+        let payer_keys = Keypair::new_from_array(hash("payer"));
+        let alice_keys = Keypair::new_from_array(hash("alice"));
+        svm.set_account(payer_keys.pubkey(), wallet(10_000_000_000)).unwrap();
+        svm.set_account(alice_keys.pubkey(), wallet(2_000_000_000)).unwrap();
+        println!("blockhash {}", svm.latest_blockhash());
+        let mut chain = Chain { svm, payer: payer_keys, alice: alice_keys };
+        let someone = Address::new_from_array(hash("someone"));
+        for (kind, owner, writable) in [("its own account", probe, true), ("its own account, read-only", probe, false), ("another program's account", someone, true)] {
+            let target = Address::new_from_array(hash(kind));
+            for mode in 0..16u8 {
+                // the account as it was, every time: 16 bytes, 1 to 16
+                chain.svm.set_account(target, Account { lamports: 1_000_000_000, owner, data: (1..=16).collect(), ..Default::default() }).unwrap();
+                let meta = if writable { w(target) } else { r(target) };
+                chain.signed(&format!("{kind}: {}", DOES[mode as usize]), &[], &[Instruction { program_id: probe, accounts: vec![meta], data: vec![mode] }]);
+                chain.show("the account", &target);
+            }
+        }
+    }
+}
+
 fn main() {
     let args: Vec<String> = std::env::args().collect();
     match args.get(1).map(String::as_str) {
         #[cfg(feature = "bls")]
         Some("bls") => bls::report(),
+        #[cfg(feature = "vote")]
+        Some("vote") => vote::run(),
+        #[cfg(feature = "vote")]
+        Some("memory") if args.len() == 3 => memory::run(&args[2]),
         #[cfg(feature = "zk")]
         Some("zkproof-make") if args.len() == 3 => zk::make(&args[2]),
         #[cfg(feature = "zk")]

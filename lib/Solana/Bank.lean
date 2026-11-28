@@ -404,10 +404,10 @@ def verifySecp256k1 (datas : Array ByteArray) (current : Nat) : UInt64 := Id.run
 def refuse (bank : Bank) (why : String) : Receipt :=
   ⟨why, false, 0, 0, 0, Array.emptyWithCapacity 0, ByteArray.empty, bank, "", Array.emptyWithCapacity 0⟩
 
-/-- Is this one of the programs that are part of the runtime? They are given a
-smaller default compute budget than programs that run as bytecode. -/
+/-- Is this one of the programs that are part of the runtime and given a smaller default compute
+budget than programs that run as bytecode? (The vote program was one until it began checking BLS proofs.) -/
 def isBuiltin (key : ByteArray) : Bool :=
-  key == Sbpf.systemProgram || key == Sbpf.computeBudgetProgram || key == voteProgram || key == Sbpf.loaderId
+  key == Sbpf.systemProgram || key == Sbpf.computeBudgetProgram || key == Sbpf.loaderId
   || key == loaderV1 || key == loaderV2 || key == loaderV4 || key == secp256k1Program || key == ed25519Program
 
 /-- Applies a transaction to the bank. With `verify`, the signatures are checked first. -/

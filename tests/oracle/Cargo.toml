@@ -21,3 +21,4 @@ solana-transaction = "3.0.1"
 [features]
 bls = []
 zk = []
+vote = []

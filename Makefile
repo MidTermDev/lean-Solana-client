@@ -102,6 +102,8 @@ oracle:
 	build/oracle-next/release/oracle-next anchor $(P)/anchor_vault.so $(P)/anchor_vault_v3.so | diff - tests/expected/anchor.txt
 	build/oracle-next/release/oracle-next versions $(P)/sysvar_probe.so $(P)/sysvar_probe_v1.so $(P)/sysvar_probe_v2.so $(P)/sysvar_probe_v3.so | diff - tests/expected/versions.txt
 	build/oracle-next/release/oracle-next bls | diff - tests/expected/bls.txt
+	build/oracle-next/release/oracle-next memory $(P)/memory_probe.so | diff - tests/expected/memory.txt
+	build/oracle-next/release/oracle-next vote | diff - tests/expected/vote.txt
 	build/oracle-next/release/oracle-next zkproof tests/zkproofs.bin | diff - tests/expected/zkproof.txt
 	@echo "Agave's runtime and the Lean virtual machine agree on every scenario"
 

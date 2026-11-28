@@ -447,7 +447,7 @@ slot 474768099: 109 blocks executed, every bank hash matching · 125 ms a block 
 - **Keeping the state.** Changes stay in memory; every few minutes the changed accounts are appended to a log and a small file beside it records the slot, the bank hash, the lattice hash, the supply and where the log ends. That file is the state: a later run opens the log up to that point and goes on from there, and a process killed at any moment loses only what it had not saved. Executed blocks are deleted once the state past them is saved.
 - **Stopping.** At the first bank hash that differs, it stops: the state on disk is the last one saved, the blocks since are still there, and `--resume --lines` replays them from that state with a line per transaction, to be compared with a public RPC's record of the block. Everything below was found that way.
 
-**What mainnet used that 600 blocks had not.** Run from a snapshot, it stopped a dozen times in its first 47,000 blocks, each time at something real (and once before that, at the fourth block: the snapshot lists its recent blockhashes in no order): a transaction closing a program names the program's code account itself; the **Ristretto** forms of the curve system calls (RFC 9496, in [`lib/Crypto/Ed25519.lean`](lib/Crypto/Ed25519.lean)); the **vote program**, which validators still use to withdraw from their vote accounts, to change their commission and to say who collects it; the limit of 64 instructions a transaction, nested calls included; the system program's newest instruction, for creating an account that already holds lamports, and the loader's oldest way of making a program larger; a transfer of zero lamports from an account the system program does not own, which programs use to have balances they changed written back; a program wrongly taken for closed, which only a process that had run for an hour could show; the system call that tells a program how much stake is active, used by one transaction in thousands of blocks; addition in the second group of the alt_bn128 curve, least significant byte first, for a zero-knowledge program; the rule that an account changes owner only when its data is all zeros; a withdrawal that closed a vote account still laid out the way accounts were before Alpenglow, untouched for months; and the first confidential token transfers, which brought a whole native program with them ([the ZK ElGamal proof program](#the-programs-every-chain-starts-with)). Between the eighth stop and the ninth lay 23,700 blocks; before the last three, 120,000, 33,000 and 1,400.
+**What mainnet used that 600 blocks had not.** Run from a snapshot, it stopped a dozen times in its first 47,000 blocks, each time at something real (and once before that, at the fourth block: the snapshot lists its recent blockhashes in no order): a transaction closing a program names the program's code account itself; the **Ristretto** forms of the curve system calls (RFC 9496, in [`lib/Crypto/Ed25519.lean`](lib/Crypto/Ed25519.lean)); the **vote program**, which validators still use to withdraw from their vote accounts, to change their commission and to say who collects it; the limit of 64 instructions a transaction, nested calls included; the system program's newest instruction, for creating an account that already holds lamports, and the loader's oldest way of making a program larger; a transfer of zero lamports from an account the system program does not own, which programs use to have balances they changed written back; a program wrongly taken for closed, which only a process that had run for an hour could show; the system call that tells a program how much stake is active, used by one transaction in thousands of blocks; addition in the second group of the alt_bn128 curve, least significant byte first, for a zero-knowledge program; the rule that an account changes owner only when its data is all zeros; a withdrawal that closed a vote account still laid out the way accounts were before Alpenglow, untouched for months; the first confidential token transfers, which brought a whole native program with them ([the ZK ElGamal proof program](#the-programs-every-chain-starts-with)); and a program that read past the end of an account's data, which [is an error now](#where-a-programs-memory-ends). Between the eighth stop and the ninth lay 23,700 blocks; before the last four, 120,000, 33,000, 1,400 and 27,000.
 
 **The turn of an epoch.** Every 432,000 slots, a day, the chain settles an epoch in the first block of the next ([`lib/Solana/Epoch.lean`](lib/Solana/Epoch.lean), [`tests/epoch.lean`](tests/epoch.lean)), and all of it goes into that block's hash:
 
@@ -469,7 +469,7 @@ Under Alpenglow a block is final when validators holding four fifths of the stak
 
 A check takes about 19 ms. The report of [`tests/bls.lean`](tests/bls.lean) (points, hashes, signatures alone and added up, the thresholds) is reproduced line for line by blstrs, the library the validators use (`make oracle`); the 600 blocks of the test set carry 599 real certificates, all of which hold, and with one bit of one bitmap flipped the replay stops at that block.
 
-**What is still missing.** Feature activations (they happen only at a turn; none was pending); most of the vote program (authority changes, new accounts with their proofs of possession); and the log of changes only grows (8.5 GB over the first 170,000 slots), so a store wants reloading from a snapshot now and then.
+**What is still missing.** Feature activations (they happen only at a turn; none was pending); which features are on is taken to be what mainnet has today (the vote program and the memory model depend on several); and the log of changes only grows (8.5 GB over the first 170,000 slots), so a store wants reloading from a snapshot now and then.
 
 ## Run on-chain programs
 
@@ -712,6 +712,12 @@ That makes the test simple. [`tests/jit.lean`](tests/jit.lean) runs 1,500 random
 
 Translating costs about as much as interpreting sixteen instructions for each instruction translated, and most programs on a chain run a handful of times an hour. So a program met while following the chain is translated only once it has run often enough to pay for it: twice, and once more for every 4,096 instructions it has.
 
+### Where a program's memory ends
+
+A program sees each account's data followed by 10,240 bytes of room to grow into. Validators used to hand that room over as zeros. Since mainnet's epoch 1097 an account's data is mapped into the program's memory as it is: the room is not there until the program writes to it, an account the program may not change cannot be written at all (not even with what it already holds), and both are errors the moment they happen, costing the program everything it had left to spend. The machine keeps, for each account in the input, where its data starts, how much of it is there and whether it may be changed ([`Input`](lib/Solana/SbpfBase.lean)), and every access goes through that; the translated code is given one stretch of the input at a time and asks the interpreter for anything else, so the 600 blocks take 6% longer.
+
+[`tests/memory.lean`](tests/memory.lean) runs a small program written for the purpose ([`memory-probe`](tests/programs/memory-probe/src/lib.rs): no SDK, forty lines) that reads the last byte of an account, the byte after it, the room, writes into it, grows, and does the same through the system calls that copy and fill, on an account of its own, the same passed read-only, and another program's: 48 transactions, and `make oracle` requires every line to match Agave with accounts mapped that way. One transaction in 240,000 blocks depended on it.
+
 ### The programs every chain starts with
 
 A few programs are not deployed by anyone: they are part of the runtime. Some are native code in the validator, and are written here in Lean ([`lib/Solana/Native.lean`](lib/Solana/Native.lean)). Others used to be and are bytecode today; those run here from the files in [`programs/`](programs/), the same files a validator runs.
@@ -722,7 +728,7 @@ A few programs are not deployed by anyone: they are part of the runtime. Some ar
 | Loader (upgradeable) | Lean | uploads code into buffers; deploys, upgrades, extends and closes programs; hands them to another authority or makes them immutable |
 | Compute budget | Lean | unit limit, unit price, heap size |
 | Ed25519 | Lean | checks signatures listed in its instruction |
-| Vote | Lean, in part | what validators still send it: withdrawals, the commission and who collects it |
+| Vote | Lean | vote accounts: setting one up, new voters (with a BLS key and a proof of holding it) and withdrawers, the node, commissions and who collects them, withdrawals |
 | ZK ElGamal proof | Lean | checks proofs about encrypted token balances, twelve kinds of them |
 | Stake | bytecode, `programs/` | stake accounts: create, authorize, split, withdraw, delegate |
 | Address lookup table | bytecode, `programs/` | the tables version 0 transactions take accounts from |
@@ -751,13 +757,15 @@ alice extends it: success, fee 10000, 2520 units
 
 That test is 49 transactions across the system program, config, lookup tables (including a version 0 transaction that pays an address through a table, refused in the slot the address was added and accepted in the next), stake and the loader, and `make oracle` requires every line of it to match Agave. `leansol tx --programs programs/` makes the bytecode ones available from the command line.
 
+**Vote accounts.** [`tests/vote.lean`](tests/vote.lean) sets a vote account up, hands it to a new withdrawer and to new voters (the epoch after the next leader schedule's, once per epoch), gives a voter a BLS key with the proof that its holder has the secret (a signature of the account's address and the key, checked with the same pairing that checks certificates, for 34,500 units), names an authority that is an address derived from a seed, changes the node and the commissions, and withdraws. Accounts untouched since before Alpenglow are still laid out as they were then, in two older ways; they are read as they are and rewritten in the present layout the first time something changes them, what lay beyond the shorter new form staying where it was. 68 transactions, and `make oracle` requires every line to match Agave run with mainnet's features.
+
 **Proofs about encrypted balances.** Token accounts can keep their balances encrypted (confidential transfers), and whoever changes one must show, without revealing an amount, that the change is sound. The ZK ElGamal proof program checks those proofs, and is written here in 360 lines ([`lib/Solana/ZkProof.lean`](lib/Solana/ZkProof.lean)) on the Ristretto group already here: a key is one whose secret is known; a ciphertext holds zero; two ciphertexts, or a ciphertext and a commitment, hold the same amount; a fee is the stated percentage or the cap; a ciphertext readable by two or three keys is well formed; and up to eight committed amounts each fit in their bits (a Bulletproof over 64, 128 or 256 bits: one sum of several hundred points, 25 ms for 64 bits). The challenges come from Merlin transcripts ([`lib/Crypto/Merlin.lean`](lib/Crypto/Merlin.lean), 70 lines over Keccak's permutation). What a proof was about can be stored in an account for a later instruction to rely on, and the account closed again.
 
 [`tests/zkproof.lean`](tests/zkproof.lean) checks proofs of all twelve kinds, made by the library the validators use, as made and with a bit changed, then stores, reads and closes contexts: 65 transactions, and `make oracle` requires every line to match Agave's own proof program. The first proofs it checked were mainnet's: a confidential withdrawal is what stopped the executor.
 
 **Limits.**
 
-- **The vote program is here in part:** withdrawals, the commission and who collects it. Creating a vote account and changing its authorities are not, so delegating a stake is not exercised.
+- **The vote program keeps accounts, and no longer counts votes:** under Alpenglow votes are not transactions, and the instructions that carried them are refused, as on mainnet. So are the two things mainnet has not switched on: the second way of setting an account up, and a commission on block fees.
 - **Not here:** the older ZK Token proof program and loader v4 (both switched off on mainnet), and three system calls (`sol_big_mod_exp`, `sol_curve_pairing_map`, `sol_get_fees_sysvar`).
 - **Sysvars describe a chain at rest** unless you set them: one slot hash, no stake history.
 - **No re-entrancy check:** a program calling back into one that is already running is not refused, as Agave mostly would.
@@ -957,7 +965,7 @@ A home-made compiler for a subset is only interesting if it agrees with the real
 
 ```sh
 make lean-check    # = lake build && tests/run.sh --oracle     (needs the official toolchain)
-make oracle        # Agave's runtime and its BLS and ZK libraries must print what seven of the tests print  (needs Rust)
+make oracle        # Agave's runtime and its BLS and ZK libraries must print what nine of the tests print  (needs Rust)
 ```
 
 - **`lake build`** makes the official Lean 4 toolchain type-check every Lean file here: runtime, libraries, client. The whole client is accepted by both compilers from the same source.
@@ -970,12 +978,14 @@ Build completed successfully (142 jobs).
 ok    anchor (official Lean agrees)
 ok    basics (official Lean agrees)
 ok    blake3 (official Lean agrees)
-ok    bls (official Lean agrees)
 ok    block (official Lean agrees)
+ok    bls (official Lean agrees)
 ok    builtins (official Lean agrees)
 ok    cpi (official Lean agrees)
 ok    curves (official Lean agrees)
+ok    double (official Lean agrees)
 ok    ed25519 (official Lean agrees)
+ok    epoch (official Lean agrees)
 ok    erasure (official Lean agrees)
 ok    fast (official Lean agrees)
 ok    footer (official Lean agrees)
@@ -983,6 +993,7 @@ ok    fuzz_wire (official Lean agrees)
 ok    inplace (native only)
 ok    ipc (native only)
 ok    jit (official Lean agrees)
+ok    memory (official Lean agrees)
 ok    panic (aborted with a bounds panic, as it must)
 ok    sbpf (official Lean agrees)
 ok    schedule (official Lean agrees)
@@ -996,9 +1007,10 @@ ok    text (official Lean agrees)
 ok    transaction (official Lean agrees)
 ok    txformat (official Lean agrees)
 ok    versions (official Lean agrees)
+ok    vote (official Lean agrees)
 ok    zkproof (official Lean agrees)
 ok    zstd (official Lean agrees)
-33 passed, 0 failed
+35 passed, 0 failed
 ```
 
 The tests not marked "official Lean agrees" either use raw syscalls (`fork`, futexes), which exist only as machine code, or check behaviour specific to `leanc` (aborting on a bounds error, in-place updates).
@@ -1011,7 +1023,7 @@ Measured on one machine (Xeon Gold 5515+), single core unless noted. They are he
 |---|---|
 | `leanc` source | about 6,400 lines of C |
 | `leanc` binary | 166 KB, static, zero undefined symbols |
-| Lean in this repo | 20,700 lines: runtime 814, libraries 14,810, client 5,090 |
+| Lean in this repo | 21,050 lines: runtime 814, libraries 15,150, client 5,090 |
 | Compiling the whole client | **about 0.1 s** |
 | `leansol` binary | **1.2 MB**, static |
 | Full build from a fresh clone | about 0.1 s |
@@ -1074,7 +1086,7 @@ tests/            programs + outputs produced by official Lean
   zstd/             files compressed by the reference zstd
   zkproofs.bin      proofs about encrypted balances, made by the validators' library
   programs/         on-chain programs as VM test inputs: lean-svm's, the SPL token programs,
-                    and an Anchor program and a sysvar probe with their sources
+                    and an Anchor program, a sysvar probe and a memory probe with their sources
   oracle/           runs the test scenarios on Agave's runtime (3.1), for comparison
   oracle-next/      the same source built against Agave 4.3, which runs sBPF v3, with the validators' BLS and ZK libraries
 programs/         the built-in programs that are bytecode today: stake, config, address lookup table
@@ -1087,7 +1099,7 @@ lakefile.toml     lets the official toolchain check all of the above
 Being straightforward about what this is:
 
 - **Not a voting validator.** It verifies gossip; it receives and verifies every block; it holds mainnet's state as of a snapshot, verified account by account; and from there it [executes the chain](#execute-the-chain), block by block, to the bank hashes mainnet's leaders signed, through the turn of an epoch. It does not vote and does not produce blocks: it now checks the validators' BLS signatures, but voting needs it to make them: the consensus messages, the ability to execute a block before it is final (and to undo it), and a vote account with stake behind it.
-- **It stops when it does not know.** Mainnet uses things no test set holds: a dozen of them stopped the executor in its first 47,000 blocks, three more in the next 165,000, and there will be more (most of the vote program is not written, nor are feature activations). It stops at the first bank hash that differs, with the state as last saved, rather than carry on wrong.
+- **It stops when it does not know.** Mainnet uses things no test set holds: a dozen of them stopped the executor in its first 47,000 blocks, four more in the next 190,000, and there will be more (feature activations are not followed). It stops at the first bank hash that differs, with the state as last saved, rather than carry on wrong.
 - **The executor is not part of the node yet.** The node saves verified blocks (`--spool`) and the executor is a second process reading them. It does not notice a transaction that was already processed, and its log of changes only grows.
 - **Translated programs are kept.** A program's machine code stays in memory for as long as the process runs: about 35 bytes for each sBPF instruction, more than half a gigabyte over 600 blocks. Nothing is evicted yet.
 - **Listen-only.** It answers pings but does not serve pull requests or push records to others.
@@ -1096,7 +1108,7 @@ Being straightforward about what this is:
 - **The compiler is not self-hosted.** Its source is C. Nothing in the build uses a C toolchain, because a prebuilt compiler is checked in, but changing the compiler does.
 - **A subset of Lean.** No type classes or higher-order functions is a real restriction; the libraries here are written around it.
 - **`Nat` is 64 bits** (overflow traps rather than wraps; see above).
-- **Young code.** The compiler has been exercised by about 20,700 lines of Lean and the test suite, not by years of users. The Ed25519 implementation is variable-time, which is fine for verifying public data and not what you want around long-lived secret keys.
+- **Young code.** The compiler has been exercised by about 21,050 lines of Lean and the test suite, not by years of users. The Ed25519 implementation is variable-time, which is fine for verifying public data and not what you want around long-lived secret keys.
 - **The network moves.** Wire formats follow agave's current gossip code; when the protocol changes, this needs to follow.
 
 ## How this relates to lean-svm

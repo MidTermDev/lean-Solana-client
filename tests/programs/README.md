@@ -60,6 +60,17 @@ accounts), reads the transaction it is part of, and logs what it finds.
 Two runtimes that produce the same logs agree on the sysvars. Built like
 the Anchor program, with `solana-program` 2.3.
 
+## A memory probe, with its source
+
+`memory_probe.so`, built from [`memory-probe/`](memory-probe/src/lib.rs)
+
+A Rust program written for this repository (MIT), with no SDK and no
+dependencies, that reads and writes around the end of an account's data: the
+last byte, the byte after it, the room an account may grow into, by plain
+instructions and by the system calls that copy and fill. Where a runtime puts
+the end of a program's memory shows in which of those succeed. Built with the
+same tool (`cargo-build-sbf`, platform-tools v1.52).
+
 ## The same programs for other versions of sBPF
 
 `sysvar_probe_v1.so`, `sysvar_probe_v2.so`, `sysvar_probe_v3.so`, `anchor_vault_v3.so`

@@ -242,19 +242,21 @@ structure VoteState where
 
 def notVoteState : VoteState := ⟨false, ByteArray.empty, ByteArray.empty, false, 0, ByteArray.empty, Array.emptyWithCapacity 0, 0, 0, 0⟩
 
-/-- A vote account's state in the present layout (3) or the two before it (1 and 2), which accounts
-untouched since keep: those have a shorter head, a list of earlier voters (1,545 bytes) before the
-credits, and in layout 1 votes of 12 bytes. Only the present layout can be written back. -/
-def VoteState.read (d : ByteArray) : VoteState := Id.run do
-  let layout := Wire.u32 d 0
-  if d.size < 200 || layout == 0 || layout > 3 then
+/-- A vote account's state, read from the present layout (3) or one of the two before it (1 and 2),
+which accounts untouched since still have: a shorter head, a list of earlier voters (1,545 bytes) before
+the credits, and in layout 1 votes of 12 bytes. Those are read as the validators convert them: the
+account itself (`key`) collects the rewards' commission, the node all of the block fees, and there is no
+BLS key. -/
+def VoteState.read (d key : ByteArray) : VoteState := Id.run do
+  let layout := if d.size < 200 then 0 else Wire.u32 d 0
+  if layout == 0 || layout > 3 then
     return notVoteState
   let mut o := if layout < 3 then 69 else if d[144]! == 1 then 193 else 145
   let votesAt := o
-  let votes := Wire.u64 d o
-  if votes > 64 then
+  let count := Wire.u64 d o
+  if count > 64 then
     return notVoteState
-  o := o + 8 + (if layout == 1 then 12 else 13) * votes.toNat
+  o := o + 8 + (if layout == 1 then 12 else 13) * count.toNat
   if o + 9 > d.size then
     return notVoteState
   let hasRoot := d[o]! == 1
@@ -276,15 +278,25 @@ def VoteState.read (d : ByteArray) : VoteState := Id.run do
   for i in [0:3 * creditsCount.toNat] do
     credits := credits.push (Wire.u64 d (o + 8 + 8 * i))
   let after := o + 8 + 24 * creditsCount.toNat
-  return ⟨true, d.extract 0 votesAt, d.extract votesAt votesEnd, hasRoot, root, d.extract votersAt votersEnd, credits,
-    Wire.u64 d after, Wire.u64 d (after + 8), d.size⟩
+  let mut head := d.extract 0 votesAt
+  let mut votes := d.extract votesAt votesEnd
+  if layout < 3 then
+    let node := d.extract 4 36
+    head := Wire.putU32 (ByteArray.emptyWithCapacity 145) 3 ++ node ++ d.extract 36 68 ++ key ++ node
+    head := (Wire.putU64 (Wire.putU16 (Wire.putU16 head (d[68]!.toUInt64 * 100)) 10000) 0).push 0
+  if layout == 1 then
+    -- (a vote gains a first byte: how late it landed, unknown)
+    votes := d.extract votesAt (votesAt + 8)
+    for k in [0:count.toNat] do
+      votes := votes.push 0 ++ d.extract (votesAt + 8 + 12 * k) (votesAt + 20 + 12 * k)
+  return ⟨true, head, votes, hasRoot, root, d.extract votersAt votersEnd, credits, Wire.u64 d after, Wire.u64 d (after + 8), d.size⟩
 
 /-- The state of a vote account in the present layout. -/
-def VoteState.parse (d : ByteArray) : VoteState := if Wire.u32 d 0 == 3 then VoteState.read d else notVoteState
+def VoteState.parse (d : ByteArray) : VoteState := if d.size >= 200 && Wire.u32 d 0 == 3 then VoteState.read d ByteArray.empty else notVoteState
 
-/-- The state as account data again, padded to the account's size. Empty if it no longer fits. -/
-def VoteState.bytes (s : VoteState) : ByteArray := Id.run do
-  let mut b := ByteArray.emptyWithCapacity s.size
+/-- The state as it is written into an account, in the present layout. -/
+def VoteState.serial (s : VoteState) : ByteArray := Id.run do
+  let mut b := ByteArray.emptyWithCapacity 3762
   b := b ++ s.head ++ s.votes
   if s.hasRoot then
     b := Wire.putU64 (b.push 1) s.root
@@ -294,10 +306,61 @@ def VoteState.bytes (s : VoteState) : ByteArray := Id.run do
   b := Wire.putU64 b (s.credits.size / 3).toUInt64
   for c in s.credits do
     b := Wire.putU64 b c
-  b := Wire.putU64 (Wire.putU64 b s.timestampSlot) s.timestamp
-  if b.size > s.size then
-    return ByteArray.empty
-  return Fast.pushZeros b (s.size - b.size)
+  return Wire.putU64 (Wire.putU64 b s.timestampSlot) s.timestamp
+
+/-- The state as account data again, padded to the account's size. Empty if it no longer fits. -/
+def VoteState.bytes (s : VoteState) : ByteArray :=
+  let b := s.serial
+  if b.size > s.size then ByteArray.empty else Fast.pushZeros b (s.size - b.size)
+
+/-- The state of a vote account just set up: no votes, no credits, one voter from `epoch` on; the account
+collects the rewards' commission (`commission` percent) and the node all of the block fees. -/
+def VoteState.fresh (key node voter withdrawer : ByteArray) (commission : UInt8) (epoch : UInt64) : VoteState :=
+  let head := Wire.putU32 (ByteArray.emptyWithCapacity 145) 3 ++ node ++ withdrawer ++ key ++ node
+  ⟨true, (Wire.putU64 (Wire.putU16 (Wire.putU16 head (commission.toUInt64 * 100)) 10000) 0).push 0,
+    Wire.putU64 ByteArray.empty 0, false, 0, Wire.putU64 (Wire.putU64 ByteArray.empty 1) epoch ++ voter, Array.emptyWithCapacity 0, 0, 0, 3762⟩
+
+/-- Who may vote for an account is a list of (epoch, key), in order: a key holds from its epoch until
+the next entry's. This is the entry for `epoch`: its own, or the latest before it; empty if there is none. -/
+def voterAt (voters : ByteArray) (epoch : UInt64) : ByteArray := Id.run do
+  let mut found := ByteArray.empty
+  for k in [0:(Wire.u64 voters 0).toNat] do
+    if Wire.u64 voters (8 + 40 * k) <= epoch then
+      found := voters.extract (8 + 40 * k) (48 + 40 * k)
+  return found
+
+/-- The list with the entries before epoch `low` dropped and, if `key` is one, `key` entered at `epoch`. -/
+def votersWith (voters : ByteArray) (low epoch : UInt64) (key : ByteArray) : ByteArray := Id.run do
+  let mut out := ByteArray.emptyWithCapacity (voters.size + 40)
+  let mut count : UInt64 := 0
+  let mut entered := key.size != 32
+  for k in [0:(Wire.u64 voters 0).toNat] do
+    let e := Wire.u64 voters (8 + 40 * k)
+    if !entered && e >= epoch then
+      out := Wire.putU64 out epoch ++ key
+      count := count + 1
+      entered := true
+    if e >= low && !(e == epoch && key.size == 32) then
+      out := out ++ voters.extract (8 + 40 * k) (48 + 40 * k)
+      count := count + 1
+  if !entered then
+    out := Wire.putU64 out epoch ++ key
+    count := count + 1
+  return Wire.putU64 (ByteArray.emptyWithCapacity (out.size + 8)) count ++ out
+
+def proofDomain : ByteArray := "BLS_POP_BLS12381G2_XMD:SHA-256_SSWU_RO_POP_".toUTF8
+
+/-- Does `proof` show that whoever sets the BLS key `key` on the vote account `account` holds its
+secret? It is their signature of "ALPENGLOW", the account's address and the key. The key must be a
+point of the group, and not nothing. -/
+def possessed (account key proof : ByteArray) : Bool :=
+  match Bls12381.Point.ofBytes key with
+  | none => false
+  | some k =>
+    match Bls12381.Point.ofBytes proof with
+    | none => false
+    | some p => key.size == 48 && proof.size == 96 && !k.isInfinity && (k.scale Bls12381.order).isInfinity
+        && Bls12381.verify k ("ALPENGLOW".toUTF8 ++ account ++ key) proofDomain p
 
 /-- The slot of the newest vote, or 0. -/
 def VoteState.lastVoted (s : VoteState) : UInt64 :=

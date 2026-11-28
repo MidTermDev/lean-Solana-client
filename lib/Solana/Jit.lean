@@ -643,4 +643,17 @@ def prepare (cpu0 : Array UInt64) (budget : UInt64) (heap inputLen : Nat) (roReg
       cpu := cpu.set! (cWrite + 5 * width + r) (if writable then reach else 0)
   return cpu
 
+/-- Says which stretch of the input (region 4) the translated code may use without asking: `size`
+bytes from offset `low`, to read, or to read and write. Anything else there goes to the interpreter,
+which knows where each account's data ends, and then moves the stretch. -/
+def window (cpu0 : Array UInt64) (heap : Nat) (stretch : Nat × Nat × Bool) : Array UInt64 := Id.run do
+  let (low, size, writable) := stretch
+  let mut cpu := (cpu0.set! (cLow + 4) low.toUInt64).set! (cOffset + 4) (Sbpf.stackBytes + heap + low).toUInt64
+  for width in [0:4] do
+    let bytes := if width == 0 then 1 else if width == 1 then 2 else if width == 2 then 4 else 8
+    let reach := if size >= bytes then (size - bytes + 1).toUInt64 else 0
+    cpu := cpu.set! (cRead + 5 * width + 4) reach
+    cpu := cpu.set! (cWrite + 5 * width + 4) (if writable then reach else 0)
+  return cpu
+
 end Jit

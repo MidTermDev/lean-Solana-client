@@ -487,13 +487,107 @@ def load (image : ByteArray) : Program := (parse image).translated
 
 def progBase : Nat := 0x10000000000
 
-def locate (p : Program) (inputLen : Nat) (addr : UInt64) (len : Nat) (write : Bool) : Nat :=
+/-- The input region: how long it is, and where in it each account's data lies. After an account's data
+comes room for it to grow (10,240 bytes), which is not there until used: reading it is an error, and
+writing it, for an account the program may change, brings all of it into being. An account the program
+may not change cannot be written at all. And an access must lie in one stretch: one account's data, or
+the bytes between two. (How validators map accounts into a program's memory since epoch 1097.) -/
+structure Input where
+  len : Nat
+  /-- four words an account, in address order: where its data starts, how much of it is there, how much
+  room it has, and why the program may not change it (0: it may, 1: not passed as writable, 2: another's) -/
+  zones : Array UInt64
+  deriving Inhabited
+
+namespace Input
+
+/-- The last account whose data starts at or before `off`; the number of accounts if there is none. -/
+def before (i : Input) (off : Nat) : Nat := Id.run do
+  let count := i.zones.size / 4
+  let mut low := 0
+  let mut high := count
+  while low < high do
+    let mid := (low + high) / 2
+    if i.zones[4 * mid]!.toNat <= off then
+      low := mid + 1
+    else
+      high := mid
+  return if low == 0 then count else low - 1
+
+/-- May `len` bytes at offset `off` be read (or written)? -/
+def allows (i : Input) (off len : Nat) (write : Bool) : Bool :=
+  let count := i.zones.size / 4
+  if off + len > i.len then false
+  else if count == 0 then true
+  else
+    let k := i.before off
+    if k == count then off + len <= i.zones[0]!.toNat
+    else
+      let start := i.zones[4 * k]!.toNat
+      if off < start + i.zones[4 * k + 2]!.toNat then
+        off + len <= start + i.zones[4 * k + 1]!.toNat && !(write && i.zones[4 * k + 3]! != 0)
+      else off + len <= (if k + 1 < count then i.zones[4 * k + 4]!.toNat else i.len)
+
+/-- Before a write of `len` bytes at `off`: an account the program may change gets all its room, if the write reaches into it. -/
+def grown (i : Input) (off len : Nat) : Input := Id.run do
+  let mut zones := i.zones
+  for k in [0:zones.size / 4] do
+    let start := zones[4 * k]!.toNat
+    if zones[4 * k + 3]! == 0 && off < start + zones[4 * k + 2]!.toNat && off + len > start + zones[4 * k + 1]!.toNat then
+      zones := zones.set! (4 * k + 1) (if zones[4 * k + 2]! < 10485760 then zones[4 * k + 2]! else 10485760)
+  return ⟨i.len, zones⟩
+
+/-- After a call to another program: the account whose data starts at `start` has `size` bytes of it,
+and may or may not be changed (`may` as in `zones`: the call can have given it another owner). -/
+def resized (i : Input) (start size : Nat) (may : UInt64) : Input :=
+  let k := i.before start
+  if k < i.zones.size / 4 && i.zones[4 * k]!.toNat == start then ⟨i.len, (i.zones.set! (4 * k + 1) size.toUInt64).set! (4 * k + 3) may⟩ else i
+
+/-- How much of the data starting at `start` is there (0 if no account's data starts there). -/
+def present (i : Input) (start : Nat) : Nat :=
+  let k := i.before start
+  if k < i.zones.size / 4 && i.zones[4 * k]!.toNat == start then i.zones[4 * k + 1]!.toNat else 0
+
+/-- The stretch that holds offset `off`: where it starts, how long it is, and whether it may be written. -/
+def stretch (i : Input) (off : Nat) : Nat × Nat × Bool :=
+  let count := i.zones.size / 4
+  if count == 0 then (0, i.len, true)
+  else
+    let k := i.before off
+    if k == count then (0, i.zones[0]!.toNat, true)
+    else
+      let start := i.zones[4 * k]!.toNat
+      let room := start + i.zones[4 * k + 2]!.toNat
+      if off < room then (start, i.zones[4 * k + 1]!.toNat, i.zones[4 * k + 3]! == 0)
+      else (room, (if k + 1 < count then i.zones[4 * k + 4]!.toNat else i.len) - room, true)
+
+/-- Why an access inside an account's space was refused: 1 or 2 as in `zones` (a write to what may not
+be changed), 5 for a read past the data of such an account (the program expected more data than there
+is), 20 for reaching past the data of one it may change; 0 if the access is not in an account's space. -/
+def why (i : Input) (off len : Nat) (write : Bool) : UInt64 :=
+  let count := i.zones.size / 4
+  let k := i.before off
+  if k == count then 0
+  else
+    let start := i.zones[4 * k]!.toNat
+    let may := i.zones[4 * k + 3]!
+    if off >= start + i.zones[4 * k + 2]!.toNat || off + len > start + i.zones[4 * k + 2]!.toNat then 0
+    else if write && may != 0 then may
+    else if may != 0 then 5
+    else 20
+
+/-- The input without its accounts marked: for the runtime's own reads and writes of account data. -/
+def plain (i : Input) : Input := ⟨i.len, Array.emptyWithCapacity 0⟩
+
+end Input
+
+def locate (p : Program) (input : Input) (addr : UInt64) (len : Nat) (write : Bool) : Nat :=
   let region := addr >>> 32
   let off := (addr &&& 0xFFFFFFFF).toNat
   if len > 0x10000000 then Wire.bad
   else if region == 2 then (if off + len <= stackBytes then off else Wire.bad)
   else if region == 3 then (if off + len <= p.heap then stackBytes + off else Wire.bad)
-  else if region == 4 then (if off + len <= inputLen then stackBytes + p.heap + off else Wire.bad)
+  else if region == 4 then (if input.allows off len write then stackBytes + p.heap + off else Wire.bad)
   else if region == p.roRegion && !write then
     (if off >= p.roLow && off + len <= p.roHigh then progBase + (off - p.roLow + p.roFile) else Wire.bad)
   else Wire.bad
@@ -507,29 +601,36 @@ def loadAt (p : Program) (mem : ByteArray) (idx size : Nat) : UInt64 :=
   else if size == 4 then Wire.u32 mem idx else Wire.u64 mem idx
 
 /-- The bytes at `[addr, addr + len)`, wherever they live; `none` if any are unmapped. -/
-def readBytes (p : Program) (mem : ByteArray) (inputLen : Nat) (addr len : UInt64) : Option ByteArray :=
+def readBytes (p : Program) (mem : ByteArray) (input : Input) (addr len : UInt64) : Option ByteArray :=
   if len > 0x10000000 then none
   else if len == 0 then some ByteArray.empty   -- nothing is read, so any address will do (Rust's empty slices point nowhere)
   else
-    let idx := locate p inputLen addr len.toNat false
+    let idx := locate p input addr len.toNat false
     if !(Wire.ok idx) then none
     else if idx >= progBase then some (p.elf.extract (idx - progBase) (idx - progBase + len.toNat))
     else some (mem.extract idx (idx + len.toNat))
 
 /-- Whether the bytes at `addr` can be read and are exactly `expected`, without copying them out. -/
-def holds (p : Program) (mem : ByteArray) (inputLen : Nat) (addr : UInt64) (expected : ByteArray) : Bool :=
+def holds (p : Program) (mem : ByteArray) (input : Input) (addr : UInt64) (expected : ByteArray) : Bool :=
   if expected.size == 0 then true
   else
-    let idx := locate p inputLen addr expected.size false
+    let idx := locate p input addr expected.size false
     if !(Wire.ok idx) then false
     else if idx >= progBase then Fast.sameAt p.elf (idx - progBase) expected 0 expected.size
     else Fast.sameAt mem idx expected 0 expected.size
 
 /-- Where `len` writable bytes at `addr` live, or `Wire.bad`. Lengths beyond any region are refused first. -/
-def writable (p : Program) (inputLen : Nat) (addr len : UInt64) : Nat :=
+def writable (p : Program) (input : Input) (addr len : UInt64) : Nat :=
   if len > 0x10000000 then Wire.bad
   else if len == 0 then 0   -- nothing is written, so any address will do
-  else locate p inputLen addr len.toNat true
+  else locate p input addr len.toNat true
+
+/-- The input before a system call writes `len` bytes at `addr`: if the write reaches into the room
+after the data of an account the program may change, that room comes into being. (Done for the calls
+that copy and fill memory; any other call writing there is refused, which validators would not do.) -/
+def grownFor (input : Input) (addr len : UInt64) : Input :=
+  if addr >>> 32 != 4 || len == 0 || len > 0x10000000 || input.allows (addr &&& 0xFFFFFFFF).toNat len.toNat true then input
+  else input.grown (addr &&& 0xFFFFFFFF).toNat len.toNat
 
 -- --------------------------------------------------------------- arithmetic
 
@@ -919,15 +1020,15 @@ def findProgramAddress (seeds : Array ByteArray) (programId : ByteArray) : ByteA
 -- ---------------------------------------------- reading a call's arguments
 
 /-- A slice of slices: `count` (address, length) pairs at `addr`. -/
-def readSlices (p : Program) (mem : ByteArray) (inputLen : Nat) (addr count : UInt64) : Option (Array ByteArray) := Id.run do
+def readSlices (p : Program) (mem : ByteArray) (input : Input) (addr count : UInt64) : Option (Array ByteArray) := Id.run do
   if count > 64 then
     return none
   let mut out : Array ByteArray := Array.emptyWithCapacity count.toNat
   for i in [0:count.toNat] do
-    match readBytes p mem inputLen (addr + 16 * i.toUInt64) 16 with
+    match readBytes p mem input (addr + 16 * i.toUInt64) 16 with
     | none => return none
     | some pair =>
-      match readBytes p mem inputLen (Wire.u64 pair 0) (Wire.u64 pair 8) with
+      match readBytes p mem input (Wire.u64 pair 0) (Wire.u64 pair 8) with
       | none => return none
       | some bytes => out := out.push bytes
   return some out
@@ -949,36 +1050,36 @@ describe the same thing with different layouts:
 * Rust (`Instruction`): a vector of 34-byte account entries (the key itself,
   then `is_signer`, `is_writable`), a vector of data bytes, then the program
   id inline. A vector is address, capacity, length. -/
-def readCall (p : Program) (mem : ByteArray) (inputLen : Nat) (addr : UInt64) (rust : Bool) : Option Call := Id.run do
+def readCall (p : Program) (mem : ByteArray) (input : Input) (addr : UInt64) (rust : Bool) : Option Call := Id.run do
   let mut keys : Array ByteArray := Array.emptyWithCapacity 8
   let mut flags : Array UInt64 := Array.emptyWithCapacity 8
   if rust then
-    match readBytes p mem inputLen addr 80 with
+    match readBytes p mem input addr 80 with
     | none => return none
     | some head =>
       let count := Wire.u64 head 16
       if count > 255 then
         return none
-      match readBytes p mem inputLen (Wire.u64 head 0) (34 * count), readBytes p mem inputLen (Wire.u64 head 24) (Wire.u64 head 40) with
+      match readBytes p mem input (Wire.u64 head 0) (34 * count), readBytes p mem input (Wire.u64 head 24) (Wire.u64 head 40) with
       | some entries, some data =>
         for i in [0:count.toNat] do
           keys := keys.push (entries.extract (34 * i) (34 * i + 32))
           flags := flags.push ((if Wire.u8 entries (34 * i + 32) != 0 then 2 else 0) ||| (if Wire.u8 entries (34 * i + 33) != 0 then 4 else 0))
         return some ⟨head.extract 48 80, keys, flags, data⟩
       | _, _ => return none
-  match readBytes p mem inputLen addr 40 with
+  match readBytes p mem input addr 40 with
   | none => return none
   | some head =>
     let count := Wire.u64 head 16
     if count > 255 then
       return none
-    match readBytes p mem inputLen (Wire.u64 head 0) 32, readBytes p mem inputLen (Wire.u64 head 24) (Wire.u64 head 32) with
+    match readBytes p mem input (Wire.u64 head 0) 32, readBytes p mem input (Wire.u64 head 24) (Wire.u64 head 32) with
     | some programId, some data =>
       for i in [0:count.toNat] do
-        match readBytes p mem inputLen (Wire.u64 head 8 + 16 * i.toUInt64) 16 with
+        match readBytes p mem input (Wire.u64 head 8 + 16 * i.toUInt64) 16 with
         | none => return none
         | some entry =>
-          match readBytes p mem inputLen (Wire.u64 entry 0) 32 with
+          match readBytes p mem input (Wire.u64 entry 0) 32 with
           | none => return none
           | some key =>
             keys := keys.push key
@@ -1007,27 +1108,27 @@ structure Info where
   the cell's borrow flag; what the cell holds starts 24 bytes in. So the
   balance is reached through two pointers, and the data's address and length
   sit in the caller's heap, where a resize has to be written back. -/
-def readInfos (p : Program) (mem : ByteArray) (inputLen : Nat) (addr count : UInt64) (rust : Bool) : Option (Array Info) := Id.run do
+def readInfos (p : Program) (mem : ByteArray) (input : Input) (addr count : UInt64) (rust : Bool) : Option (Array Info) := Id.run do
   if count > 255 then
     return none
   let mut out : Array Info := Array.emptyWithCapacity count.toNat
   for i in [0:count.toNat] do
     if rust then
-      match readBytes p mem inputLen (addr + 48 * i.toUInt64) 48 with
+      match readBytes p mem input (addr + 48 * i.toUInt64) 48 with
       | none => return none
       | some raw =>
         let cell := Wire.u64 raw 16 + 24
-        match readBytes p mem inputLen (Wire.u64 raw 0) 32, readBytes p mem inputLen (Wire.u64 raw 8 + 24) 8,
-            readBytes p mem inputLen cell 16 with
+        match readBytes p mem input (Wire.u64 raw 0) 32, readBytes p mem input (Wire.u64 raw 8 + 24) 8,
+            readBytes p mem input cell 16 with
         | some key, some balance, some slice =>
           out := out.push ⟨key, Wire.u64 balance 0, Wire.u64 slice 8, Wire.u64 slice 0, Wire.u64 raw 24, cell + 8⟩
         | _, _, _ => return none
     else
       let view := addr + 56 * i.toUInt64
-      match readBytes p mem inputLen view 56 with
+      match readBytes p mem input view 56 with
       | none => return none
       | some raw =>
-        match readBytes p mem inputLen (Wire.u64 raw 0) 32 with
+        match readBytes p mem input (Wire.u64 raw 0) 32 with
         | none => return none
         | some key => out := out.push ⟨key, Wire.u64 raw 8, Wire.u64 raw 16, Wire.u64 raw 24, Wire.u64 raw 32, view + 16⟩
   return some out
@@ -1045,6 +1146,22 @@ def findInfo (infos : Array Info) (key : ByteArray) : Nat := Id.run do
 
 /-- Bytes an account occupies in the input: header, data, room to grow, alignment, rent epoch. -/
 def accountSpan (dataLen : Nat) : Nat := (dataLen + 10343) / 8 * 8
+
+/-- Where each account's data lies in the input of `programId` (see `Input`), for either layout. -/
+def zonesOf (accounts : Array Account) (metas : Array Meta) (programId : ByteArray) (packed : Bool) : Array UInt64 := Id.run do
+  let mut zones : Array UInt64 := Array.emptyWithCapacity (4 * metas.size)
+  let mut o := 8
+  for i in [0:metas.size] do
+    if isRepeat metas i then
+      o := o + (if packed then 1 else 8)
+    else
+      let a := accounts[metas[i]!.index]!
+      let size := a.data.size
+      let start := o + (if packed then 51 else 88)
+      zones := (((zones.push start.toUInt64).push size.toUInt64).push (if packed then size else size + 10240).toUInt64).push
+        (if !metas[i]!.writable then 1 else if a.owner != programId then 2 else 0)
+      o := if packed then start + size + 41 else o + accountSpan size
+  return zones
 
 /-- The input as the first loader's programs expect it: the same fields in
 another order, back to back, with each account's data at its exact size. -/

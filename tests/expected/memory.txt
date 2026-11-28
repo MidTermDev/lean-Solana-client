@@ -1,0 +1,193 @@
+blockhash CmpNeggWJ4JaWJeJ8YKN1Zypmk7uvQq3PECGUCAEMbky
+its own account: reads the last byte: success, fee 5000, 14 units
+  signature 2Gz6cW2uoZA5SHTjZ3mMVyC5S1vcB8ScJ5kAc4vvWn3m2VBRT9Gxm4he5aMdwzRwi5nWZamG8adCGC1fjV1bJ8B4
+  payer 9999995000, alice 2000000000
+  the account: 1000000000 lamports, 16 bytes, owner GXCvyFxY1iqXsfXn4GT7Lhz9Q4NQhwWrzxd2Q76Gc1zU, data 7KsVk1LEzyqJXTgJCFtnH98drBojkujmVwMSw8WytCB7
+its own account: reads the byte after the last: InstructionError(0, InvalidRealloc), fee 5000, 200000 units
+  signature 2arwmzQrqoUZcze8E3rriwS3Lny9hdX1dUcmvFrkWZWiXgx4CwhZSfsb4GLEchBQpLS8o9Gx5QC4S51WXqxAKCk2
+  payer 9999990000, alice 2000000000
+  the account: 1000000000 lamports, 16 bytes, owner GXCvyFxY1iqXsfXn4GT7Lhz9Q4NQhwWrzxd2Q76Gc1zU, data 7KsVk1LEzyqJXTgJCFtnH98drBojkujmVwMSw8WytCB7
+its own account: reads eight bytes across the end: InstructionError(0, InvalidRealloc), fee 5000, 200000 units
+  signature 3ULwTwZunACfp1eY7B73Kpx2PrBEmmhYwzdR95tk1AUM8r6KvwTyUESPxdnTcZMDRyRbRFt2ignCmmMCmQK8y4iZ
+  payer 9999985000, alice 2000000000
+  the account: 1000000000 lamports, 16 bytes, owner GXCvyFxY1iqXsfXn4GT7Lhz9Q4NQhwWrzxd2Q76Gc1zU, data 7KsVk1LEzyqJXTgJCFtnH98drBojkujmVwMSw8WytCB7
+its own account: reads the last byte of the room: InstructionError(0, InvalidRealloc), fee 5000, 200000 units
+  signature HjA69xdTA7BPi4FCa7iRZYLEkWjai3ZMNSQ58cfsyBh8Mxof8bpBfpnPfCGfAC3hidda1T4g5iGVCxNQHH1KnBb
+  payer 9999980000, alice 2000000000
+  the account: 1000000000 lamports, 16 bytes, owner GXCvyFxY1iqXsfXn4GT7Lhz9Q4NQhwWrzxd2Q76Gc1zU, data 7KsVk1LEzyqJXTgJCFtnH98drBojkujmVwMSw8WytCB7
+its own account: reads what follows the room: success, fee 5000, 17 units
+  signature 5aDtJwLBuPf516hZ9yVeQTtbiGR8Kt4jLzBJ6LsioRkbxgb77B6RsZoMRFNkx3zrWHWCNc5BneVuT6u4bQxLguna
+  payer 9999975000, alice 2000000000
+  the account: 1000000000 lamports, 16 bytes, owner GXCvyFxY1iqXsfXn4GT7Lhz9Q4NQhwWrzxd2Q76Gc1zU, data 7KsVk1LEzyqJXTgJCFtnH98drBojkujmVwMSw8WytCB7
+its own account: writes a byte back as it is: success, fee 5000, 17 units
+  signature 2oAVrMF5Q2ZHuusDdbErw9VausSRDRnVcL5t3QaRaR9uwL4GEbjVQ765vQwD1gaoCJiAmbDfszwtQgm7NcZw6VMn
+  payer 9999970000, alice 2000000000
+  the account: 1000000000 lamports, 16 bytes, owner GXCvyFxY1iqXsfXn4GT7Lhz9Q4NQhwWrzxd2Q76Gc1zU, data 7KsVk1LEzyqJXTgJCFtnH98drBojkujmVwMSw8WytCB7
+its own account: writes into the room and reads elsewhere in it: success, fee 5000, 18 units
+  signature ZREsdQGVst5f2FYtznCeF43Mk7PofHbFcaWtA1sgFjr15DMc2tXzN7aYPyqPTdmJng4MfETPuviiWB2mMRovKQY
+  payer 9999965000, alice 2000000000
+  the account: 1000000000 lamports, 16 bytes, owner GXCvyFxY1iqXsfXn4GT7Lhz9Q4NQhwWrzxd2Q76Gc1zU, data 7KsVk1LEzyqJXTgJCFtnH98drBojkujmVwMSw8WytCB7
+its own account: writes into the room and grows by a byte: success, fee 5000, 17 units
+  signature 4rzvfr3QWcjPb5v1uzaKm4YDo2gTXADV74xWQ1ASVEwTfpBd22hHHUeiSBbrHUKB28BNk1DirG6rmbtjZriRp2hc
+  payer 9999960000, alice 2000000000
+  the account: 1000000000 lamports, 17 bytes, owner GXCvyFxY1iqXsfXn4GT7Lhz9Q4NQhwWrzxd2Q76Gc1zU, data Hbcm3PNyfvWK2FjcXLKWuQKK4T4pJqYyEKxteYBfCnfS
+its own account: writes eight bytes across the end and grows: success, fee 5000, 19 units
+  signature 44cu4XGpLuJq3hb2z9qEXYTykVqxgpwoHETcWYJNaBcVS2Lj4ZMfqmHTCNnYj9eFYJvbziJnugviAdET4wVmEFfe
+  payer 9999955000, alice 2000000000
+  the account: 1000000000 lamports, 20 bytes, owner GXCvyFxY1iqXsfXn4GT7Lhz9Q4NQhwWrzxd2Q76Gc1zU, data DhkQgFEuYQnzWBU64y1dSEYhGeuDGgpxPSh5DkEtEprX
+its own account: grows without writing, then reads: InstructionError(0, InvalidRealloc), fee 5000, 200000 units
+  signature 44hXVV3jxeXNt5ZNme6XpnAXrUQQkBUifG1atoaGFK7bj2RqHJ3FQswXuRXfrvpEutrPJ4obyYctVp26Q4eL7744
+  payer 9999950000, alice 2000000000
+  the account: 1000000000 lamports, 16 bytes, owner GXCvyFxY1iqXsfXn4GT7Lhz9Q4NQhwWrzxd2Q76Gc1zU, data 7KsVk1LEzyqJXTgJCFtnH98drBojkujmVwMSw8WytCB7
+its own account: copies its data out by system call: success, fee 5000, 31 units
+  signature 44Wv9EPu6iBoHEg5E92zo63KFb8YSzRBvM3sqGpED4bSE8WnqxYjzRYoSV9N1WkYifn9JJGmhHAESMhaXvNFc9Pq
+  payer 9999945000, alice 2000000000
+  the account: 1000000000 lamports, 16 bytes, owner GXCvyFxY1iqXsfXn4GT7Lhz9Q4NQhwWrzxd2Q76Gc1zU, data 7KsVk1LEzyqJXTgJCFtnH98drBojkujmVwMSw8WytCB7
+its own account: copies across the end by system call: InstructionError(0, InvalidRealloc), fee 5000, 30 units
+  signature 2H3PsimRfk8BgrkRiax5S94jeVr2Zhgk4k5BLAF9u13dS5iYfhE1xZSsY4DuqqhXFE3ZbpwWGauJriM6upRi4ywZ
+  payer 9999940000, alice 2000000000
+  the account: 1000000000 lamports, 16 bytes, owner GXCvyFxY1iqXsfXn4GT7Lhz9Q4NQhwWrzxd2Q76Gc1zU, data 7KsVk1LEzyqJXTgJCFtnH98drBojkujmVwMSw8WytCB7
+its own account: fills across the end by system call and grows: success, fee 5000, 34 units
+  signature 2ca28ePGnh71wnB1bPD2keRUcKveuvGUsfNARYf4RHDfYMkCx5wg7ExeccMGeWEG9EY2Y5nY7gykVRZMtgjvZ7Qj
+  payer 9999935000, alice 2000000000
+  the account: 1000000000 lamports, 20 bytes, owner GXCvyFxY1iqXsfXn4GT7Lhz9Q4NQhwWrzxd2Q76Gc1zU, data CVmA7Qmw3sRkP8KKjNC2G6rDizAkDQ9EWj6J5VwEWv63
+its own account: copies from its header into its data by system call: InstructionError(0, ProgramFailedToComplete), fee 5000, 29 units
+  signature 4CW3kJpiqY1p6b24GqMQmuBPkMhNmb6SB8RGRQG7BtixZMUMH6NtNnFR5EnWSQZ4yqwhq7inRFy1CnSDWJu9kUHh
+  payer 9999930000, alice 2000000000
+  the account: 1000000000 lamports, 16 bytes, owner GXCvyFxY1iqXsfXn4GT7Lhz9Q4NQhwWrzxd2Q76Gc1zU, data 7KsVk1LEzyqJXTgJCFtnH98drBojkujmVwMSw8WytCB7
+its own account: reads an address where nothing is: InstructionError(0, ProgramFailedToComplete), fee 5000, 200000 units
+  signature 5TbQS3vPyvD7EoGGEw8y5eksKZXJbx8HbTrfhAFQRv6pxBjWZ8DLPVyiDxG6AvuepyAexjioNNg6SQxQY1b2SgyZ
+  payer 9999925000, alice 2000000000
+  the account: 1000000000 lamports, 16 bytes, owner GXCvyFxY1iqXsfXn4GT7Lhz9Q4NQhwWrzxd2Q76Gc1zU, data 7KsVk1LEzyqJXTgJCFtnH98drBojkujmVwMSw8WytCB7
+its own account: does something else: InstructionError(0, Custom(1)), fee 5000, 14 units
+  signature 4dhiuXpZ4ejYY48J7tX5gEhzioXw7QMF5a7zRk1gwUx7X9HjkCrqe7B9yuffUdVmWeXhXtjyBxGNZdD32VtVPMtV
+  payer 9999920000, alice 2000000000
+  the account: 1000000000 lamports, 16 bytes, owner GXCvyFxY1iqXsfXn4GT7Lhz9Q4NQhwWrzxd2Q76Gc1zU, data 7KsVk1LEzyqJXTgJCFtnH98drBojkujmVwMSw8WytCB7
+its own account, read-only: reads the last byte: success, fee 5000, 14 units
+  signature 2EoJF6aUeuBkSov8oH8jecK6Ee1QqyQioxauQQCK86cDoA2f1vnejizQLq6rB8JWP1nk1kTo5nhSz93SuwutfCsF
+  payer 9999915000, alice 2000000000
+  the account: 1000000000 lamports, 16 bytes, owner GXCvyFxY1iqXsfXn4GT7Lhz9Q4NQhwWrzxd2Q76Gc1zU, data 7KsVk1LEzyqJXTgJCFtnH98drBojkujmVwMSw8WytCB7
+its own account, read-only: reads the byte after the last: InstructionError(0, AccountDataTooSmall), fee 5000, 200000 units
+  signature 4REpoh4Rt3UNUaWqJ55L9cT2rwFHwHKcKEfdCpYEzWXxbcwvSk21pbJ1ri7Z4nKvnuGDPPCVNd2mAM1Vuj9DGXKZ
+  payer 9999910000, alice 2000000000
+  the account: 1000000000 lamports, 16 bytes, owner GXCvyFxY1iqXsfXn4GT7Lhz9Q4NQhwWrzxd2Q76Gc1zU, data 7KsVk1LEzyqJXTgJCFtnH98drBojkujmVwMSw8WytCB7
+its own account, read-only: reads eight bytes across the end: InstructionError(0, AccountDataTooSmall), fee 5000, 200000 units
+  signature 2RBUZn9KqMVaFembBxYrLoyRUeGYwwBFpqXupEJUUEJVTCi6tzJXbVxFXGCGxiTS56KHTJB2eYjw9bTNbuPoMuc9
+  payer 9999905000, alice 2000000000
+  the account: 1000000000 lamports, 16 bytes, owner GXCvyFxY1iqXsfXn4GT7Lhz9Q4NQhwWrzxd2Q76Gc1zU, data 7KsVk1LEzyqJXTgJCFtnH98drBojkujmVwMSw8WytCB7
+its own account, read-only: reads the last byte of the room: InstructionError(0, AccountDataTooSmall), fee 5000, 200000 units
+  signature 3bKruuk9Xs3bsp3M4faHiZHLGGgdWh1b79izH7f2NdLpx1tP1287e7ZLEhP1Nsikg3C72hn5fCbE7R6mVYX1R1DH
+  payer 9999900000, alice 2000000000
+  the account: 1000000000 lamports, 16 bytes, owner GXCvyFxY1iqXsfXn4GT7Lhz9Q4NQhwWrzxd2Q76Gc1zU, data 7KsVk1LEzyqJXTgJCFtnH98drBojkujmVwMSw8WytCB7
+its own account, read-only: reads what follows the room: success, fee 5000, 17 units
+  signature SPX5ZuedsrLPXkDfnTeo2os8wvQDBwyhBAgRYd4cxMw4wzUyhTXYZJbMTjLKhWDTiQo1L5QFhjCS156xqbMpyHo
+  payer 9999895000, alice 2000000000
+  the account: 1000000000 lamports, 16 bytes, owner GXCvyFxY1iqXsfXn4GT7Lhz9Q4NQhwWrzxd2Q76Gc1zU, data 7KsVk1LEzyqJXTgJCFtnH98drBojkujmVwMSw8WytCB7
+its own account, read-only: writes a byte back as it is: InstructionError(0, ReadonlyDataModified), fee 5000, 200000 units
+  signature 3f6EE8bPJAu1B5TEqpCNpXxpc7oSwk1ydmiWRWgu2FQarivhhDJTDjZXxreG83KqsaqKapR5Tambuz9vwt5fGCxA
+  payer 9999890000, alice 2000000000
+  the account: 1000000000 lamports, 16 bytes, owner GXCvyFxY1iqXsfXn4GT7Lhz9Q4NQhwWrzxd2Q76Gc1zU, data 7KsVk1LEzyqJXTgJCFtnH98drBojkujmVwMSw8WytCB7
+its own account, read-only: writes into the room and reads elsewhere in it: InstructionError(0, ReadonlyDataModified), fee 5000, 200000 units
+  signature iBvkStmRqYsXAnruCyEHU3eSojqbNeSifuTJ5Kr9Bg56gdtiGoBk4RJibo7fuFMEx2zZeEL3m5vPskNtJfjnmWS
+  payer 9999885000, alice 2000000000
+  the account: 1000000000 lamports, 16 bytes, owner GXCvyFxY1iqXsfXn4GT7Lhz9Q4NQhwWrzxd2Q76Gc1zU, data 7KsVk1LEzyqJXTgJCFtnH98drBojkujmVwMSw8WytCB7
+its own account, read-only: writes into the room and grows by a byte: InstructionError(0, ReadonlyDataModified), fee 5000, 200000 units
+  signature 4WwybNCU3fBpNYwn7UAFVmw5KSN5kAZPf7TR2oofXnuHd1byGdZimatKvBmcU8AEVjezuGU6ufHuE2fZAmdC2tgh
+  payer 9999880000, alice 2000000000
+  the account: 1000000000 lamports, 16 bytes, owner GXCvyFxY1iqXsfXn4GT7Lhz9Q4NQhwWrzxd2Q76Gc1zU, data 7KsVk1LEzyqJXTgJCFtnH98drBojkujmVwMSw8WytCB7
+its own account, read-only: writes eight bytes across the end and grows: InstructionError(0, ReadonlyDataModified), fee 5000, 200000 units
+  signature 3Rtft95zfoNzRwxN5cQW2qQNkFWz2zj29Ft2vg2sPVQSshRUXEX51XYpzFYRVjsprS7nbHJqF8ZtZy5N9yxUNhqw
+  payer 9999875000, alice 2000000000
+  the account: 1000000000 lamports, 16 bytes, owner GXCvyFxY1iqXsfXn4GT7Lhz9Q4NQhwWrzxd2Q76Gc1zU, data 7KsVk1LEzyqJXTgJCFtnH98drBojkujmVwMSw8WytCB7
+its own account, read-only: grows without writing, then reads: InstructionError(0, AccountDataTooSmall), fee 5000, 200000 units
+  signature 2DJcv12ZPnVpLe5hd673nbkvTNqgRoFGZN37aX512p9ZWhaxGacWy8qQ3n7yTbS5ru3mCmpBYQXsXverPze8RE8E
+  payer 9999870000, alice 2000000000
+  the account: 1000000000 lamports, 16 bytes, owner GXCvyFxY1iqXsfXn4GT7Lhz9Q4NQhwWrzxd2Q76Gc1zU, data 7KsVk1LEzyqJXTgJCFtnH98drBojkujmVwMSw8WytCB7
+its own account, read-only: copies its data out by system call: success, fee 5000, 31 units
+  signature xJM9eDYyifVpaHvUCwTrN2YTNtYBdGs2XgcxQtKERKtMt2BzHRU1g6j4YzWP2iETYTA2qFMaQnfcqhuAmHybavC
+  payer 9999865000, alice 2000000000
+  the account: 1000000000 lamports, 16 bytes, owner GXCvyFxY1iqXsfXn4GT7Lhz9Q4NQhwWrzxd2Q76Gc1zU, data 7KsVk1LEzyqJXTgJCFtnH98drBojkujmVwMSw8WytCB7
+its own account, read-only: copies across the end by system call: InstructionError(0, AccountDataTooSmall), fee 5000, 30 units
+  signature 5dFC3m74taExKDc7Z8yUnKyTQWCmkJt2ezQJg7WNAcxoAioTa6C4JJ18wtqEknAEwr7EGnc6UBrCyHVXoYGeZHUu
+  payer 9999860000, alice 2000000000
+  the account: 1000000000 lamports, 16 bytes, owner GXCvyFxY1iqXsfXn4GT7Lhz9Q4NQhwWrzxd2Q76Gc1zU, data 7KsVk1LEzyqJXTgJCFtnH98drBojkujmVwMSw8WytCB7
+its own account, read-only: fills across the end by system call and grows: InstructionError(0, ReadonlyDataModified), fee 5000, 30 units
+  signature TvRwoZVABkvvhN15mVjnoPZCTH8gNwJqX8WSpqZ4653Nn5qGHMjKVjgydfof1BwTLvCiu4ETLCz3jATHPFSqT1N
+  payer 9999855000, alice 2000000000
+  the account: 1000000000 lamports, 16 bytes, owner GXCvyFxY1iqXsfXn4GT7Lhz9Q4NQhwWrzxd2Q76Gc1zU, data 7KsVk1LEzyqJXTgJCFtnH98drBojkujmVwMSw8WytCB7
+its own account, read-only: copies from its header into its data by system call: InstructionError(0, ProgramFailedToComplete), fee 5000, 29 units
+  signature 3aFDwALdUBfwqab3SQi1D7r2geR9mTcCp4e6uC3L3ArE2u7KRqt4Rt5aJo8DDRQnJsarPoUMdUdKJecMmkAsEGBX
+  payer 9999850000, alice 2000000000
+  the account: 1000000000 lamports, 16 bytes, owner GXCvyFxY1iqXsfXn4GT7Lhz9Q4NQhwWrzxd2Q76Gc1zU, data 7KsVk1LEzyqJXTgJCFtnH98drBojkujmVwMSw8WytCB7
+its own account, read-only: reads an address where nothing is: InstructionError(0, ProgramFailedToComplete), fee 5000, 200000 units
+  signature 2aqJEvHVipPfk64Kkzbph3mmt51m81aYBB5R4fmQPFwgVx97i9iAJReHhXtpSwxu43SCcr1pVcacfKmWVuAPszmy
+  payer 9999845000, alice 2000000000
+  the account: 1000000000 lamports, 16 bytes, owner GXCvyFxY1iqXsfXn4GT7Lhz9Q4NQhwWrzxd2Q76Gc1zU, data 7KsVk1LEzyqJXTgJCFtnH98drBojkujmVwMSw8WytCB7
+its own account, read-only: does something else: InstructionError(0, Custom(1)), fee 5000, 14 units
+  signature 3D3TRwVjXs4diCaz26dZqMMqJ9aHwb5SkXwW2mfd6Gp9QopYDqM8f8pJdtGU1rk9ZGVV3jGiNLCu8vFhV9ZmZ4XH
+  payer 9999840000, alice 2000000000
+  the account: 1000000000 lamports, 16 bytes, owner GXCvyFxY1iqXsfXn4GT7Lhz9Q4NQhwWrzxd2Q76Gc1zU, data 7KsVk1LEzyqJXTgJCFtnH98drBojkujmVwMSw8WytCB7
+another program's account: reads the last byte: success, fee 5000, 14 units
+  signature 5xgrxUNZwHF6nM6hxt7GxaqgUncdhxi5Sbo4GqPD18kzHU7T73jkG6MPXBX2u43FNz4HHpeAk2C43nntVMEy7jsw
+  payer 9999835000, alice 2000000000
+  the account: 1000000000 lamports, 16 bytes, owner 3rKaFjUw9FXwAojh77Ky2LsD8iu7G6tDX2CmcNJxqSie, data 7KsVk1LEzyqJXTgJCFtnH98drBojkujmVwMSw8WytCB7
+another program's account: reads the byte after the last: InstructionError(0, AccountDataTooSmall), fee 5000, 200000 units
+  signature 2BJgztx9g6A7BCth3mVvCCDTgp6pSbkKnaJ7pqK8zgyFXwLW3P1vXxJVmVN8uXXP2qqtEfxL1J48538gTiECziB9
+  payer 9999830000, alice 2000000000
+  the account: 1000000000 lamports, 16 bytes, owner 3rKaFjUw9FXwAojh77Ky2LsD8iu7G6tDX2CmcNJxqSie, data 7KsVk1LEzyqJXTgJCFtnH98drBojkujmVwMSw8WytCB7
+another program's account: reads eight bytes across the end: InstructionError(0, AccountDataTooSmall), fee 5000, 200000 units
+  signature 35dmD1aF8WupDSzDhLdQkfom4mqkas2AiRRdapgsX3tyF21xFm5tfMFmuj35MtH6UGCY7aiMZroDJeUWRMGH7HoF
+  payer 9999825000, alice 2000000000
+  the account: 1000000000 lamports, 16 bytes, owner 3rKaFjUw9FXwAojh77Ky2LsD8iu7G6tDX2CmcNJxqSie, data 7KsVk1LEzyqJXTgJCFtnH98drBojkujmVwMSw8WytCB7
+another program's account: reads the last byte of the room: InstructionError(0, AccountDataTooSmall), fee 5000, 200000 units
+  signature 3rueDvkGKF9us9rAFhiWdDMXit5UA9kMvpqyddt6w5sSgmMAQM3qZGWsHqVfDULnkEcJ8rdLaARZo9gwnv3DD2Ui
+  payer 9999820000, alice 2000000000
+  the account: 1000000000 lamports, 16 bytes, owner 3rKaFjUw9FXwAojh77Ky2LsD8iu7G6tDX2CmcNJxqSie, data 7KsVk1LEzyqJXTgJCFtnH98drBojkujmVwMSw8WytCB7
+another program's account: reads what follows the room: success, fee 5000, 17 units
+  signature 4HC5GddHvTFYU4Q8a26XopPmYJGkxaMnm9oueUL4ziQyWTCFYtLdZ2qhfFKkReqY4bZeQ4UZBTfL4iPj1deq9SKE
+  payer 9999815000, alice 2000000000
+  the account: 1000000000 lamports, 16 bytes, owner 3rKaFjUw9FXwAojh77Ky2LsD8iu7G6tDX2CmcNJxqSie, data 7KsVk1LEzyqJXTgJCFtnH98drBojkujmVwMSw8WytCB7
+another program's account: writes a byte back as it is: InstructionError(0, ExternalAccountDataModified), fee 5000, 200000 units
+  signature 2c5991YS6SsKYUDWnBUs5Mbajef9DyPG6TZWZgf8dB2BXFcPLHVfeEJyKwthPVLjetfobQWvR8NAEU7aSFKYst97
+  payer 9999810000, alice 2000000000
+  the account: 1000000000 lamports, 16 bytes, owner 3rKaFjUw9FXwAojh77Ky2LsD8iu7G6tDX2CmcNJxqSie, data 7KsVk1LEzyqJXTgJCFtnH98drBojkujmVwMSw8WytCB7
+another program's account: writes into the room and reads elsewhere in it: InstructionError(0, ExternalAccountDataModified), fee 5000, 200000 units
+  signature fcvo6vpyQczcNkizCSCQvH1Jk8UJkd2CjaavvkrJt1x1ceQ4L5LL1RX3w3D9HFrxxuXKdxsUjYuFnpzH8ZZzrGW
+  payer 9999805000, alice 2000000000
+  the account: 1000000000 lamports, 16 bytes, owner 3rKaFjUw9FXwAojh77Ky2LsD8iu7G6tDX2CmcNJxqSie, data 7KsVk1LEzyqJXTgJCFtnH98drBojkujmVwMSw8WytCB7
+another program's account: writes into the room and grows by a byte: InstructionError(0, ExternalAccountDataModified), fee 5000, 200000 units
+  signature 5B9fm9PpCcnmhf7fLWM5WQXZEAT9BHTdUPjyetdMfUtEwCzhd4PSadbq2NZRihSQw59SDW3TKnERAAytVxDMNdF8
+  payer 9999800000, alice 2000000000
+  the account: 1000000000 lamports, 16 bytes, owner 3rKaFjUw9FXwAojh77Ky2LsD8iu7G6tDX2CmcNJxqSie, data 7KsVk1LEzyqJXTgJCFtnH98drBojkujmVwMSw8WytCB7
+another program's account: writes eight bytes across the end and grows: InstructionError(0, ExternalAccountDataModified), fee 5000, 200000 units
+  signature 2jCwiZeRYYWxb4iWL28gVDC7JQ6Waa4i4ec7zrmADaa3sEZtB9czoFLxLZuB8rLtGVciLLAuqUT6mJN7dqMEaifh
+  payer 9999795000, alice 2000000000
+  the account: 1000000000 lamports, 16 bytes, owner 3rKaFjUw9FXwAojh77Ky2LsD8iu7G6tDX2CmcNJxqSie, data 7KsVk1LEzyqJXTgJCFtnH98drBojkujmVwMSw8WytCB7
+another program's account: grows without writing, then reads: InstructionError(0, AccountDataTooSmall), fee 5000, 200000 units
+  signature 2mcmEzf9fp7YbHk51cBQ6xqFrGbMzdjcv5KdMv7RLzvu6dcYEqCGwyiAAsUExwnBMr33X96yoBfd3PXEUXkztYKh
+  payer 9999790000, alice 2000000000
+  the account: 1000000000 lamports, 16 bytes, owner 3rKaFjUw9FXwAojh77Ky2LsD8iu7G6tDX2CmcNJxqSie, data 7KsVk1LEzyqJXTgJCFtnH98drBojkujmVwMSw8WytCB7
+another program's account: copies its data out by system call: success, fee 5000, 31 units
+  signature 65eNkyTGtirGc1nxVVpG4CK4Rrcy8QtNRJPxrpeTPypvwEKAyjgYVu8BnLZtN8USesx6GNDig2EcAH1NNs6cpKbb
+  payer 9999785000, alice 2000000000
+  the account: 1000000000 lamports, 16 bytes, owner 3rKaFjUw9FXwAojh77Ky2LsD8iu7G6tDX2CmcNJxqSie, data 7KsVk1LEzyqJXTgJCFtnH98drBojkujmVwMSw8WytCB7
+another program's account: copies across the end by system call: InstructionError(0, AccountDataTooSmall), fee 5000, 30 units
+  signature 2bbqur82jrvRje5t1WSLQDSZ83E6nYr2egKtCsCJ4kX5EmJDft27B9r3TRQ9XcdJUZX5HvtWy2hUHFzT11vqyt5S
+  payer 9999780000, alice 2000000000
+  the account: 1000000000 lamports, 16 bytes, owner 3rKaFjUw9FXwAojh77Ky2LsD8iu7G6tDX2CmcNJxqSie, data 7KsVk1LEzyqJXTgJCFtnH98drBojkujmVwMSw8WytCB7
+another program's account: fills across the end by system call and grows: InstructionError(0, ExternalAccountDataModified), fee 5000, 30 units
+  signature n8eZAsP5Z9Wm7AstGASbJ3wwSPU8iujLDg2rj8XtYiAEYTfVkewZVBsbgffvrzGaLg6eibvYwYudRTcwTpHzgSX
+  payer 9999775000, alice 2000000000
+  the account: 1000000000 lamports, 16 bytes, owner 3rKaFjUw9FXwAojh77Ky2LsD8iu7G6tDX2CmcNJxqSie, data 7KsVk1LEzyqJXTgJCFtnH98drBojkujmVwMSw8WytCB7
+another program's account: copies from its header into its data by system call: InstructionError(0, ProgramFailedToComplete), fee 5000, 29 units
+  signature RhD6XuGoFg3J1VsvCQXha7HRU2AMQiEkVaCtVFkzBjvCs9S8izRNWb6sExbuHXdMuEcgGEB2grMmDuPeG6anAKx
+  payer 9999770000, alice 2000000000
+  the account: 1000000000 lamports, 16 bytes, owner 3rKaFjUw9FXwAojh77Ky2LsD8iu7G6tDX2CmcNJxqSie, data 7KsVk1LEzyqJXTgJCFtnH98drBojkujmVwMSw8WytCB7
+another program's account: reads an address where nothing is: InstructionError(0, ProgramFailedToComplete), fee 5000, 200000 units
+  signature 3akfcmbZqiRmpnTBoe1GyocjAwrKb4pC2wK9JE6FxtPVSy8ir2XTKM6tJMrgWfXXBzkLoxqMwjjMdm5R2ywVAvEu
+  payer 9999765000, alice 2000000000
+  the account: 1000000000 lamports, 16 bytes, owner 3rKaFjUw9FXwAojh77Ky2LsD8iu7G6tDX2CmcNJxqSie, data 7KsVk1LEzyqJXTgJCFtnH98drBojkujmVwMSw8WytCB7
+another program's account: does something else: InstructionError(0, Custom(1)), fee 5000, 14 units
+  signature 5c6zdBdG6r5UtM4PSJpLabf9bv5ruAShd7XLV9EotyjD1xa58Z92Lp22xozFwTWnZVFoheUvRbFXjRyLNdQ3uHjd
+  payer 9999760000, alice 2000000000
+  the account: 1000000000 lamports, 16 bytes, owner 3rKaFjUw9FXwAojh77Ky2LsD8iu7G6tDX2CmcNJxqSie, data 7KsVk1LEzyqJXTgJCFtnH98drBojkujmVwMSw8WytCB7

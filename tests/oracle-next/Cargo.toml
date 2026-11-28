@@ -30,7 +30,12 @@ solana-zk-sdk = "7.0.1"
 bytemuck = "1"
 curve25519-dalek = "4.1.3"
 
+# for `oracle-next vote`: mainnet's features, and a clock to set
+agave-feature-set = "4.3.0"
+solana-clock = "3.2.1"
+
 [features]
-default = ["bls", "zk"]
+default = ["bls", "zk", "vote"]
 bls = []
 zk = []
+vote = []
