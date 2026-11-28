@@ -413,6 +413,16 @@ def unlink (path : String) : IO Unit := do
   let _ ← syscall 87 (p + 24) 0 0 0 0 0
   pure ()
 
+/-- Waits until what was written to a file is on the disk. -/
+def sync (fd : UInt64) : IO Unit := do
+  let _ ← syscall 74 fd 0 0 0 0 0
+  pure ()
+
+/-- Cuts a file to `length` bytes. -/
+def truncate (fd length : UInt64) : IO Unit := do
+  let _ ← syscall 77 fd length 0 0 0 0
+  pure ()
+
 /-- Bytes free for an ordinary user on the filesystem holding `path`; 0 if that cannot be told. -/
 def freeSpace (path : String) : IO UInt64 := do
   let cpath := path.toUTF8.push 0

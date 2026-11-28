@@ -14,6 +14,8 @@ more program that checks signatures before a transaction runs.
 * **The secp256r1 program** (P-256, the curve of passkeys): signatures made
   by OpenSSL, in the lower of their two forms, which is the only one the
   program takes.
+* **Ristretto**: the encodings RFC 9496 publishes for multiples of the base
+  point, and three of the encodings it says must be refused.
 * **The secp256k1 program**: instructions made with an independent
   implementation of the curve and of Keccak, then damaged in each way the
   program must notice.
@@ -184,4 +186,16 @@ def main : IO Unit := do
   IO.println (secp "no signatures" #[ByteArray.empty.push 0] 0)
   IO.println (secp "no signatures, but more bytes" #[(ByteArray.empty.push 0).push 0] 5)
   IO.println (secp "no bytes at all" #[ByteArray.empty] 5)
-
+  IO.println "-- Ristretto (RFC 9496)"
+  IO.println s!"B: {Hex.encode (Ed25519.Ristretto.encode Ed25519.basePoint)}"
+  match Ed25519.Ristretto.decode (Hex.decode "e2f2ae0a6abc4e71a884a961c500515f58e30b6aa582dd8db6a65945e08d2d76") with
+  | none => IO.println "B does not decode"
+  | some b =>
+    let mut multiple := b
+    for _ in [0:14] do
+      multiple := Ed25519.Point.add multiple b
+    IO.println s!"2B: {Hex.encode (Ed25519.Ristretto.encode (Ed25519.Point.dbl b))}"
+    IO.println s!"15B: {Hex.encode (Ed25519.Ristretto.encode multiple)}"
+  for refused in #["00ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff", "0100000000000000000000000000000000000000000000000000000000000000",
+      "26948d35ca62e643e26a83177332e6b6afeb9d08e4268b650f1f5bbd8d81d371"] do
+    IO.println s!"{refused} decodes: {(Ed25519.Ristretto.decode (Hex.decode refused)).isSome}"

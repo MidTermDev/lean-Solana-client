@@ -1,4 +1,5 @@
 import Solana.SbpfBase
+import Solana.Alpenglow
 
 /-!
 # Programs that are part of the runtime
@@ -136,6 +137,17 @@ def systemInstruction (m : Machine) (st : State) (metas : Array Meta) (data : By
     if made.status != finished then
       return made
     return systemTransfer made metas[0]! metas[1]! (Wire.u64 data 4)
+  if tag == 13 then
+    -- CreateAccountAllowPrefund { lamports, space, owner }: the same for an account that may hold lamports
+    -- already. It is account 0 here, and account 1 pays, if anything is to be paid.
+    if data.size < 52 then
+      return programError st 3
+    if metas.size < (if Wire.u64 data 4 > 0 then 2 else 1) then
+      return programError st 11
+    let made := allocateAndAssign st metas[0]! (Wire.u64 data 12) (data.extract 20 52) true
+    if made.status != finished || Wire.u64 data 4 == 0 then
+      return made
+    return systemTransfer made metas[1]! metas[0]! (Wire.u64 data 4)
   if tag == 1 then
     -- Assign { owner }
     if data.size < 36 then
@@ -346,6 +358,47 @@ def authorityError (st : State) (metas : Array Meta) (authority : ByteArray) (wh
   else if who >= metas.size || keyOf st metas[who]! != authority then 26
   else if !metas[who]!.signer then 8
   else 0
+
+def voteProgram : ByteArray := Base58.decode "Vote111111111111111111111111111111111111111"
+
+/-- The vote program, as far as it is provided: Withdraw (3), by which a validator takes lamports out
+of its vote account (account 0) to account 1. The account's withdraw authority must sign; what stays
+must cover the account's size, or be nothing, which empties the account, and that only once the
+validator has earned no credits for a whole epoch. -/
+def voteInstruction (m : Machine) (st0 : State) (metas : Array Meta) (data : ByteArray) : State := Id.run do
+  let st := st0.charge 2100
+  if metas.size < 1 then
+    return programError st 11
+  let account := st.accounts[metas[0]!.index]!
+  if account.owner != voteProgram then
+    return programError st 23
+  if data.size < 4 || (Wire.u32 data 0 == 3 && data.size < 12) then
+    return programError st 3
+  if Wire.u32 data 0 != 3 then
+    return st.stop unsupportedInstruction s!"instruction {Wire.u32 data 0} of the vote program is not provided"
+  if metas.size < 2 then
+    return programError st 11
+  let state := Alpenglow.VoteState.parse account.data
+  if !state.ok then
+    return st.stop unsupportedInstruction "a vote account in an older layout is not provided for"
+  if Wire.u64 state.voters 0 == 0 then
+    return programError st 10
+  if !(signedBy st metas (account.data.extract 36 68)) then
+    return programError st 8
+  let lamports := Wire.u64 data 4
+  if account.lamports < lamports then
+    return programError st 6
+  let mut left := st
+  if account.lamports == lamports then
+    let entries := state.credits.size
+    if Wire.u64 account.data 136 != 0 then
+      return programError st 6
+    if entries >= 3 && m.clock.epoch < state.credits[entries - 3]! + 2 then
+      return customError st 18
+    left := setAccount st metas[0]! { account with data := zeros ByteArray.empty account.data.size }
+  else if account.lamports - lamports < m.rentMinimum account.data.size + Wire.u64 account.data 136 then
+    return programError st 6
+  return moveLamports left metas[0]! metas[1]! lamports
 
 def loaderInstruction (m : Machine) (st0 : State) (metas : Array Meta) (data : ByteArray) : State := Id.run do
   let st := st0.charge 2370

@@ -163,7 +163,7 @@ def settle (s : Slot) : Slot × Nat × Nat := Id.run do
 it. The block is checked on its own at once; its link to its parent is
 checked through the shared table, now if the parent has been verified
 already, or when the parent is (by whichever tile verifies it). -/
-def finish (m : Ipc.Metrics) (seenBase : UInt64) (s : Slot) (candidates : ByteArray) : IO Slot := do
+def finish (m : Ipc.Metrics) (seenBase : UInt64) (spool : String) (s : Slot) (candidates : ByteArray) : IO Slot := do
   if s.done || s.last == Wire.bad || s.count != s.last + 1 then
     return s
   let mut shreds : Array ByteArray := Array.emptyWithCapacity (s.last + 1)
@@ -190,6 +190,10 @@ def finish (m : Ipc.Metrics) (seenBase : UInt64) (s : Slot) (candidates : ByteAr
       IO.eprintln s!"leansol: slot {s.slot} failed verification: {r.error}"
     return closed
   remember seenBase r (Block.rootOf shreds[shreds.size - 1]!)
+  -- (saved for the process that executes blocks, unless the disk is nearly full: it fetches what it lacks)
+  if spool != "" && (← Sys.freeSpace spool) > 40000000000 then
+    let unknown := Sbpf.zeros ByteArray.empty 32
+    let _ ← Sys.writeFileMode s!"{spool}/{s.slot}.block" (RunBlock.pack r unknown unknown shreds) 0x1a4
   m.add M.blocksOk 1
   m.add M.blocksFollowed 1
   if s.scheduled then
@@ -270,7 +274,7 @@ def followTile (sh : Shared) (cfg : Config) (which : Nat) : IO Unit := do
             data := data.push got.shreds[i]!
           m.add M.slotsRepaired 1
           next := { next with data := data, count := got.last + 1, last := got.last, unchecked := true, unknown := false }
-          next ← finish m sh.seenBase next (leaders ++ known)
+          next ← finish m sh.seenBase cfg.spool next (leaders ++ known)
         slots := slots.set! late next
     match ← sh.toBlocks[which]!.recv 50 with
     | none => pure ()
@@ -289,7 +293,7 @@ def followTile (sh : Shared) (cfg : Config) (which : Nat) : IO Unit := do
               let (settled, shreds, sets) := settle slots[i]!
               m.add M.shredsRecovered shreds.toUInt64
               m.add M.setsRecovered sets.toUInt64
-              slots := slots.set! i (← finish m sh.seenBase settled (leaders ++ known))
+              slots := slots.set! i (← finish m sh.seenBase cfg.spool settled (leaders ++ known))
         -- the slot's record
         let mut at_ := Wire.bad
         for i in [0:slots.size] do
@@ -370,5 +374,5 @@ def followTile (sh : Shared) (cfg : Config) (which : Nat) : IO Unit := do
               s := next
               m.add M.shredsRecovered shreds.toUInt64
               m.add M.setsRecovered sets.toUInt64
-            s ← finish m sh.seenBase s (leaders ++ known)
+            s ← finish m sh.seenBase cfg.spool s (leaders ++ known)
         slots := slots.set! at_ s

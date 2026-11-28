@@ -94,3 +94,10 @@ a count with nothing after it: refused with error 4
 no signatures: accepted
 no signatures, but more bytes: refused with error 4
 no bytes at all: refused with error 4
+-- Ristretto (RFC 9496)
+B: e2f2ae0a6abc4e71a884a961c500515f58e30b6aa582dd8db6a65945e08d2d76
+2B: 6a493210f7499cd17fecb510ae0cea23a110e8d5b901f8acadd3095c73a3b919
+15B: e0c418f7c8d9c4cdd7395b93ea124f3ad99021bb681dfc3302a9d99a2e53e64e
+00ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff decodes: false
+0100000000000000000000000000000000000000000000000000000000000000 decodes: false
+26948d35ca62e643e26a83177332e6b6afeb9d08e4268b650f1f5bbd8d81d371 decodes: false

@@ -217,6 +217,9 @@ refers to, with `data`. Returns the state afterwards; if `status` is not
 `finished` the instruction failed and the caller discards the changes. -/
 partial def execute (m : Machine) (st0 : State) (programId : ByteArray) (metas : Array Meta)
     (data : ByteArray) (depth : Nat) : State := Id.run do
+  -- (a transaction may run 64 instructions, counting those its programs call)
+  if st0.trace.size >= 64 then
+    return refused st0 "MaxInstructionTraceLengthExceeded"
   if depth > maxInstructionDepth then
     return st0.stop callDepthExceeded "programs called one another more than 4 levels deep"
   let st0 := { st0 with trace := st0.trace.push ⟨depth, programId, metas, data⟩ }
@@ -226,11 +229,12 @@ partial def execute (m : Machine) (st0 : State) (programId : ByteArray) (metas :
     if !(isRepeat metas i) then
       entrySum := entrySum + entry[metas[i]!.index]!.lamports
   if programId == systemProgram || programId == computeBudgetProgram || programId == loaderId || programId == loaderV1
-      || programId == loaderV2 then
+      || programId == loaderV2 || programId == voteProgram then
     -- built into the runtime. The compute budget program's work is done before the transaction runs, and the
     -- two older loaders no longer accept instructions.
     let after := if programId == systemProgram then systemInstruction m st0 metas data
       else if programId == loaderId then loaderInstruction m st0 metas data
+      else if programId == voteProgram then voteInstruction m st0 metas data
       else if programId == computeBudgetProgram then st0.charge 150
       else refused (st0.charge (if programId == loaderV2 then 570 else 1140)) "UnsupportedProgramId"
     if after.units > m.budget then
@@ -529,19 +533,19 @@ partial def execute (m : Machine) (st0 : State) (programId : ByteArray) (metas :
             else
               status := accessViolation
         else if id == sysCurveValidate then
-          -- is this a point of the curve? (a1 = which curve: 0 Edwards, 1 Ristretto; a2 = the point)
-          if a1 == 0 then
-            units := units + 159
+          -- is this a point of the curve? (a1 = how it is written: 0 Edwards, 1 Ristretto; a2 = the point)
+          if a1 <= 1 then
+            units := units + (if a1 == 0 then 159 else 169)
             match readBytes p mem inputLen a2 32 with
             | none => status := accessViolation
-            | some point => result := if (Ed25519.Point.decode point).isSome then 0 else 1
+            | some point => result := if (curvePoint a1 point).isSome then 0 else 1
           else
             status := unsupportedSyscall
             detail := s!"curve {a1} of sol_curve_validate_point is not provided"
         else if id == sysCurveOp then
-          -- add, subtract or multiply on the Edwards curve: a2 = which, a3 and r4 the operands, r5 where the result goes
-          if a1 == 0 && a2 <= 2 then
-            units := units + (if a2 == 0 then 473 else if a2 == 1 then 475 else 2177)
+          -- add, subtract or multiply on the curve: a2 = which, a3 and r4 the operands, r5 where the result goes
+          if a1 <= 1 && a2 <= 2 then
+            units := units + (if a1 == 0 then (if a2 == 0 then 473 else if a2 == 1 then 475 else 2177) else if a2 == 0 then 521 else if a2 == 1 then 519 else 2208)
             let dest := writable p inputLen regs[5]! 32
             match readBytes p mem inputLen a3 32, readBytes p mem inputLen regs[4]! 32 with
             | some left, some right =>
@@ -549,7 +553,7 @@ partial def execute (m : Machine) (st0 : State) (programId : ByteArray) (metas :
                 status := accessViolation
               else if a2 == 2 then
                 -- a scalar (which must be reduced) times a point
-                match Ed25519.Point.decode right with
+                match curvePoint a1 right with
                 | none => result := 1
                 | some point =>
                   if !(Ed25519.scIsCanonical left) then
@@ -557,22 +561,22 @@ partial def execute (m : Machine) (st0 : State) (programId : ByteArray) (metas :
                   else
                     let zero := zeros ByteArray.empty 32
                     let product := Ed25519.doubleScalarMul left (Ed25519.Point.table point) zero (Ed25519.Point.table point)
-                    mem := (Ed25519.Point.encode product).copySlice 0 mem dest 32
+                    mem := (curveBytes a1 product).copySlice 0 mem dest 32
               else
-                match Ed25519.Point.decode left, Ed25519.Point.decode right with
+                match curvePoint a1 left, curvePoint a1 right with
                 | some x, some y =>
                   let sum := Ed25519.Point.add x (if a2 == 1 then Ed25519.Point.neg y else y)
-                  mem := (Ed25519.Point.encode sum).copySlice 0 mem dest 32
+                  mem := (curveBytes a1 sum).copySlice 0 mem dest 32
                 | _, _ => result := 1
             | _, _ => status := accessViolation
           else
             status := unsupportedSyscall
             detail := s!"curve {a1}, operation {a2} of sol_curve_group_op is not provided"
         else if id == sysCurveMsm then
-          -- a sum of scalars times points on the Edwards curve: a2 the scalars, a3 the points, r4 how many, r5 the result
+          -- a sum of scalars times points on the curve: a2 the scalars, a3 the points, r4 how many, r5 the result
           let count := regs[4]!
-          if a1 == 0 && count <= 512 then
-            units := units + 2273 + 758 * (if count == 0 then 0 else count - 1)
+          if a1 <= 1 && count <= 512 then
+            units := units + (if a1 == 0 then 2273 else 2303) + (if a1 == 0 then 758 else 788) * (if count == 0 then 0 else count - 1)
             let dest := writable p inputLen regs[5]! 32
             match readBytes p mem inputLen a2 (32 * count), readBytes p mem inputLen a3 (32 * count) with
             | some scalars, some points =>
@@ -584,7 +588,7 @@ partial def execute (m : Machine) (st0 : State) (programId : ByteArray) (metas :
                 let mut valid := true
                 for i in [0:count.toNat] do
                   let scalar := scalars.extract (32 * i) (32 * i + 32)
-                  match Ed25519.Point.decode (points.extract (32 * i) (32 * i + 32)) with
+                  match curvePoint a1 (points.extract (32 * i) (32 * i + 32)) with
                   | none => valid := false
                   | some point =>
                     if !(Ed25519.scIsCanonical scalar) then
@@ -592,7 +596,7 @@ partial def execute (m : Machine) (st0 : State) (programId : ByteArray) (metas :
                     else
                       sum := Ed25519.Point.add sum (Ed25519.doubleScalarMul scalar (Ed25519.Point.table point) zero (Ed25519.Point.table point))
                 if valid then
-                  mem := (Ed25519.Point.encode sum).copySlice 0 mem dest 32
+                  mem := (curveBytes a1 sum).copySlice 0 mem dest 32
                 else
                   result := 1
             | _, _ => status := accessViolation

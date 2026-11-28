@@ -85,6 +85,8 @@ structure Voter where
   bls : ByteArray
   /-- the address its vote account names to receive its share of block fees; empty in older layouts, where the identity receives it -/
   collector : ByteArray
+  /-- what it keeps of its stakers' rewards, in hundredths of a percent -/
+  commission : UInt64
   deriving Inhabited
 
 /-- The stakes that decide who leads and whose votes count during one epoch. -/
@@ -137,11 +139,15 @@ structure Manifest where
   ltHash : ByteArray
   /-- the block's identifier, if recorded -/
   blockId : ByteArray
+  /-- inflation: its initial and terminal rates, the taper, the foundation's share and term (doubles) -/
+  inflation : ByteArray
+  /-- the address of every delegated stake account (32 bytes each) -/
+  stakeKeys : ByteArray
   deriving Inhabited
 
 def Manifest.failed (why : String) : Manifest :=
   ⟨why, 0, 0, ByteArray.empty, ByteArray.empty, ByteArray.empty, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, false, 0, 0, ByteArray.empty,
-    0, ByteArray.empty, 0, 0, 0, Array.emptyWithCapacity 0, ByteArray.empty, ByteArray.empty⟩
+    0, ByteArray.empty, 0, 0, 0, Array.emptyWithCapacity 0, ByteArray.empty, ByteArray.empty, ByteArray.empty, ByteArray.empty⟩
 
 /-- Skips a sequence of `count`-prefixed fixed-size elements. -/
 def skipSeq (b : ByteArray) (o size : Nat) : Nat :=
@@ -171,7 +177,8 @@ def voteAccounts (b : ByteArray) (start : Nat) (keep : Bool) : Nat × Array Vote
       -- (in the current layout of a vote account, an optional BLS key follows four addresses and three numbers)
       let bls := if Wire.u32 b data == 3 && dataLen >= 193 && b[data + 144]! == 1 then b.extract (data + 145) (data + 193) else ByteArray.empty
       let collector := if Wire.u32 b data == 3 && dataLen >= 132 then b.extract (data + 100) (data + 132) else ByteArray.empty
-      voters := voters.push ⟨b.extract o (o + 32), b.extract (data + 4) (data + 36), stake, bls, collector⟩
+      let commission := if Wire.u32 b data == 3 && dataLen >= 134 then Wire.u16 b (data + 132) else if dataLen > 68 then 100 * Wire.u8 b (data + 68) else 0
+      voters := voters.push ⟨b.extract o (o + 32), b.extract (data + 4) (data + 36), stake, bls, collector, commission⟩
     o := data + dataLen + 41
   return (o, voters, n)
 
@@ -234,6 +241,7 @@ def parse (b : ByteArray) : Manifest := Id.run do
   let firstNormalEpoch := Wire.u64 b (o + 17)
   let firstNormalSlot := Wire.u64 b (o + 25)
   -- (inflation: six numbers)
+  let inflation := b.extract (o + 33) (o + 73)
   o := o + 33 + 48
   -- the bank's stakes
   let (afterVotes, _, voteCount) := voteAccounts b o false
@@ -241,6 +249,11 @@ def parse (b : ByteArray) : Manifest := Id.run do
     return Manifest.failed "manifest: vote accounts do not parse"
   let delegations := (Wire.u64 b afterVotes).toNat
   o := restOfStakes b afterVotes 96
+  -- (each delegation is the stake account's address and 64 bytes that the account itself also holds)
+  let mut stakeKeys := ByteArray.emptyWithCapacity (if Wire.ok o then 32 * delegations else 0)
+  if Wire.ok o then
+    for k in [0:delegations] do
+      stakeKeys := b.copySlice (afterVotes + 8 + 96 * k) stakeKeys stakeKeys.size 32
   -- three unused collections, then the old place of the epoch stakes, which must be empty
   o := skipSeq b (skipSeq b (skipSeq b o 32) 32) 40
   if !(Wire.ok o) || o + 9 > b.size then
@@ -313,6 +326,6 @@ def parse (b : ByteArray) : Manifest := Id.run do
   let counted := if slotsPerEpoch != 0 && slot >= firstNormalSlot then firstNormalEpoch + (slot - firstNormalSlot) / slotsPerEpoch else epoch
   return ⟨"", slot, parentSlot, hash, parentHash, blockhash, blockHeight, (if epoch == 0 then counted else epoch), capitalization, accountsDataLen, transactionCount,
     signatureCount, tickHeight, ticksPerSlot, hashesPerTick, lamportsPerSignature, slotsPerEpoch, leaderScheduleOffset, warmup,
-    firstNormalEpoch, firstNormalSlot, leader, blockhashes, queue, lastHashIndex, voteCount, delegations, epochStakes, ltHash, blockId⟩
+    firstNormalEpoch, firstNormalSlot, leader, blockhashes, queue, lastHashIndex, voteCount, delegations, epochStakes, ltHash, blockId, inflation, stakeKeys⟩
 
 end Snapshot

@@ -280,6 +280,35 @@ def fromFile (path : String) : IO Unit := do
     Sys.exit 1
   printReport r (b.extract 40 72) (t1 - t0)
 
+/-- What a running node (its `--metrics` address) knows: the cluster's newest slot, every identity (a key
+the leader might have), a random `want` of the validators that can be asked for blocks, and how many
+there are: none, if no node answers there or it knows no such validator yet. -/
+def learn (node : String) (want : Nat) : IO (UInt64 × ByteArray × Array Peer × Nat) := do
+  let (nodeIp, nodePort) := parseAddr node
+  let summary ← httpGet nodeIp nodePort "/summary.json"
+  let listing ← httpGet nodeIp nodePort "/nodes.json"
+  let shredVersion := jsonField summary "shredVersion" 0
+  let mut candidates := ByteArray.emptyWithCapacity (32 * 8192)
+  let mut known : Array Peer := Array.emptyWithCapacity 4096
+  let mut at_ := findAt listing "\"identity\": ".toUTF8 0
+  while at_ < listing.size do
+    let key := Base58.decode (jsonField listing "identity" at_)
+    let repair := jsonField listing "repair" at_
+    if key.size == 32 then
+      candidates := candidates ++ key
+      let (ip, port) := parseAddr repair
+      if ip != 0 && port != 0 && jsonField listing "shredVersion" at_ == shredVersion then
+        known := known.push ⟨key, ip, port, 0⟩
+    at_ := findAt listing "\"identity\": ".toUTF8 (at_ + 1)
+  let random ← IO.getRandomBytes 8
+  let mut peers : Array Peer := Array.emptyWithCapacity want
+  let stride := if known.size > want then known.size / want else 1
+  let offset := (Wire.u64 random 0).toNat % stride
+  for k in [0:want] do
+    if offset + k * stride < known.size then
+      peers := peers.push known[offset + k * stride]!
+  return (number (jsonField summary "tipSlot" 0), candidates, peers, known.size)
+
 def main : IO Unit := do
   let argc ← Sys.argc
   let mut slot : UInt64 := 0
@@ -312,43 +341,15 @@ def main : IO Unit := do
         RunProgram.fail s!"'{a}' is not a slot number"
       i := i + 1
 
-  let (nodeIp, nodePort) := parseAddr node
-  if nodeIp == 0 then
-    RunProgram.fail "--node expects IP:PORT"
-  let summary ← httpGet nodeIp nodePort "/summary.json"
-  let listing ← httpGet nodeIp nodePort "/nodes.json"
-  if summary.size == 0 || listing.size == 0 then
-    RunProgram.fail s!"no leansol node answers at {node} (start one with --metrics, or name one with --node)"
-  let tip := number (jsonField summary "tipSlot" 0)
-  let shredVersion := jsonField summary "shredVersion" 0
+  let (tip, candidates, peers, known) ← learn node want.toNat
+  if peers.size == 0 then
+    RunProgram.fail s!"no leansol node answers at {node}, or it knows no validator with a repair address yet (start one with --metrics and give it a minute, or name one with --node)"
   if slot == 0 then
     slot := tip - 24
-  -- the nodes of the listing: every identity is a key the leader might be; those with a repair address can be asked
-  let mut candidates := ByteArray.emptyWithCapacity (32 * 8192)
-  let mut known : Array Peer := Array.emptyWithCapacity 4096
-  let mut at_ := findAt listing "\"identity\": ".toUTF8 0
-  while at_ < listing.size do
-    let key := Base58.decode (jsonField listing "identity" at_)
-    let repair := jsonField listing "repair" at_
-    if key.size == 32 then
-      candidates := candidates ++ key
-      let (ip, port) := parseAddr repair
-      if ip != 0 && port != 0 && jsonField listing "shredVersion" at_ == shredVersion then
-        known := known.push ⟨key, ip, port, 0⟩
-    at_ := findAt listing "\"identity\": ".toUTF8 (at_ + 1)
-  if known.size == 0 then
-    RunProgram.fail "the node knows no validator with a repair address yet; give it a minute"
-  -- a random sample of them
   let seed ← IO.getRandomBytes 32
   let pubkey := Ed25519.publicKey seed
-  let mut peers : Array Peer := Array.emptyWithCapacity want.toNat
-  let stride := if known.size > want.toNat then known.size / want.toNat else 1
-  let offset := (Wire.u64 seed 0).toNat % stride
-  for k in [0:want.toNat] do
-    if offset + k * stride < known.size then
-      peers := peers.push known[offset + k * stride]!
   IO.println s!"slot         {slot} (the cluster is at {tip})"
-  IO.println s!"asking       {peers.size} of {known.size} validators with a repair address; {candidates.size / 32} keys could be the leader"
+  IO.println s!"asking       {peers.size} of {known} validators with a repair address; {candidates.size / 32} keys could be the leader"
 
   let sock ← Sys.udpSocket
   let _ ← Sys.bind sock 0 0

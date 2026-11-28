@@ -36,7 +36,7 @@ def ed25519Program : ByteArray := Base58.decode "Ed25519SigVerify111111111111111
 def secp256k1Program : ByteArray := Base58.decode "KeccakSecp256k11111111111111111111111111111"
 def secp256r1Program : ByteArray := Base58.decode "Secp256r1SigVerify1111111111111111111111111"
 def lookupTableProgram : ByteArray := Base58.decode "AddressLookupTab1e1111111111111111111111111"
-def voteProgram : ByteArray := Base58.decode "Vote111111111111111111111111111111111111111"
+def voteProgram : ByteArray := Sbpf.voteProgram
 def stakeProgram : ByteArray := Base58.decode "Stake11111111111111111111111111111111111111"
 def configProgram : ByteArray := Base58.decode "Config1111111111111111111111111111111111111"
 /-- What is sent here is destroyed at the end of the slot. -/
@@ -619,7 +619,8 @@ def Bank.process (bank : Bank) (tx : Tx.Transaction) (verify : Bool) : Receipt :
   for ix in msg.instructions do
     let program := keys[ix.program]!
     if loadError == "" && !(program == Sbpf.systemProgram || program == Sbpf.computeBudgetProgram || program == ed25519Program
-        || program == secp256k1Program || program == secp256r1Program || program == Sbpf.loaderId || program == loaderV1 || program == loaderV2 || hasProgram bank program) then
+        || program == secp256k1Program || program == secp256r1Program || program == Sbpf.loaderId || program == loaderV1 || program == loaderV2
+        || program == voteProgram || hasProgram bank program) then
       loadError := if (bank.get program).lamports == 0 then "ProgramAccountNotFound" else "InvalidProgramForExecution"
   let charged := bank.set { payer with lamports := payer.lamports - fee }
 

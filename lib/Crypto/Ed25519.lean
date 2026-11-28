@@ -449,6 +449,50 @@ def table (p : Point) : Array Point := Id.run do
 
 end Point
 
+/-! Ristretto: the same curve with its cofactor divided out, so that every 32-byte encoding names
+exactly one element of a group of prime order (RFC 9496). The elements are points as above; only how
+they are written down differs. -/
+namespace Ristretto
+
+def invSqrtAMinusD : Fe := Fe.fromBytes (Hex.decode "ea405d80aafdc899be72415a17162f9d40d801fe917bc216a2fcafcf05896c78")
+
+/-- The square root of `u / v` if it has one (then `true`), else of `i · u / v`; never the negative one. -/
+def sqrtRatio (u v : Fe) : Bool × Fe :=
+  let v3 := Fe.mul (Fe.sq v) v
+  let r := Fe.mul (Fe.mul u v3) (Fe.pow22523 (Fe.mul u (Fe.mul (Fe.sq v3) v)))
+  let check := Fe.mul v (Fe.sq r)
+  let flipped := Fe.eq check (Fe.neg u)
+  let root := if flipped || Fe.eq check (Fe.neg (Fe.mul u sqrtM1)) then Fe.mul sqrtM1 r else r
+  (Fe.eq check u || flipped, if Fe.isNegative root then Fe.neg root else root)
+
+def decode (b : ByteArray) : Option Point :=
+  let s := Fe.fromBytes b
+  if b.size != 32 || Fe.toBytes s != b || Fe.isNegative s then none
+  else
+    let u1 := Fe.sub Fe.one (Fe.sq s)
+    let u2 := Fe.add Fe.one (Fe.sq s)
+    let v := Fe.sub (Fe.neg (Fe.mul d (Fe.sq u1))) (Fe.sq u2)
+    let (square, inverse) := sqrtRatio Fe.one (Fe.mul v (Fe.sq u2))
+    let twice := Fe.mul (Fe.add s s) (Fe.mul inverse u2)
+    let x := if Fe.isNegative twice then Fe.neg twice else twice
+    let y := Fe.mul u1 (Fe.mul (Fe.mul inverse (Fe.mul inverse u2)) v)
+    if !square || Fe.isNegative (Fe.mul x y) || Fe.isZero y then none else some ⟨x, y, Fe.one, Fe.mul x y⟩
+
+def encode (p : Point) : ByteArray :=
+  let u1 := Fe.mul (Fe.add p.z p.y) (Fe.sub p.z p.y)
+  let u2 := Fe.mul p.x p.y
+  let (_, inverse) := sqrtRatio Fe.one (Fe.mul u1 (Fe.sq u2))
+  let den1 := Fe.mul inverse u1
+  let den2 := Fe.mul inverse u2
+  let zInverse := Fe.mul (Fe.mul den1 den2) p.t
+  let rotate := Fe.isNegative (Fe.mul p.t zInverse)
+  let x := if rotate then Fe.mul p.y sqrtM1 else p.x
+  let y := if rotate then Fe.mul p.x sqrtM1 else p.y
+  let s := Fe.mul (if rotate then Fe.mul den1 invSqrtAMinusD else den2) (Fe.sub p.z (if Fe.isNegative (Fe.mul x zInverse) then Fe.neg y else y))
+  Fe.toBytes (if Fe.isNegative s then Fe.neg s else s)
+
+end Ristretto
+
 /-- The base point B: y = 4/5 with x positive. -/
 def basePoint : Point :=
   match Point.decode (Hex.decode "5866666666666666666666666666666666666666666666666666666666666666") with

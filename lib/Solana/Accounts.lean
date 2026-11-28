@@ -13,9 +13,8 @@ be filled by its own process. A shard is two files:
 
 * `accounts-NN.bin`, a log: accounts appended one after another, each an
   88-byte header and its data, the data's runs of zeros written as counts.
-  Nothing is rewritten in place; a newer
-  version of an account is appended and the old one is simply no longer
-  pointed to.
+  Nothing is rewritten in place; a newer version of an account is appended
+  and the old one is simply no longer pointed to.
 * `index-NN.bin`, a hash table of 16-byte entries: eight bytes of the
   address, and where in the log the account is. Eight bytes are not the
   whole address, so a lookup confirms the address in the log; entries are
@@ -294,6 +293,26 @@ def close (s : Shard) (pending : ByteArray) (dir : String) (id : Nat) : IO Shard
   let ok ← Sys.writeFrom fd s.table (16 <<< s.bits.toUInt64)
   Sys.close fd
   return { done with failed := done.failed || Sys.isErr fd || !ok }
+
+/-- Opens a log that an earlier run was filling: its first `length` bytes are indexed again. With
+`filling`, to go on filling it: what lies after them (a write that was never finished) is cut off. -/
+def reopen (dir : String) (id : Nat) (seed length : UInt64) (filling : Bool) : IO Shard := do
+  -- (read; or read, written, and written at its end)
+  let fd ← Sys.openFile (path dir "accounts" id) (if filling then 0x402 else 0)
+  let table ← Sys.mapMemory 65536
+  let mut s : Shard := ⟨table, 12, 0, seed, fd, length, Sys.isErr fd || table == 0 || (← Sys.fileSize fd) < length⟩
+  if !s.failed && filling then
+    Sys.truncate fd length
+  let mut loc : UInt64 := 0
+  while loc < length && !s.failed do
+    let head ← Sys.readAt fd loc headerSize
+    let (entry, found) ← if head.size == headerSize then s.locate ByteArray.empty head 0 else pure (0, none_)
+    if entry == 0 then
+      s := { s with failed := true }
+    else
+      s ← s.point entry (found == none_) (keyOf head 0) loc
+      loc := loc + (headerSize + recRest head).toUInt64
+  return s
 
 /-- Opens a filled shard for reading (there are no pending bytes then). -/
 def openRead (dir : String) (id : Nat) (seed : UInt64) : IO Shard := do

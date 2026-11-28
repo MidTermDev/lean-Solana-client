@@ -38,6 +38,7 @@ def usage : String :=
   "  --follow-tiles N    processes that assemble and verify the blocks received that way (default 6)\n" ++
   "  --state DIR         a store loaded by `leansol snapshot`: the stakes in its manifest give the\n" ++
   "                      leader schedule, and each block must then be signed by its slot's leader\n" ++
+  "  --spool DIR         save every block verified that way in DIR, for `leansol replay --live` to execute\n" ++
   "  --block-interval S  fetch a recent block from validators and verify it every S seconds\n" ++
   "                      (default 5; 0 = never)\n" ++
   "  --duration SECONDS  exit after this long (default: run until interrupted)\n" ++
@@ -169,6 +170,7 @@ def main : IO Unit := do
   let mut blockInterval : UInt64 := 5
   let mut tvuPort : UInt16 := 0
   let mut followTiles := 6
+  let mut spool := ""
   let mut stateDir := ""
   let mut duration := 0
   let mut plain := !(← Sys.isTty 1)
@@ -213,6 +215,8 @@ def main : IO Unit := do
         followTiles := ← numberArg a v
       else if a == "--state" then
         stateDir := v
+      else if a == "--spool" then
+        spool := v
       else if a == "--duration" then
         duration := ← numberArg a v
       else if a == "--json-file" then
@@ -303,7 +307,7 @@ def main : IO Unit := do
   let cfg : Config :=
     { seed := seed, pubkey := pubkey, publicIp := publicIp, port := boundPort, schedule := schedule,
       shredVersion := shredVersion, entrypoints := entrypoints, outsetUs := outsetUs, fanout := fanout,
-      cluster := cluster, httpAddr := listen, blockInterval := blockInterval, tvuPort := tvuPort, followTiles := followTiles }
+      cluster := cluster, httpAddr := listen, blockInterval := blockInterval, tvuPort := tvuPort, followTiles := followTiles, spool := spool }
   -- the HTTP endpoint is opened here, before forking, so that a port that
   -- is already taken is reported instead of silently missing
   let mut httpFd := noFd

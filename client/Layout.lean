@@ -132,6 +132,8 @@ structure Config where
   followTiles : Nat
   /-- The leader schedule (`LeaderSchedule.table`), computed from the stakes in a loaded snapshot; empty without one. -/
   schedule : ByteArray
+  /-- Where every verified block is saved for `leansol replay --live` to execute; empty for nowhere. -/
+  spool : String
 
 /-- The shared mappings and the socket, inherited by every tile across `fork`. -/
 structure Shared where

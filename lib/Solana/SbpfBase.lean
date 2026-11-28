@@ -446,12 +446,19 @@ def parse (image : ByteArray) : Program := Id.run do
     version.toNat, roLow, programStart + text.off.toUInt64, 1, 0, false, 0, instructionWords elf text.off count,
     tidyWords (instructionWords elf text.off count), 0, ByteArray.empty, 0⟩
 
+/-- A point of Curve25519 from its 32 bytes, written the Edwards way (0) or the Ristretto way (1); and back. -/
+def curvePoint (written : UInt64) (b : ByteArray) : Option Ed25519.Point :=
+  if written == 0 then Ed25519.Point.decode b else Ed25519.Ristretto.decode b
+
+def curveBytes (written : UInt64) (p : Ed25519.Point) : ByteArray :=
+  if written == 0 then Ed25519.Point.encode p else Ed25519.Ristretto.encode p
+
+def settled : Nat := 0xFFFFFFFF
+
 /-- Translates a program into machine code where that can be run (`Solana.Jit`): on a processor that has
 what the translation uses, for the versions whose instructions it knows (0 and 3), and never under the
 official Lean toolchain, where `Fast.codeLoad` declines. The program is otherwise unchanged, and means
 the same either way. -/
-def settled : Nat := 0xFFFFFFFF
-
 def Program.translated (p : Program) : Program :=
   if !Fast.compiled || !Fast.anyShift || p.error != "" || !p.tidy || (p.version != 0 && p.version != 3) then
     { p with uses := settled }
