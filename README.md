@@ -471,6 +471,31 @@ A check takes about 19 ms. The report of [`tests/bls.lean`](tests/bls.lean) (poi
 
 **What is still missing.** Feature activations (they happen only at a turn; none was pending); which features are on is taken to be what mainnet has today (the vote program and the memory model depend on several); and the log of changes only grows (8.5 GB over the first 170,000 slots), so a store wants reloading from a snapshot now and then.
 
+## Speak to validators
+
+Validators send each other their votes as QUIC datagrams, inside connections opened by a TLS 1.3 handshake in which each side shows a certificate around its identity key and signs the handshake with it. Nothing else is accepted on that port, so a node that is to vote needs both protocols, and this one writes them itself, in 1,100 lines:
+
+| | |
+|---|---|
+| [`lib/Crypto/Hkdf.lean`](lib/Crypto/Hkdf.lean), [`Aes.lean`](lib/Crypto/Aes.lean), [`X25519.lean`](lib/Crypto/X25519.lean) | keys out of secrets (HMAC, HKDF), AES-128 with GCM, and the key agreement, on the field Ed25519 already had |
+| [`lib/Net/Tls.lean`](lib/Net/Tls.lean) | the handshake, both sides: one cipher suite, one group, one kind of signature, which is what validators use with each other |
+| [`lib/Net/Quic.lean`](lib/Net/Quic.lean) | packets and their protection at three levels, acknowledgements, the handshake's bytes in order, datagrams; no streams. A connection is a value: a datagram goes in, the connection and the datagrams to send come out |
+
+```console
+$ ./build/leansol quic 208.115.249.134:8003
+to 208.115.249.134:8003 as 8zvjcYnANdc9vndpypYSGPk8EsGEb9jUY3Tajazfa1kX, speaking solana-tpu
+  0 ms: keys agreed
+  0 ms: the handshake is complete; the other side is 3EiyHzKas9r2yuos1fpELNgWoGKwbGv7ezUEg4mgpT6T
+  27 ms: and it has confirmed it
+  closed
+```
+
+That is a mainnet validator, at the port where it takes transactions (which anyone may connect to), and the identity it proved is the one the cluster knows it by. The same handshake completes with Agave, Jito and the clients built on them; a few endpoints do not answer at all, which is not looked into yet.
+
+[`tests/quic.lean`](tests/quic.lean) checks the ciphers on published values (the RFCs' and NIST's) and then has two ends of a connection talk in memory: the handshake, datagrams both ways, a packet repeated or changed (dropped), a server that speaks another protocol (refused, and told so), and lost datagrams sent again.
+
+**Limits.** The accepting side has only met this file's own connecting side, not yet the library validators use. Connections are not yet kept alive, their keys are not renewed, a connection id is never retired, and loss is handled only during the handshake. The votes themselves, and the rules for casting them, are the next piece: see [Limits and roadmap](#limits-and-roadmap).
+
 ## Run on-chain programs
 
 Solana programs are sBPF bytecode (versions 0 to 3). `leansol run` loads one and executes it in a virtual machine written in Lean: the loader, the interpreter, a translator to machine code for programs that run often, the memory map, the system calls, the compute-unit meter, and the runtime's rules for accounts and for programs calling other programs.
@@ -995,6 +1020,7 @@ ok    ipc (native only)
 ok    jit (official Lean agrees)
 ok    memory (official Lean agrees)
 ok    panic (aborted with a bounds panic, as it must)
+ok    quic (official Lean agrees)
 ok    sbpf (official Lean agrees)
 ok    schedule (official Lean agrees)
 ok    semantics (official Lean agrees)
@@ -1010,7 +1036,7 @@ ok    versions (official Lean agrees)
 ok    vote (official Lean agrees)
 ok    zkproof (official Lean agrees)
 ok    zstd (official Lean agrees)
-35 passed, 0 failed
+36 passed, 0 failed
 ```
 
 The tests not marked "official Lean agrees" either use raw syscalls (`fork`, futexes), which exist only as machine code, or check behaviour specific to `leanc` (aborting on a bounds error, in-place updates).
@@ -1023,7 +1049,7 @@ Measured on one machine (Xeon Gold 5515+), single core unless noted. They are he
 |---|---|
 | `leanc` source | about 6,400 lines of C |
 | `leanc` binary | 166 KB, static, zero undefined symbols |
-| Lean in this repo | 21,050 lines: runtime 814, libraries 15,150, client 5,090 |
+| Lean in this repo | 22,200 lines: runtime 814, libraries 16,190, client 5,190 |
 | Compiling the whole client | **about 0.1 s** |
 | `leansol` binary | **1.2 MB**, static |
 | Full build from a fresh clone | about 0.1 s |
@@ -1066,7 +1092,8 @@ lib/
   Crypto/           SHA-256, SHA-512, Ed25519 (field, curve, scalars, sign, verify) and Ristretto, Reed–Solomon,
                     BLAKE3, ChaCha20 as a random number generator, Keccak-256, secp256k1 key recovery,
                     Montgomery arithmetic, Poseidon, alt_bn128 (BN254) with its pairing, P-256 signatures, SipHash,
-                    BLS12-381 with its pairing and the signatures that add up, Merlin transcripts
+                    BLS12-381 with its pairing and the signatures that add up, Merlin transcripts,
+                    HMAC and HKDF, AES-128-GCM, X25519
   Solana/           wire formats, all CRDS record layouts, gossip messages, hash tables,
                     the sBPF virtual machine (SbpfBase: loading, memory, accounts; Native: the
                     built-in programs; Sbpf: the interpreter; Jit: programs as x86-64), transactions, and the bank,
@@ -1075,7 +1102,7 @@ lib/
                     the leader schedule, the footer's certificates, their check, and what they do to vote accounts,
                     the end of an epoch (stakes, rewards, the next epoch's budget),
                     the proofs of the ZK ElGamal proof program
-  Net/              IPv4 helpers and a DNS stub resolver
+  Net/              IPv4 helpers, a DNS stub resolver, the TLS 1.3 handshake and QUIC connections
   Encoding/         hex, Base58, Base64, Zstandard decompression, tar
 client/           the tiles, the dashboard, the JSON/Prometheus export, main
 web/              the public site for a running node (static page + one proxy function)
@@ -1098,7 +1125,7 @@ lakefile.toml     lets the official toolchain check all of the above
 
 Being straightforward about what this is:
 
-- **Not a voting validator.** It verifies gossip; it receives and verifies every block; it holds mainnet's state as of a snapshot, verified account by account; and from there it [executes the chain](#execute-the-chain), block by block, to the bank hashes mainnet's leaders signed, through the turn of an epoch. It does not vote and does not produce blocks: it now checks the validators' BLS signatures, but voting needs it to make them: the consensus messages, the ability to execute a block before it is final (and to undo it), and a vote account with stake behind it.
+- **Not a voting validator.** It verifies gossip; it receives and verifies every block; it holds mainnet's state as of a snapshot, verified account by account; and from there it [executes the chain](#execute-the-chain), block by block, to the bank hashes mainnet's leaders signed, through the turn of an epoch. It does not vote and does not produce blocks: it checks the validators' BLS signatures and can now [open the kind of connection they vote over](#speak-to-validators), but voting needs the votes themselves and the rules for casting them, the ability to execute a block before it is final (and to undo it), and a vote account with stake behind it.
 - **It stops when it does not know.** Mainnet uses things no test set holds: a dozen of them stopped the executor in its first 47,000 blocks, five more in the next 250,000, and there will be more (feature activations are not followed). It stops at the first bank hash that differs, with the state as last saved, rather than carry on wrong.
 - **The executor is not part of the node yet.** The node saves verified blocks (`--spool`) and the executor is a second process reading them. It does not notice a transaction that was already processed, and its log of changes only grows.
 - **Translated programs are kept.** A program's machine code stays in memory for as long as the process runs: about 35 bytes for each sBPF instruction, more than half a gigabyte over 600 blocks. Nothing is evicted yet.
@@ -1108,7 +1135,7 @@ Being straightforward about what this is:
 - **The compiler is not self-hosted.** Its source is C. Nothing in the build uses a C toolchain, because a prebuilt compiler is checked in, but changing the compiler does.
 - **A subset of Lean.** No type classes or higher-order functions is a real restriction; the libraries here are written around it.
 - **`Nat` is 64 bits** (overflow traps rather than wraps; see above).
-- **Young code.** The compiler has been exercised by about 21,050 lines of Lean and the test suite, not by years of users. The Ed25519 implementation is variable-time, which is fine for verifying public data and not what you want around long-lived secret keys.
+- **Young code.** The compiler has been exercised by about 22,200 lines of Lean and the test suite, not by years of users. The Ed25519 implementation is variable-time, which is fine for verifying public data and not what you want around long-lived secret keys.
 - **The network moves.** Wire formats follow agave's current gossip code; when the protocol changes, this needs to follow.
 
 ## How this relates to lean-svm

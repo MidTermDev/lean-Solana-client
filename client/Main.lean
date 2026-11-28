@@ -9,6 +9,7 @@ import RunTx
 import RunBlock
 import RunSnapshot
 import RunReplay
+import RunQuic
 import Solana.LeaderSchedule
 import BlockTile
 import TurbineTile
@@ -62,7 +63,9 @@ def usage : String :=
   "       leansol account ADDRESS            look an account up in the loaded state\n" ++
   "                                          (see `leansol snapshot --help`)\n" ++
   "       leansol replay [options]           execute blocks against the loaded state and compare\n" ++
-  "                                          bank hashes (see `leansol replay --help`)\n"
+  "                                          bank hashes (see `leansol replay --help`)\n" ++
+  "       leansol quic IP:PORT [PROTOCOL]    open the kind of connection validators vote over,\n" ++
+  "                                          and say who answered\n"
 
 def die (msg : String) : IO Unit := do
   IO.eprintln s!"leansol: {msg}"
@@ -158,6 +161,9 @@ def main : IO Unit := do
     return
   if argc >= 2 && (← Sys.arg 1) == "snapshot" then
     RunSnapshot.main
+    return
+  if argc >= 2 && (← Sys.arg 1) == "quic" then
+    RunQuic.main
     return
   if argc >= 2 && (← Sys.arg 1) == "account" then
     RunSnapshot.account

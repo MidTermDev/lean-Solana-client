@@ -1,0 +1,29 @@
+hmac          f7bc83f430538424b13298e6aa6fb143ef4d59a14946175997479dbc2d1a3cd8
+hkdf extract  077709362c2e32df0ddc3f0dc47bba6390b6c73bb50f9c3122ec844ad7c2b3e5
+hkdf expand   3cb25f25faacd57a90434f64d0362f2a2d2d0a90cf1a5a4c5db02d56ecc4c5bf
+aes block     69c4e0d86a7b0430d8cdb78070b4c55a
+gcm sealed    42831ec2217774244b7221b784d0d49ce3aa212f2c02a4e035c17e2329aca12e21d514b25466931c7d8f6a5aac84aa051ba30b396a0aac973d58e0915bc94fbc3221a5db94fae95ae7121a47
+gcm opens: true; with a bit of the text changed: false; of what it vouches for: false
+x25519        c3da55379de9c6908e94ea4df28d084f32eccf03491c71f754b4075577a28552
+two sides agree on 4a5d9d5ba4ce2de1728e3bf480350f25e07e21c947d19e3376f09b3c1e161742: true
+a first packet's keys: key 1f369613dd76d5467730efcbe3b1a22d, iv fa044b2f42a3fd3b46fb255c
+numbers of variable length: 257bbd9d7f3e7dc2197c5eff14e88c, read back 494878333
+numbers received 0 1 2 5 6 9, then 4:  9-9 4-6 0-2
+client BbbDCCevWcozFPwNHkPhjufNuiMLJAJ28djaLmDFnfUH, server CD67t53NkV5L1svLofaLKREHYtMVgLPJ41U5xTSKSjX1
+a certificate: 249 bytes (da77293da6f6d2ed), and the key in it is the client's: true
+the client's first datagram: 1201 bytes (1b02d1a2291dc340)
+the server answers: 1200 bytes (2edda34bbdd443d5); keys agreed: true
+the client answers: 424 bytes (190bdb2c0715504d); its handshake is complete: true; the server is who it should be: true
+the server answers: 82 bytes (e8f82c7d2a45def7); complete: true; the client is who it should be: true
+the client answers: 34 bytes (89ba23b99b6b4439); the server has confirmed: true
+the server answers: nothing
+a datagram to the server: 42 bytes; it has 1: a vote
+one back: the client has 1: another
+the same packet again: the server has 1
+a packet with a bit changed: the server has 1; as sent: 2
+a ping is answered: 36 bytes (486b5d2b3cd2aeea)
+the client closes: true, closed by the other side, code 0: 
+a server that speaks something else: the client offers no cipher, group or protocol spoken here; 50 bytes (49b024d34e797829)
+a datagram that opens nothing: false
+the first datagram lost and sent again: 1201 bytes (2c333031fdc8df85); then the handshake completes: true
+the server's answer lost and sent again: 1200 bytes (e41a5e0a2c441de4); then the handshake completes: true

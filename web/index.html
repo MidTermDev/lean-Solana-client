@@ -462,6 +462,7 @@ account   vaultB   data 5a60e8a6…   <i>(changed)</i></pre>
                 <li><b>Executing the chain</b>From a fresh snapshot, block after block: 23,700 in a row between two stops, state saved as it goes, missing blocks fetched from validators.</li>
                 <li><b>The turn of an epoch</b>Mainnet's epoch 1099: stakes, rewards to a million accounts over 522 blocks, and a budget computed in doubles made of integers. Every hash matched.</li>
                 <li><b>Certificates checked</b>BLS12-381 in 600 lines of Lean: a block is executed only when a certificate signed by enough of the stake says it is final. 19 ms a check, and the same answers as the validators' own library.</li>
+                <li><b>Speaking to validators</b>TLS 1.3 and QUIC in 1,100 lines of Lean: the connection validators vote over, opened with mainnet's own and each side's identity proven. The first piece of voting.</li>
                 <li><b>Vote accounts and the new memory model</b>The vote program as mainnet runs it, BLS proofs of possession included, and accounts mapped into a program's memory the way validators now do. 116 transactions, line for line the same as Agave's.</li>
                 <li><b>Confidential transfers</b>The proof program behind encrypted token balances, all twelve kinds of proof up to Bulletproofs, in 360 lines. Line for line the same as Agave's on 65 transactions.</li>
               </ul>
