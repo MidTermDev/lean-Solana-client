@@ -1706,6 +1706,7 @@ name = "oracle-next"
 version = "0.1.0"
 dependencies = [
  "agave-feature-set",
+ "blst",
  "blstrs",
  "bytemuck",
  "curve25519-dalek 4.1.3",

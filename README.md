@@ -490,7 +490,19 @@ to 208.115.249.134:8003 as 8zvjcYnANdc9vndpypYSGPk8EsGEb9jUY3Tajazfa1kX, speakin
   closed
 ```
 
-That is a mainnet validator, at the port where it takes transactions (which anyone may connect to), and the identity it proved is the one the cluster knows it by. The same handshake completes with Agave, Jito and the clients built on them; a few endpoints do not answer at all, which is not looked into yet.
+That is a mainnet validator, at the port where it takes transactions (which anyone may connect to), and the identity it proved is the one the cluster knows it by. The same handshake completes with Agave, Jito and the clients built on them; Firedancer's endpoints do not answer at all, which is not looked into yet.
+
+Where a validator takes votes is in its gossip record, and the node now keeps it (`"votes"` in `/nodes.json`: 2,400 nodes name one). There the handshake completes just the same, with the other protocol name, and then the validator closes the connection with its own code for the reason:
+
+```console
+$ ./build/leansol quic 94.31.53.9:8011 alpenglow-v1
+to 94.31.53.9:8011 as CPCEQYLRTvpFbHyPp3e9nymVrP74TGEUZmAgF9YiomzV, speaking alpenglow-v1
+  100 ms: the handshake is complete; the other side is BuH1zaHCo3Qvn4PyPJzGTtYmeomxehNDh66wfkiZc499
+  244 ms: and it has confirmed it
+  closed by the other side, code 3 (application): NOT_ADMITTED
+```
+
+Votes are exchanged among the validators admitted to the epoch and nobody else. Admission is a matter of a vote account, a BLS key and stake; the key is derived from the node's identity key by a fixed recipe ([`Alpenglow.blsSecret`](lib/Solana/Alpenglow.lean)), and the validators' own BLS library derives the same key and the same proof of holding it ([`tests/bls.lean`](tests/bls.lean)).
 
 [`tests/quic.lean`](tests/quic.lean) checks the ciphers on published values (the RFCs' and NIST's) and then has two ends of a connection talk in memory: the handshake, datagrams both ways, a packet repeated or changed (dropped), a server that speaks another protocol (refused, and told so), and lost datagrams sent again.
 

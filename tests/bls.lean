@@ -1,5 +1,6 @@
 import Solana.Alpenglow
 import Encoding.Hex
+import Encoding.Base58
 
 /-! The BLS12-381 curve and the certificates built on it: points and their
 compressed forms, the point a message hashes to, signatures by four keys
@@ -113,3 +114,13 @@ def main : IO Unit := do
   let stray := (mapToCurve ⟨small 5, small 6⟩).toBytes true
   IO.println s!"a point outside the group: {hex stray}"
   IO.println s!"read as a signature: {reading stray} (it is on the curve: {onTwist (mapToCurve ⟨small 5, small 6⟩)}); a byte of a good one changed: {reading ((sumOf blockVotes all).set! 95 0)}"
+
+  -- a validator's BLS key is derived from its identity key; with it goes a proof that its holder has the secret
+  let seed := Sha256.hash "a validator".toUTF8
+  let identity := Ed25519.publicKey seed
+  let secret := Alpenglow.blsSecret seed identity
+  let blsKey := (generator.scale secret).toBytes false
+  let proof := ((hashToCurve ("ALPENGLOW".toUTF8 ++ identity ++ blsKey) Alpenglow.proofDomain).scale secret).toBytes true
+  IO.println s!"the BLS key of identity {Base58.encode identity}: {hex blsKey}"
+  IO.println s!"its proof of holding it, for a vote account at that address: {hex proof}"
+  IO.println s!"which holds: {Alpenglow.possessed identity blsKey proof}; for another account: {Alpenglow.possessed seed blsKey proof}"

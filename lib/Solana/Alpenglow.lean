@@ -1,6 +1,8 @@
 import Solana.Snapshot
 import Solana.LeaderSchedule
 import Crypto.Bls12381
+import Crypto.Hkdf
+import Crypto.Ed25519
 
 /-!
 # What a block's footer does to the vote accounts
@@ -347,6 +349,22 @@ def votersWith (voters : ByteArray) (low epoch : UInt64) (key : ByteArray) : Byt
     out := Wire.putU64 out epoch ++ key
     count := count + 1
   return Wire.putU64 (ByteArray.emptyWithCapacity (out.size + 8)) count ++ out
+
+/-- A validator's BLS secret, which it derives from its identity key so that there is one key to keep:
+the identity signs a fixed message, and the signature is stretched into a number below the groups'
+order the way the BLS standard generates keys (HKDF over a salt hashed until the number is not zero). -/
+def blsSecret (seed identity : ByteArray) : Array UInt64 := Id.run do
+  let material := (Ed25519.sign seed identity "bls-key-derive-alpenglow".toUTF8).push 0
+  let info := (ByteArray.empty.push 0).push 48
+  let mut salt := "BLS-SIG-KEYGEN-SALT-".toUTF8
+  let mut secret : Array UInt64 := Array.replicate 4 0
+  for _ in [0:8] do
+    if secret[0]! ||| secret[1]! ||| secret[2]! ||| secret[3]! == 0 then
+      salt := Sha256.hash salt
+      let key := Hkdf.extract salt material
+      let first := Hkdf.hmac key (info.push 1)
+      secret := Bls12381.scalarOf (first ++ (Hkdf.hmac key ((first ++ info).push 2)).extract 0 16)
+  return secret
 
 def proofDomain : ByteArray := "BLS_POP_BLS12381G2_XMD:SHA-256_SSWU_RO_POP_".toUTF8
 

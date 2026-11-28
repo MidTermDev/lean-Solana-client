@@ -92,6 +92,8 @@ structure Contact where
   tvu : UInt64
   /-- its JSON-RPC port, which also serves its snapshots over HTTP (`ip <<< 16 ||| port`, or 0) -/
   rpc : UInt64
+  /-- where it takes other validators' votes, over QUIC (`ip <<< 16 ||| port`, or 0) -/
+  votes : UInt64
   deriving Inhabited
 
 /-- Decodes the `ContactInfo` whose public key starts at `p`. `stop` is
@@ -140,6 +142,7 @@ def parseContact (b : ByteArray) (p : Nat) : Contact := Id.run do
   let mut repair : UInt64 := 0
   let mut tvu : UInt64 := 0
   let mut rpc : UInt64 := 0
+  let mut votes : UInt64 := 0
   for _ in [0:nsock.toNat] do
     let key := u8 b q
     let idx := (u8 b (q + 1)).toNat
@@ -157,6 +160,9 @@ def parseContact (b : ByteArray) (p : Nat) : Contact := Id.run do
     -- socket 2 is the RPC port (TCP)
     if key == 2 && idx < ips.size && ok q then
       rpc := (ips[idx]!.toUInt64 <<< 16) ||| port
+    -- socket 13 is where votes are exchanged (QUIC)
+    if key == 13 && idx < ips.size && ok q then
+      votes := (ips[idx]!.toUInt64 <<< 16) ||| port
   -- extensions: (type, length, bytes)
   let next := varint b q
   q := skipVarint b q
@@ -167,7 +173,7 @@ def parseContact (b : ByteArray) (p : Nat) : Contact := Id.run do
     let len := varint b q
     q := skipVarint b q
     q := skipN b q len 1
-  return ⟨q, wallclock, shred, major, minor, patch, client, gossipIp, gossipPort, repair, tvu, rpc⟩
+  return ⟨q, wallclock, shred, major, minor, patch, client, gossipIp, gossipPort, repair, tvu, rpc, votes⟩
 
 /-- Offset one past the record of the given kind whose body starts at `p`. -/
 def stopOf (b : ByteArray) (kind p : Nat) : Nat := Id.run do

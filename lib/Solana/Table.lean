@@ -60,7 +60,7 @@ structure Nodes where
 
 namespace Nodes
 
-def fields : Nat := 14
+def fields : Nat := 15
 def fWallclock : Nat := 0
 def fVersion : Nat := 1
 def fClient : Nat := 2
@@ -76,6 +76,8 @@ def fRpc : Nat := 8
 /-- The newest full snapshot the node announces: its slot, and its hash in the four words that follow. -/
 def fFullSlot : Nat := 9
 def fFullHash : Nat := 10
+/-- where the node takes other validators' votes, packed like the other addresses -/
+def fVotes : Nat := 14
 
 def notFound : Nat := 0xFFFFFFFF
 

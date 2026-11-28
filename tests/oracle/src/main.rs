@@ -771,6 +771,19 @@ mod bls {
             bool::from(G2Affine::from_compressed_unchecked(&stray).is_some()),
             reading(&changed)
         );
+
+        // a validator's BLS key is derived from its identity key; with it goes a proof that its holder has the secret
+        use {super::{hash, Keypair, Signer}, blst::min_pk::SecretKey};
+        const PROOF: &[u8] = b"BLS_POP_BLS12381G2_XMD:SHA-256_SSWU_RO_POP_";
+        let identity = Keypair::new_from_array(hash("a validator"));
+        let secret = SecretKey::key_gen(identity.sign_message(b"bls-key-derive-alpenglow").as_ref(), &[]).unwrap();
+        let key = secret.sk_to_pk();
+        let said = |account: &[u8]| [b"ALPENGLOW".as_ref(), account, &key.compress()].concat();
+        let proof = secret.sign(&said(identity.pubkey().as_ref()), PROOF, &[]);
+        let holds = |account: &[u8]| proof.verify(true, &said(account), PROOF, &[], &key, true) == blst::BLST_ERROR::BLST_SUCCESS;
+        println!("the BLS key of identity {}: {}", identity.pubkey(), hex(&key.compress()));
+        println!("its proof of holding it, for a vote account at that address: {}", hex(&proof.compress()));
+        println!("which holds: {}; for another account: {}", holds(identity.pubkey().as_ref()), holds(&hash("a validator")));
     }
 }
 

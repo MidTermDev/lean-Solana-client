@@ -26,3 +26,6 @@ a rank that does not exist: 0; nobody: 0
 another shred version: false; no validators known: false
 a point outside the group: 81f9dfd3ee5e608fb85f55642c3d3bed4a69b88bd8296f97c4f48490502da3719c936021975dd7199150f08428f250040cf2ef94da514517fe35d5f02fca8414a72d7007b0718e145f4a4805b35323086d2b5a06ab56eb1d89567961edbd7091
 read as a signature: rejected (it is on the curve: true); a byte of a good one changed: rejected
+the BLS key of identity BbbDCCevWcozFPwNHkPhjufNuiMLJAJ28djaLmDFnfUH: 90e2b9d11fba2ee01058529adccccddc9a1c4276359afafac526b2e848b47fb13289d2a660e6d014ca8095ac1e356cfb
+its proof of holding it, for a vote account at that address: 96ceb9aebcbff5239db3bf08774b6185646c94c6f453e0362ec4b492c8495e36948c32729dd7dc16ea57b71e9092274d01201956caec93263f769faf0fc7618458703d4d892749869599c77a7baa739b6b6c986560c0ff4d749d23a338cfa286
+which holds: true; for another account: false

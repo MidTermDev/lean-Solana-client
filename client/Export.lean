@@ -150,6 +150,8 @@ def json (sh : Shared) (cfg : Config) (withNodes : Bool) : IO String := do
       s := s ++ s!"\"wallclockMs\": {snap.field row Nodes.fWallclock}, "
       let rpc := snap.field row Nodes.fRpc
       s := s ++ (if rpc == 0 then "\"rpc\": null, " else s!"\"rpc\": \"{Ip.toString (addrIp rpc)}:{addrPort rpc}\", ")
+      let votes := snap.field row Nodes.fVotes
+      s := s ++ (if votes == 0 then "\"votes\": null, " else s!"\"votes\": \"{Ip.toString (addrIp votes)}:{addrPort votes}\", ")
       -- the full snapshot the node announces: a snapshot is named after its slot and this hash
       let full := snap.field row Nodes.fFullSlot
       if full != 0 then

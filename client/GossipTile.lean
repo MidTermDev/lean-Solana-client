@@ -87,6 +87,7 @@ def ingest (st : State) (v : ByteArray) : State := Id.run do
         nodes := nodes.set row Nodes.fRepair c.repair
         nodes := nodes.set row Nodes.fTvu c.tvu
         nodes := nodes.set row Nodes.fRpc c.rpc
+        nodes := nodes.set row Nodes.fVotes c.votes
   else if info.kind == Crds.kindSnapshotHashes then
     let slot := Crds.snapshotSlot v info.body
     let (ns, row) := rowFor nodes v info.origin

@@ -402,6 +402,27 @@ end Point
 /-- The order of both groups: a point of either, times this, is nothing. -/
 def order : Array UInt64 := #[0xffffffff00000001, 0x53bda402fffe5bfe, 0x3339d80809a1d805, 0x73eda753299d7d48]
 
+/-- The number written in `bytes`, most significant first, modulo the groups' order: four words, least significant first. -/
+def scalarOf (bytes : ByteArray) : Array UInt64 := Id.run do
+  let mut a : Array UInt64 := Array.replicate 4 0
+  for i in [0:8 * bytes.size] do
+    -- twice it, plus the next bit; less the order if it has reached it (it stays below twice the order, which fits)
+    let bit := ((bytes[i / 8]! >>> (7 - i % 8).toUInt8) &&& 1).toUInt64
+    a := #[(a[0]! <<< 1) ||| bit, (a[1]! <<< 1) ||| (a[0]! >>> 63), (a[2]! <<< 1) ||| (a[1]! >>> 63), (a[3]! <<< 1) ||| (a[2]! >>> 63)]
+    let mut reached := true
+    for k in [0:4] do
+      if a[3 - k]! != order[3 - k]! then
+        reached := a[3 - k]! > order[3 - k]!
+        break
+    if reached then
+      let mut borrow : UInt64 := 0
+      let mut out : Array UInt64 := Array.emptyWithCapacity 4
+      for k in [0:4] do
+        out := out.push (a[k]! - order[k]! - borrow)
+        borrow := if a[k]! < order[k]! || (a[k]! == order[k]! && borrow == 1) then 1 else 0
+      a := out
+  return a
+
 /-- The generator of the plain curve's group. -/
 def generator : Point :=
   match Point.ofBytes (Hex.decode "97f1d3a73197d7942695638c4fa9ac0fc3688c4f9774b905a14e3a3f171bac586c55e83ff97a1aeffb3af00adb22c6bb") with
