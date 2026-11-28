@@ -292,9 +292,10 @@ def skipped (waiting : Array Waiting) (slot : UInt64) : Bool := Id.run do
 /-- Which block to execute after `slot`'s: the one built on it that leads to a block some footer calls
 final, so that nothing executed ever has to be undone. Only footers whose certificates are `proven`
 (or only those not checked yet) are listened to, the latest first, and the blocks are followed back by
-their ids. Returns the block's position in `waiting` and that of the footer, or `Sbpf.notFound` and the
-slot of a block that is needed to tell (0 if none is known to be). -/
-def next (waiting : Array Waiting) (slot : UInt64) (proven : Bool) : Nat × Nat × UInt64 := Id.run do
+their ids, down to `id`, that of `slot`'s block (empty if not known). Returns the block's position in
+`waiting` and that of the footer, or `Sbpf.notFound` and the slot of a block that is needed to tell (0
+if none is known to be). -/
+def next (waiting : Array Waiting) (slot : UInt64) (id : ByteArray) (proven : Bool) : Nat × Nat × UInt64 := Id.run do
   let mut found := Sbpf.notFound
   let mut via := Sbpf.notFound
   let mut missing : UInt64 := 0
@@ -303,20 +304,21 @@ def next (waiting : Array Waiting) (slot : UInt64) (proven : Bool) : Nat × Nat 
     if w.proven == proven && (via == Sbpf.notFound || w.slot > waiting[via]!.slot) then
       -- from the block the footer calls final, back from parent to parent
       let mut s := w.final.finalSlot
-      let mut id := w.final.finalBlock
+      let mut wanted := w.final.finalBlock
       for _ in [0:waiting.size] do
         if s > slot then
           let k := waitingAt waiting s
-          if k == Sbpf.notFound || waiting[k]!.id != id then
+          if k == Sbpf.notFound || waiting[k]!.id != wanted then
             if missing == 0 || s < missing then
               missing := s
             s := 0
           else if waiting[k]!.parent == slot then
-            found := k
-            via := j
+            if id.size == 0 || waiting[k]!.block.parentId == id then
+              found := k
+              via := j
             s := 0
           else
-            id := waiting[k]!.block.parentId
+            wanted := waiting[k]!.block.parentId
             s := waiting[k]!.parent
   return (found, via, missing)
 
@@ -873,6 +875,8 @@ def main : IO Unit := do
   let mut rankedEpoch : UInt64 := 0
   let mut signers : Alpenglow.Signers := Alpenglow.signers 0 (Array.emptyWithCapacity 0)
   let mut certified := 0
+  -- the id of the block last executed, once one has been
+  let mut lastId := ByteArray.empty
   repeat
     if (count != 0 && n == count) || (until_ != 0 && slot >= until_) then
       break
@@ -885,14 +889,14 @@ def main : IO Unit := do
           let w ← savedBlock blocksDir (slot + s.toUInt64)
           if w.block.error == "" then
             waiting := waiting.push w
-      let (found, _, known) := next waiting slot true
+      let (found, _, known) := next waiting slot lastId true
       if found == Sbpf.notFound && waitingAt waiting known != Sbpf.notFound then
         fail s!"the block held for slot {known} is not the one the chain made final: their ids differ"
       chosen := found
       let mut missing := known
       if chosen == Sbpf.notFound then
         -- no footer already checked leads on: the latest that would is checked, and dropped if it does not hold
-        let (unproven, via, more) := next waiting slot false
+        let (unproven, via, more) := next waiting slot lastId false
         if missing == 0 then
           missing := more
         if via != Sbpf.notFound then
@@ -941,6 +945,7 @@ def main : IO Unit := do
           fail s!"slot {w.slot}: its certificate that slot {w.final.finalSlot} is final does not hold"
     let parent := slot
     slot := waiting[chosen]!.slot
+    lastId := waiting[chosen]!.id
     let block := waiting[chosen]!.block
     let mut later : Array Waiting := Array.emptyWithCapacity 256
     for w in waiting do

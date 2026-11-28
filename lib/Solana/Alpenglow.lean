@@ -188,7 +188,8 @@ def signedStake (s : Signers) (bitmap signature message : ByteArray) : UInt64 :=
   let mut count := 0
   for rank in [0:bits] do
     if named bitmap rank then
-      if rank >= s.keys.size then
+      -- (a rank nobody has, or whose key is no point)
+      if rank >= s.keys.size || s.keys[rank]!.isInfinity then
         return 0
       count := count + 1
   let most := 2 * count > s.keys.size
