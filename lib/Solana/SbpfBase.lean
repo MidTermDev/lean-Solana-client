@@ -863,6 +863,9 @@ def ruleReadOnly : String := "an account that was not passed as writable was mod
 def ruleData : String := "the data of an account the program does not own was modified"
 def ruleOwner : String := "the owner of an account was changed by a program that may not reassign it"
 
+/-- Is every byte zero? (An account changes owner only with data that is.) -/
+def zeroed (b : ByteArray) : Bool := Fast.zeroRun b 0 b.size == b.size
+
 /-- Why `program` may not turn `old` into the given balance, owner and data,
 or `""` if it may. These are the runtime's ownership rules, checked in the
 order Agave checks them: balance, then data, then owner. -/
@@ -877,7 +880,7 @@ def changeError (program : ByteArray) (mayWrite : Bool) (old : Account) (lamport
   else if lamports != old.lamports && !mayWrite then ruleReadOnlyBalance
   else if dataChanged && !mayWrite then ruleReadOnly
   else if dataChanged && !owns then ruleData
-  else if ownerChanged && (!owns || !mayWrite) then ruleOwner
+  else if ownerChanged && (!owns || !mayWrite || !(zeroed data)) then ruleOwner
   else ""
 
 -- ----------------------------------------------- program-derived addresses

@@ -65,7 +65,7 @@ def assignOwner (st : State) (target : Meta) (owner : ByteArray) : State :=
   let account := st.accounts[target.index]!
   if account.owner == owner then st
   else if !target.signer then programError st 8
-  else if account.owner != systemProgram || !target.writable then st.stop accountRule ruleOwner
+  else if account.owner != systemProgram || !target.writable || !(zeroed account.data) then st.stop accountRule ruleOwner
   else { st with accounts := st.accounts.set! target.index { account with owner := owner } }
 
 /-- The system program's `transfer`: lamports from a signing, data-less, system-owned account to any
