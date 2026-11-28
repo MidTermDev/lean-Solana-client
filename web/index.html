@@ -242,7 +242,7 @@
     </div>
 
     <div class="facts">
-      <div class="fact"><strong>1.1 MB</strong><span>the whole client, one static binary</span></div>
+      <div class="fact"><strong>1.2 MB</strong><span>the whole client, one static binary</span></div>
       <div class="fact"><strong>40 ms</strong><span>to build it from source</span></div>
       <div class="fact"><strong>0</strong><span>dependencies to build or run</span></div>
       <div class="fact"><strong id="f-uptime">—</strong><span>this node's uptime</span></div>
@@ -392,6 +392,8 @@ account   vaultB   data 5a60e8a6…   <i>(changed)</i></pre>
             <div class="def"><h3>Holds mainnet's state</h3><p>Streams a snapshot from a validator, files all 1.2 billion accounts in a store, and checks them against the lattice hash the snapshot is named after and the supply it records.</p></div>
             <div class="def"><h3>Knows whose slot it is</h3><p>Computes the leader schedule from the stakes in the snapshot, as every validator does, and accepts a block only from the validator scheduled to produce it.</p></div>
             <div class="def"><h3>Replays mainnet blocks</h3><p>Executes a block's transactions against the state, applies its footer, and arrives at the bank hash the leader signed: the hash of every account on the chain.</p></div>
+            <div class="def"><h3>Executes the chain</h3><p>From a snapshot, block after block: tens of thousands in a row to the leaders' bank hashes, fetching what it lacks, saving its state as it goes, stopping at the first hash that differs.</p></div>
+            <div class="def"><h3>Turns an epoch</h3><p>Stakes warm up and cool down, 1.3 million stake accounts are paid over 522 blocks, validators are admitted, and the next epoch's budget is computed in floating point done in integers. Mainnet's epoch 1099 matched.</p></div>
             <div class="def"><h3>Runs programs as machine code</h3><p>A program that runs often is translated from sBPF into x86-64 by a translator written in Lean. The interpreter stays the definition: 1,500 random programs must come out the same both ways.</p></div>
             <div class="def"><h3>Uses vector instructions</h3><p>The compiler emits AVX-512 and the SHA instructions for operations that are defined in Lean and checked against it; the lattice hash runs BLAKE3 sixteen blocks at a time.</p></div>
             <div class="def"><h3>Enforces the account rules</h3><p>Only an owner changes an account's data or spends its lamports, read-only stays read-only, and lamports are conserved.</p></div>
@@ -412,10 +414,10 @@ account   vaultB   data 5a60e8a6…   <i>(changed)</i></pre>
         <h2>What it is not</h2>
         <div class="stack">
           <div class="defs">
-            <div class="def"><h3>Not a validator</h3><p>It does not execute blocks, vote or produce anything. It observes and verifies: gossip, every block, and state from a snapshot.</p></div>
+            <div class="def"><h3>Not a voting validator</h3><p>It verifies gossip and every block, holds the state, and executes the chain to the leaders' bank hashes. It does not vote or produce blocks: that needs BLS signatures, the consensus messages, and stake.</p></div>
             <div class="def"><h3>Listen-only</h3><p>It answers pings but does not yet serve or push records to other nodes.</p></div>
-            <div class="def"><h3>Replays from files, not live</h3><p>The node that follows the chain verifies each block but does not execute it; replay runs on blocks saved to disk, and trusts the certificates in their footers without checking the BLS signatures.</p></div>
-            <div class="def"><h3>Replay has a modest margin</h3><p>600 mainnet blocks in a row replay to the bank hashes their leaders signed, signatures checked, at 0.12 seconds a block where the chain takes 0.2. A block several times fuller than these would still be too slow, and replay runs from files rather than the live feed.</p></div>
+            <div class="def"><h3>It stops when it does not know</h3><p>Mainnet uses things no test set holds: eleven of them stopped the executor in its first 44,000 blocks. It stops at the first bank hash that differs, with its state as last saved, rather than carry on wrong. Most of the vote program is not written yet.</p></div>
+            <div class="def"><h3>The executor is a second process</h3><p>The node saves the blocks it verifies and the executor reads them; it trusts the certificates in their footers for what is final, without checking the BLS signatures. At 0.1 seconds a block it has twice the chain's pace, no more.</p></div>
             <div class="def"><h3>Nothing is sent on-chain</h3><p>Programs execute locally. The client does not build, sign or submit transactions.</p></div>
             <div class="def"><h3>x86-64 Linux</h3><p>The code generator and the system-call numbers are specific to it.</p></div>
             <div class="def"><h3>A subset of Lean</h3><p>No type classes, lambdas or polymorphism. The compiler does not check proofs; official Lean does that.</p></div>
@@ -428,7 +430,7 @@ account   vaultB   data 5a60e8a6…   <i>(changed)</i></pre>
     <section class="block" id="roadmap">
       <div class="rail">Roadmap<small>intentions, not dates</small></div>
       <div>
-        <h2>From observing the network to following the chain</h2>
+        <h2>From observing the network to executing the chain</h2>
         <p class="intro">Each step moves the client closer to checking the ledger itself instead of listening to what other nodes say about it.
           On-chain programs are written in Lean with toly's <a href="https://github.com/aeyakovenko/lean-svm">lean-svm</a>, which compiles Lean 4 to sBPF.
           This project is the other side: the node, and the machine that runs those programs.</p>
@@ -456,12 +458,16 @@ account   vaultB   data 5a60e8a6…   <i>(changed)</i></pre>
                 <li><b>Replay</b>600 mainnet blocks executed against the state: 204,532 transactions, and 600 bank hashes out of 600 equal to the leaders'.</li>
                 <li><b>At the chain's pace</b>Those 600 blocks in 123 seconds (the chain: 120), every signature checked; AVX-512 from the compiler.</li>
                 <li><b>Faster than the chain</b>The same 600 blocks in 73 seconds: programs translated from sBPF into machine code, by Lean, with the interpreter as the definition.</li>
+                <li><b>Executing the chain</b>From a fresh snapshot, block after block: 23,700 in a row between two stops, state saved as it goes, missing blocks fetched from validators.</li>
+                <li><b>The turn of an epoch</b>Mainnet's epoch 1099: stakes, rewards to a million accounts over 522 blocks, and a budget computed in doubles made of integers. Every hash matched.</li>
               </ul>
             </div>
             <div class="stage next">
               <h3><i></i>Next</h3>
               <ul>
-                <li><b>Replay from the live feed</b>Execute each block as it arrives: today 0.12 seconds a block from files, where the chain takes 0.2.</li>
+                <li><b>At the tip, and staying there</b>The executor inside the node, the rest of the vote program, feature activations, a log of changes that is trimmed.</li>
+                <li><b>BLS12-381</b>Verify the certificates that say a block is final, instead of trusting them: the first step toward voting.</li>
+                <li><b>Voting</b>Execute blocks before they are final, sign votes, and stake behind a vote account.</li>
                 <li><b>Full gossip participant</b>Serve pull requests and push records, not only listen.</li>
                 <li><b>Record ageing</b>Expire old records one by one instead of flushing the store.</li>
                 <li><b>Self-hosting</b>leanc rewritten in Lean, compiling itself.</li>
@@ -471,9 +477,7 @@ account   vaultB   data 5a60e8a6…   <i>(changed)</i></pre>
             <div class="stage">
               <h3><i></i>Later</h3>
               <ul>
-                <li><b>Repair and Turbine</b>Receive shreds and rebuild blocks.</li>
-                <li><b>Ledger verification</b>Check proof of history and block signatures.</li>
-                <li><b>Replay transactions</b>Run real blocks through the virtual machine.</li>
+                <li><b>Producing blocks</b>Lead a slot: take transactions, build the block, send its shreds.</li>
                 <li><b>Machine-checked proofs</b>Prove the wire parsers never read out of bounds.</li>
               </ul>
             </div>

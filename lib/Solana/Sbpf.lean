@@ -611,46 +611,59 @@ partial def execute (m : Machine) (st0 : State) (programId : ByteArray) (metas :
               result := 0x300000000 + aligned
               allocated := aligned + a1
         else if id == sysBn128 then
-          -- the alt_bn128 curve: a1 = add (0), multiply (2) or check pairings (3); a2, a3 the input; r4 the result
-          if a1 == 0 || a1 == 2 || a1 == 3 then
+          -- the alt_bn128 curve: a1 = add (0), multiply (2) or check pairings (3) in the first group, add (4) or
+          -- multiply (6) in the second; with 0x80, numbers are least significant byte first. a2, a3 the input; r4 the result
+          let op := a1 &&& 0x7F
+          let big := a1 < 0x80
+          if a1 < 0x100 && (op == 0 || op == 2 || op == 3 || op == 4 || op == 6) then
             let pairs := a3 / 192
-            units := units + (if a1 == 0 then 334 else if a1 == 2 then 3840
+            units := units + (if op == 0 then 334 else if op == 2 then 3840 else if op == 4 then 535 else if op == 6 then 15670
               else 36364 + 12121 * (if pairs == 0 then 0 else pairs - 1) + 85 + a3 + 32)
-            let outSize : UInt64 := if a1 == 3 then 32 else 64
+            let outSize : UInt64 := if op == 3 then 32 else if op >= 4 then 128 else 64
             let dest := writable p inputLen regs[4]! outSize
             match readBytes p mem inputLen a2 a3 with
             | none => status := accessViolation
             | some raw =>
+              -- the input's size: exact, except that most significant first the first group's may be short
+              let size := if op == 0 then 128 else if op == 2 then 96 else if op == 4 then 256 else 160
               if !(Wire.ok dest) then
                 status := accessViolation
               else if units > budget then
                 -- (nothing is computed that the budget cannot pay for)
                 pure ()
-              else if a1 == 3 then
+              else if op == 3 then
                 if raw.size % 192 != 0 then
                   result := 1
                 else
-                  let answer := Bn254.pairingCheck raw true
+                  let answer := Bn254.pairingCheck raw big
                   if answer == 2 then
                     result := 1
                   else
-                    mem := (zeros ByteArray.empty 31).push answer.toUInt8 |>.copySlice 0 mem dest 32
+                    mem := (zeros ByteArray.empty 32).set! (if big then 31 else 0) answer.toUInt8 |>.copySlice 0 mem dest 32
+              else if raw.size > size || ((op >= 4 || !big) && raw.size != size) then
+                result := 1
+              else if op >= 4 then
+                match Bn254.g2OfBytes raw 0 big (op == 6) with
+                | none => result := 1
+                | some first =>
+                  if op == 6 then
+                    mem := (Bn254.g2ToBytes (Bn254.g2Scale (Mont.ofBytes raw 128 big) first) big).copySlice 0 mem dest 128
+                  else
+                    match Bn254.g2OfBytes raw 128 big false with
+                    | none => result := 1
+                    | some second => mem := (Bn254.g2ToBytes (Bn254.g2Add first second) big).copySlice 0 mem dest 128
               else
-                let limit := if a1 == 0 then 128 else 96
-                if raw.size > limit then
-                  result := 1
-                else
-                  let input := zeros raw (limit - raw.size)
-                  match Bn254.g1OfBytes input 0 true with
-                  | none => result := 1
-                  | some first =>
-                    if a1 == 2 then
-                      let product := Bn254.g1Scale (Mont.ofBytes input 64 true) first
-                      mem := (Bn254.g1ToBytes product true).copySlice 0 mem dest 64
-                    else
-                      match Bn254.g1OfBytes input 64 true with
-                      | none => result := 1
-                      | some second => mem := (Bn254.g1ToBytes (Bn254.g1Add first second) true).copySlice 0 mem dest 64
+                let input := zeros raw (size - raw.size)
+                match Bn254.g1OfBytes input 0 big with
+                | none => result := 1
+                | some first =>
+                  if op == 2 then
+                    let product := Bn254.g1Scale (Mont.ofBytes input 64 big) first
+                    mem := (Bn254.g1ToBytes product big).copySlice 0 mem dest 64
+                  else
+                    match Bn254.g1OfBytes input 64 big with
+                    | none => result := 1
+                    | some second => mem := (Bn254.g1ToBytes (Bn254.g1Add first second) big).copySlice 0 mem dest 64
           else
             status := unsupportedSyscall
             detail := s!"operation {a1} of sol_alt_bn128_group_op is not provided"

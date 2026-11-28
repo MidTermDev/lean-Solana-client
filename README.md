@@ -52,13 +52,13 @@ And since toly then published [lean-svm](https://github.com/aeyakovenko/lean-svm
 
 All of it — SHA-256, SHA-512, Ed25519, the bloom filters, the wire formats, the hash tables, the DNS query, the terminal UI, the memory allocator underneath — is Lean, compiled to machine code by the compiler in `leanc/`.
 
-It **replays mainnet blocks** against that state and arrives at the bank hashes their leaders signed, 600 blocks out of 600 (see [Replay](#replay)); it **verifies real blocks** and follows the chain (see [Verify blocks](#verify-blocks)), **loads the chain's state** from a snapshot, checking every account (see [Hold the state](#hold-the-state)), **runs on-chain programs** locally with `leansol run`, and applies whole signed **transactions** with `leansol tx`: see [Run on-chain programs](#run-on-chain-programs).
+It **executes the chain**: from a snapshot of mainnet it runs block after block and arrives at the bank hashes their leaders signed, tens of thousands in a row, through the turn of an epoch (see [Replay](#replay) and [Execute the chain](#execute-the-chain)); it **verifies real blocks** and follows the chain (see [Verify blocks](#verify-blocks)), **loads the chain's state** from a snapshot, checking every account (see [Hold the state](#hold-the-state)), **runs on-chain programs** locally with `leansol run`, and applies whole signed **transactions** with `leansol tx`: see [Run on-chain programs](#run-on-chain-programs).
 
-**What it is not:** a validator. It does not execute the blocks it receives, vote, or produce anything. It observes and verifies. See [Limits and roadmap](#limits-and-roadmap) for exactly where the line is.
+**What it is not, yet:** a validator that votes. It executes and verifies; it does not vote or produce blocks. See [Limits and roadmap](#limits-and-roadmap) for exactly where the line is.
 
 ## Quick start
 
-**Just run it.** Every release ships the client as a single 1.1 MB static binary (Linux, x86-64):
+**Just run it.** Every release ships the client as a single 1.2 MB static binary (Linux, x86-64):
 
 ```sh
 curl -LO https://github.com/MidTermDev/lean-Solana-client/releases/latest/download/leansol-x86_64-linux
@@ -97,6 +97,7 @@ usage: leansol [options]
   --follow-tiles N    processes that assemble and verify the blocks received that way (default 6)
   --state DIR         a store loaded by `leansol snapshot`: the stakes in its manifest give the
                       leader schedule, and each block must then be signed by its slot's leader
+  --spool DIR         save every block verified that way in DIR, for `leansol replay --live` to execute
   --block-interval S  without a shred port: fetch a recent block from validators and verify it every S seconds
                       (default 5; 0 = never)
   --metrics [IP:]PORT serve Prometheus metrics at /metrics and the JSON at /nodes.json
@@ -113,7 +114,8 @@ usage: leansol [options]
        leansol account ADDRESS            look an account up in the loaded state
                                           (see `leansol snapshot --help`)
        leansol replay [options]           execute blocks against the loaded state and compare
-                                          bank hashes (see `leansol replay --help`)
+                                          bank hashes; with --live, follow the chain
+                                          (see `leansol replay --help`)
 ```
 
 Piped or redirected, it switches to log lines automatically:
@@ -395,23 +397,23 @@ Holding the state and receiving the blocks, the remaining step is to apply one t
 
 ```console
 $ ./build/leansol replay --state state --blocks blocks --count 600
-state        slot 474362232, bank hash CVT3U37SYMvWgyLEqXQA2FfmPjvcNKJeWmA9iba5viVM
-slot 474362233: 333 transactions (82 failed), 348 signatures, 12,472,797 compute units, 1394 accounts changed (654 vote accounts by the footer), fees 3693723 · 712 ms
-  bank hash  66HQiwhcu6bm8iBo9X4cqfQzAzWKGCpNXvsVvByKcU1J
-  the block's 66HQiwhcu6bm8iBo9X4cqfQzAzWKGCpNXvsVvByKcU1J  MATCH · signatures valid
-slot 474362234: 296 transactions (73 failed), 306 signatures, 9,625,365 compute units, 1313 accounts changed (654 vote accounts by the footer), fees 3327507 · 308 ms
-  bank hash  Evo4N1GPsJUdugG8ExuzC5TatWw39yVUNDnahMgkia6K
-  the block's Evo4N1GPsJUdugG8ExuzC5TatWw39yVUNDnahMgkia6K  MATCH · signatures valid
+state        slot 474737382, bank hash C93nGyi4o4x5PELvCsSGcdEoWjNe3CEG6j3B7m4whowH
+slot 474737383: 176 transactions (53 failed), 185 signatures, 7,027,157 compute units, 1124 accounts changed (654 vote accounts by the footer), fees 2406751 · 467 ms
+  bank hash  AXUjPc9sjjHJb8RTpdyGx1tq3zFX2oi9d7xCi7EUmBzR
+  the block's AXUjPc9sjjHJb8RTpdyGx1tq3zFX2oi9d7xCi7EUmBzR  MATCH · signatures valid
+slot 474737384: 221 transactions (62 failed), 253 signatures, 10,486,906 compute units, 1306 accounts changed (654 vote accounts by the footer), fees 3790758 · 487 ms
+  bank hash  6yZWUJZe1577TP5bEQqcs5EBtNE5ff4L16jmcVofNAYo
+  the block's 6yZWUJZe1577TP5bEQqcs5EBtNE5ff4L16jmcVofNAYo  MATCH · signatures valid
 ...
-slot 474362832: 250 transactions (45 failed), 281 signatures, 8,798,485 compute units, 1245 accounts changed (654 vote accounts by the footer), fees 2444356 · 81 ms
-  bank hash  HkKDErqSRg9EpKRBtKkpc5nFfhQKMpDmRzZabAdeDFt7
-  the block's HkKDErqSRg9EpKRBtKkpc5nFfhQKMpDmRzZabAdeDFt7  MATCH · signatures valid
-signatures   228,723 checked in 3 processes, 0 did not verify
+slot 474737982: 395 transactions (222 failed), 417 signatures, 11,940,463 compute units, 1279 accounts changed (654 vote accounts by the footer), fees 6692107 · 181 ms
+  bank hash  HPPue9TjkLUtRTndSwMEDFkABy3uEqj1Xn4Yujd3vAoH
+  the block's HPPue9TjkLUtRTndSwMEDFkABy3uEqj1Xn4Yujd3vAoH  MATCH · signatures valid
+signatures   179,160 checked in 3 processes, 0 did not verify
 ```
 
-Those are the 600 mainnet blocks after the snapshot, two minutes of the chain: 204,532 transactions, 7.1 billion compute units of other people's programs (Jupiter, Raydium, Orca, pump, the token programs, zero-knowledge verifiers, passkey wallets, hand-written assembly), every one of them run by a virtual machine written in Lean, and **600 bank hashes out of 600** equal to the ones mainnet's leaders signed. Each depends on the one before it, so the last one vouches for all of it: 825,698 account changes, none of them off by a lamport or a byte.
+Those are the 600 mainnet blocks after the snapshot, two minutes of the chain: 162,785 transactions, 6.3 billion compute units of other people's programs (Jupiter, Raydium, Orca, pump, the token programs, zero-knowledge verifiers, passkey wallets, hand-written assembly), every one of them run by a virtual machine written in Lean, and **600 bank hashes out of 600** equal to the ones mainnet's leaders signed. Each depends on the one before it, so the last one vouches for all of it: 788,079 account changes, none of them off by a lamport or a byte. (An earlier snapshot's 600 blocks, 204,532 transactions, matched the same way; the store has since been replaced by a newer one.)
 
-**Faster than the chain.** The 600 blocks, which the chain made in 120 seconds, replay in 73: 0.12 seconds a block, with every signature checked (228,723 of them, in three other processes, beside the execution, which does not depend on them). It was 1.2 seconds a block, signatures unchecked, when the hashes first matched. Two things took it from there. The compiler learned to keep a loop's busiest values in registers, to store into an array where it lies, and to emit **AVX-512**, with which the lattice hash runs BLAKE3 sixteen blocks at a time (see [How it works](#how-it-works)): 0.2 seconds a block, the chain's own pace. Then **programs began to run as machine code**: a program that has run a few times is translated from sBPF into x86-64 by a translator written in Lean, and the interpreter, which spends about sixty machine instructions on each of a program's, is left with what is unusual (see [Programs as machine code](#programs-as-machine-code)). Around those two: the virtual machine decodes a program once; accounts a block touches are kept in memory with what each adds to the lattice hash; an account a program did not change is recognised where it lies in the program's memory, not copied out and compared; arithmetic modulo a 256-bit prime works in 64-bit words with whole products; the pairing's last step uses the field's symmetries instead of three thousand squarings; SHA-256 is the processor's own instructions; and "is this address on the curve?", asked for every derived address, is a Jacobi symbol worked out once and remembered. The first blocks of a run are slower than the rest (the first takes most of a second) while the programs in use are translated. And the margin, though real, is not large: a block several times fuller than these would still take longer than the chain gave it.
+**Faster than the chain.** The 600 blocks, which the chain made in 120 seconds, replay in about 65: 0.11 seconds a block, with every signature checked (179,160 of them, in three other processes, beside the execution, which does not depend on them). It was 1.2 seconds a block, signatures unchecked, when the hashes first matched. Two things took it from there. The compiler learned to keep a loop's busiest values in registers, to store into an array where it lies, and to emit **AVX-512**, with which the lattice hash runs BLAKE3 sixteen blocks at a time (see [How it works](#how-it-works)): 0.2 seconds a block, the chain's own pace. Then **programs began to run as machine code**: a program that has run a few times is translated from sBPF into x86-64 by a translator written in Lean, and the interpreter, which spends about sixty machine instructions on each of a program's, is left with what is unusual (see [Programs as machine code](#programs-as-machine-code)). Around those two: the virtual machine decodes a program once; accounts a block touches are kept in memory with what each adds to the lattice hash; an account a program did not change is recognised where it lies in the program's memory, not copied out and compared; arithmetic modulo a 256-bit prime works in 64-bit words with whole products; the pairing's last step uses the field's symmetries instead of three thousand squarings; SHA-256 is the processor's own instructions; and "is this address on the curve?", asked for every derived address, is a Jacobi symbol worked out once and remembered. The first blocks of a run are slower than the rest (the first takes most of a second) while the programs in use are translated. And the margin, though real, is not large: a block several times fuller than these would still take longer than the chain gave it.
 
 What a block does, beyond its transactions, each part of which had to be exactly right for the hash to match:
 
@@ -421,11 +423,42 @@ What a block does, beyond its transactions, each part of which had to be exactly
 - **After the footer**: the blockhash joins the recent blockhashes; half of the signature fees are burned and the rest, with the priority fees, goes to whoever collects for the leader; the slot is marked in the slot history; what was sent to the incinerator is destroyed.
 - **The hash**: the lattice hash moves by exactly what changed (every changed account taken out as it was, put in as it is), and is hashed with the rest.
 
-The state is the snapshot's store, never written, and an overlay: one more shard of the same kind holding every account as the replayed blocks left it.
+The state is the snapshot's store, never written; accounts that blocks change are held in memory as they now are, and written to a log of the same kind as the store's when enough are held, each once however often it changed.
 
 How it was found, since a hash that does not match says nothing about why: a public RPC gives, for each transaction of a block, its status, fee, compute units and the balance of every account afterwards. The replay prints the same (`--lines`), and the first disagreement names the transaction. That took the first block from 9 of its first 11 transactions to 333 of 333; then the leader's fee reward matched the RPC's to the lamport; and then, with the footer applied, the hash. The same loop found everything after it, one block at a time. Two findings were not in any transaction. Programs hand the pairing check points whose top bits are set; the library Agave reads them with treats those bits as flags and ignores one of them, so this must too. And once, every transaction of a block agreed and its hash did not: that block's leader collects its fees in its own vote account, which the footer had just rewritten, and the fee deposit was putting the old version back.
 
-**What is not checked.** The BLS signatures on the footer's certificates are not verified (who voted is taken from the bitmaps), and a transaction's blockhash is checked for being recent but not for having been used before: both are things a block's producer is trusted for here, and neither changes the hash of a valid block. No epoch boundary falls within the 600 blocks, so what happens at one (rewards, new stakes) is not written yet. Blocks come from files saved by `leansol block --save`, not yet from the node that follows the chain.
+**What is not checked.** The BLS signatures on the footer's certificates are not verified (who voted is taken from the bitmaps), and a transaction's blockhash is checked for being recent but not for having been used before: both are things a block's producer is trusted for here, and neither changes the hash of a valid block.
+
+## Execute the chain
+
+Six hundred blocks are two minutes. The chain makes 400,000 a day, and somewhere in them is every instruction of every program anyone still uses. `replay --live` does not stop at a count:
+
+```console
+$ ./build/leansol replay --state state --blocks spool --live
+state        slot 474737382, bank hash C93nGyi4o4x5PELvCsSGcdEoWjNe3CEG6j3B7m4whowH
+slot 474737568: 186 blocks executed, every bank hash matching · 86 ms a block · 50097 slots behind
+...
+slot 474767941: 23213 blocks executed, every bank hash matching · 107 ms a block · 64655 slots behind
+epoch 1099: 1347124 stake accounts, 655 validators admitted; 16,261,043,772,215 lamports of commission and 45,480,186,111,817 of stake rewards, the latter to 1068508 accounts over 522 blocks; the epoch's budget is 61,809,996,919,773
+slot 474768099: 109 blocks executed, every bank hash matching · 125 ms a block · 65397 slots behind
+```
+
+- **Which block is next.** Blocks are files in a directory: a node run with `--spool` saves every block it verifies there, and the executor fetches the ones that are missing itself, from validators, with a few dozen processes (each block verified as `leansol block` verifies one). A block is executed only once a later block's footer names a final slot that leads back to it, parent by parent, so nothing executed is ever undone. Slots the chain skipped are simply not on that path.
+- **Keeping the state.** Changes stay in memory; every few minutes the changed accounts are appended to a log and a small file beside it records the slot, the bank hash, the lattice hash, the supply and where the log ends. That file is the state: a later run opens the log up to that point and goes on from there, and a process killed at any moment loses only what it had not saved. Executed blocks are deleted once the state past them is saved.
+- **Stopping.** At the first bank hash that differs, it stops: the state on disk is the last one saved, the blocks since are still there, and `--resume --lines` replays them from that state with a line per transaction, to be compared with a public RPC's record of the block. Everything below was found that way.
+
+**What mainnet used that 600 blocks had not.** Run from a snapshot, it stopped eleven times in its first 44,000 blocks, each time at something real (and once before that, at the fourth block: the snapshot lists its recent blockhashes in no order): a transaction closing a program names the program's code account itself; the **Ristretto** forms of the curve system calls (RFC 9496, in [`lib/Crypto/Ed25519.lean`](lib/Crypto/Ed25519.lean)); the **vote program**, which validators still use to withdraw from their vote accounts and to change their commission; the limit of 64 instructions a transaction, nested calls included; the system program's newest instruction, for creating an account that already holds lamports, and the loader's oldest way of making a program larger; a transfer of zero lamports from an account the system program does not own, which programs use to have balances they changed written back; a program wrongly taken for closed, which only a process that had run for an hour could show; the system call that tells a program how much stake is active, used by one transaction in thousands of blocks; and addition in the second group of the alt_bn128 curve, least significant byte first, for a zero-knowledge program. Between the eighth stop and the ninth lay 23,700 blocks.
+
+**The turn of an epoch.** Every 432,000 slots, a day, the chain settles an epoch in the first block of the next ([`lib/Solana/Epoch.lean`](lib/Solana/Epoch.lean), [`tests/epoch.lean`](tests/epoch.lean)), and all of it goes into that block's hash:
+
+- every delegated stake account (1,347,124 of them) is read; stake that was warming up or cooling down moves on by the share the cluster's history allows, in integers;
+- the validators with a BLS key, stake, and lamports enough are admitted to the epoch after (655), and each pays 0.8 SOL for it, which is burned;
+- each stake account is owed its share of what its validator earned in credits, less the validator's commission, which is paid at once; the rest (to 1,068,508 accounts) is paid over the next 522 blocks, 2,048 accounts a block, in an order set by a keyed hash (SipHash-1-3) of each address;
+- the new epoch's budget is the inflation rate times the supply times the epoch's length in years, **in double-precision floating point**, power function included. The compiler has no floating point, so [`lib/Double.lean`](lib/Double.lean) is IEEE 754 in integers: add, subtract, multiply, divide, and a power computed to 190 bits and rounded once. It agrees with the processor on thousands of random cases ([`tests/double.lean`](tests/double.lean)) and gives mainnet's budget for epoch 1099 to the lamport. The supply has to be exact for that, so every lamport burned or created is counted from the snapshot on.
+
+The first block of epoch 1099 matched the first time it ran; so did each of the 522 blocks that paid the rewards. Reading the stake accounts takes about 20 seconds, once a day.
+
+**What is still missing.** Feature activations (they happen only at a turn; none was pending); most of the vote program (authority changes, new accounts with their proofs of possession); the log of changes only grows (about 40 GB a day at the chain's pace), so a store wants reloading from a snapshot every few days; and the certificates that the "final" rule trusts are not verified, which is the next thing: BLS12-381.
 
 ## Run on-chain programs
 
@@ -947,7 +980,7 @@ ok    transaction (official Lean agrees)
 ok    txformat (official Lean agrees)
 ok    versions (official Lean agrees)
 ok    zstd (official Lean agrees)
-29 passed, 0 failed
+31 passed, 0 failed
 ```
 
 The tests not marked "official Lean agrees" either use raw syscalls (`fork`, futexes), which exist only as machine code, or check behaviour specific to `leanc` (aborting on a bounds error, in-place updates).
@@ -960,9 +993,9 @@ Measured on one machine (Xeon Gold 5515+), single core unless noted. They are he
 |---|---|
 | `leanc` source | about 6,400 lines of C |
 | `leanc` binary | 166 KB, static, zero undefined symbols |
-| Lean in this repo | 18,120 lines: runtime 814, libraries 12,870, client 4,436 |
+| Lean in this repo | 19,300 lines: runtime 814, libraries 13,480, client 5,020 |
 | Compiling the whole client | **about 0.1 s** |
-| `leansol` binary | **1.1 MB**, static |
+| `leansol` binary | **1.2 MB**, static |
 | Full build from a fresh clone | about 0.1 s |
 | Ed25519 verification (Lean, compiled by `leanc`) | about 2,950 signatures/s per core |
 | SHA-256 | about 1,360 MB/s by the processor's SHA instructions; 72 MB/s as Lean compiled by `leanc` |
@@ -970,7 +1003,9 @@ Measured on one machine (Xeon Gold 5515+), single core unless noted. They are he
 | Loading a snapshot: decompress, file, hash every account | 3 million accounts (3.65 GB) in 20 s with 16 workers |
 | Mainnet's snapshot, from a validator, verified | 1,245,863,525 accounts (498 GiB unpacked) in 90 minutes; 241 GB on disk |
 | An epoch's leader schedule (432,000 slots, 659 validators) | 15 ms |
-| Replaying a mainnet block (about 340 transactions, 12 million compute units, 1,400 accounts changed) | **0.12 s**, signatures checked on three more cores (the chain: 0.2 s) |
+| Replaying a mainnet block (about 270 transactions, 10 million compute units, 1,300 accounts changed) | **0.11 s**, signatures checked on three more cores (the chain: 0.2 s) |
+| Executing the chain from a snapshot (`replay --live`) | about 0.1 s a block: twice the chain's pace while catching up |
+| The turn of an epoch: 1.35 million stake accounts, their rewards, the next epoch's stakes | 21 s, once a day |
 | The same with every program interpreted | 0.22 s |
 | Translating a program into machine code | about 200 ns an instruction: 10 ms for Token-2022 (53,702 instructions, 1.7 MB of x86-64) |
 | The same before the compiler had registers and vector instructions | 1.2 s |
@@ -995,17 +1030,19 @@ rt/Rt.lean        the runtime, in Lean: allocator, arrays, strings, panics
 lib/
   Fast.lean         what the compiler does in a few instructions, defined in Lean: wide loads, vector
                     operations, SHA-256; and the door to running machine code
+  Double.lean       double-precision arithmetic in integers, for the one formula the chain computes in it
   Sys.lean          Linux syscalls: sockets, fork, mmap, futex, clocks
   Ipc.lean          futex-backed rings and counters in shared memory
-  Crypto/           SHA-256, SHA-512, Ed25519 (field, curve, scalars, sign, verify), Reed–Solomon, BLAKE3,
-                    ChaCha20 as a random number generator, Keccak-256, secp256k1 key recovery,
-                    Montgomery arithmetic, Poseidon, alt_bn128 (BN254) with its pairing, P-256 signatures
+  Crypto/           SHA-256, SHA-512, Ed25519 (field, curve, scalars, sign, verify) and Ristretto, Reed–Solomon,
+                    BLAKE3, ChaCha20 as a random number generator, Keccak-256, secp256k1 key recovery,
+                    Montgomery arithmetic, Poseidon, alt_bn128 (BN254) with its pairing, P-256 signatures, SipHash
   Solana/           wire formats, all CRDS record layouts, gossip messages, hash tables,
                     the sBPF virtual machine (SbpfBase: loading, memory, accounts; Native: the
                     built-in programs; Sbpf: the interpreter; Jit: programs as x86-64), transactions, and the bank,
                     shreds and their recovery, entries and proof of history, repair, block checking,
                     snapshots (manifest, account files), the lattice hash, the accounts store,
-                    the leader schedule, the footer's certificates and what they do to vote accounts
+                    the leader schedule, the footer's certificates and what they do to vote accounts,
+                    the end of an epoch (stakes, rewards, the next epoch's budget)
   Net/              IPv4 helpers and a DNS stub resolver
   Encoding/         hex, Base58, Base64, Zstandard decompression, tar
 client/           the tiles, the dashboard, the JSON/Prometheus export, main
@@ -1028,16 +1065,17 @@ lakefile.toml     lets the official toolchain check all of the above
 
 Being straightforward about what this is:
 
-- **Not a validator.** It verifies gossip; it receives and verifies every block; it holds mainnet's state as of a snapshot, verified account by account; and it has replayed the 600 blocks after that snapshot to the bank hashes mainnet's leaders signed. Every block it was given matched, but 600 blocks are two minutes: some system calls no program used in them are still missing (Ristretto, big modular exponentiation, the little-endian and twist forms of the alt_bn128 calls), as are the vote and stake programs' rarer instructions and epoch boundaries. It replays a block in 0.12 seconds, signatures checked, where the chain takes 0.2: ahead, but not by enough for a block several times fuller than these; and it replays from files rather than from the live feed. It does not vote.
-- **Blocks run, from files.** Signed transactions are applied with fees, budgets, rent checks, every sysvar and every version of sBPF, and programs can be deployed and upgraded through the loader. Blocks of mainnet [replay](#replay) too, from files; the vote program's instructions are still absent (mainnet no longer votes with transactions).
-- **Translated programs are kept.** A program's machine code stays in memory for as long as the process runs: about 35 bytes for each sBPF instruction, more than half a gigabyte over the 600 blocks. Nothing is evicted yet.
+- **Not a voting validator.** It verifies gossip; it receives and verifies every block; it holds mainnet's state as of a snapshot, verified account by account; and from there it [executes the chain](#execute-the-chain), block by block, to the bank hashes mainnet's leaders signed, through the turn of an epoch. It does not vote and does not produce blocks: voting needs BLS12-381 signatures, the consensus messages, the ability to execute a block before it is final (and to undo it), and a vote account with stake behind it.
+- **It stops when it does not know.** Mainnet uses things no test set holds: eleven of them stopped the executor in its first 44,000 blocks, and there will be more (most of the vote program is not written, nor are feature activations). It stops at the first bank hash that differs, with the state as last saved, rather than carry on wrong.
+- **The executor is not part of the node yet.** The node saves verified blocks (`--spool`) and the executor is a second process reading them; it trusts the footers' certificates for what is final, without checking their signatures, and it does not notice a transaction that was already processed. Its log of changes only grows.
+- **Translated programs are kept.** A program's machine code stays in memory for as long as the process runs: about 35 bytes for each sBPF instruction, more than half a gigabyte over 600 blocks. Nothing is evicted yet.
 - **Listen-only.** It answers pings but does not serve pull requests or push records to others.
 - **A simple store.** Records are remembered by hash, up to 400,000; when that fills (every several minutes on mainnet) the hash set is flushed and refilled rather than aged out record by record. The node table survives the flush.
 - **x86-64 Linux only.** The code generator and the syscall numbers are specific to it.
 - **The compiler is not self-hosted.** Its source is C. Nothing in the build uses a C toolchain, because a prebuilt compiler is checked in, but changing the compiler does.
 - **A subset of Lean.** No type classes or higher-order functions is a real restriction; the libraries here are written around it.
 - **`Nat` is 64 bits** (overflow traps rather than wraps; see above).
-- **Young code.** The compiler has been exercised by about 18,100 lines of Lean and the test suite, not by years of users. The Ed25519 implementation is variable-time, which is fine for verifying public data and not what you want around long-lived secret keys.
+- **Young code.** The compiler has been exercised by about 19,300 lines of Lean and the test suite, not by years of users. The Ed25519 implementation is variable-time, which is fine for verifying public data and not what you want around long-lived secret keys.
 - **The network moves.** Wire formats follow agave's current gossip code; when the protocol changes, this needs to follow.
 
 ## How this relates to lean-svm
@@ -1054,7 +1092,7 @@ They meet at the `.so` file: lean-svm writes it, the virtual machine here runs i
 Write them with [lean-svm](https://github.com/aeyakovenko/lean-svm), and run them locally with `leansol run`, including ones that use tokens. It can build, sign and apply transactions locally, but it does not send them: deploying needs the standard Solana tools.
 
 **Is this the Lean theorem prover's language, or just "lean" as in small?**
-Both. The client is written in Lean 4, the language of the theorem prover, and the result is also small: a 1.1 MB static binary.
+Both. The client is written in Lean 4, the language of the theorem prover, and the result is also small: a 1.2 MB static binary.
 
 **Is there really no C toolchain involved?**
 Not in building or running anything here: `make` uses the checked-in `leanc` binary, which compiles Lean straight to an ELF. The compiler's *source* is C, so changing the compiler itself needs a C compiler (`make from-c`). The remaining step is for `leanc` to be written in Lean and compile itself; its subset is not there yet.

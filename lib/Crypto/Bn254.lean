@@ -159,9 +159,11 @@ def g1Affine (a : G1) : Fq × Fq :=
     let zz := fmul zi zi
     (fmul a.x zz, fmul a.y (fmul zz zi))
 
+def bytesOfQ (a : Fq) (big : Bool) : ByteArray := Mont.toBytes (fq.leave a) big
+
 def g1ToBytes (a : G1) (big : Bool) : ByteArray :=
   let (x, y) := g1Affine a
-  Mont.toBytes (fq.leave x) big ++ Mont.toBytes (fq.leave y) big
+  bytesOfQ x big ++ bytesOfQ y big
 
 -- ------------------------------------------- the twist: y² = x³ + 3/ξ over pairs of numbers
 
@@ -266,7 +268,7 @@ def g2InSubgroup (a : G2) : Bool := Id.run do
 
 /-- A point of the twist from its 128 bytes, in Ethereum's order: for x and then for y, the `u` part first.
 `none` if out of range, off the curve, or not in the subgroup the pairing is defined on. -/
-def g2OfBytes (b : ByteArray) (o : Nat) (big : Bool) : Option G2 := Id.run do
+def g2OfBytes (b : ByteArray) (o : Nat) (big checked : Bool) : Option G2 := Id.run do
   let mut parts : Array Mont.Num := Array.emptyWithCapacity 4
   let mut allZero := true
   -- the flags (see `g1OfBytes`) are the top bits of the `u` part of y
@@ -294,9 +296,17 @@ def g2OfBytes (b : ByteArray) (o : Nat) (big : Bool) : Option G2 := Id.run do
   if !(Fq2.same (Fq2.mul y y) (Fq2.add (Fq2.mul (Fq2.mul x x) x) twistB)) then
     return none
   let q : G2 := ⟨x, y, false⟩
-  if !(g2InSubgroup q) then
+  -- (the twist has more points than the group: adding accepts any of them, everything else asks)
+  if checked && !(g2InSubgroup q) then
     return none
   return some q
+
+/-- A point of the twist as 128 bytes, in the order `g2OfBytes` reads. -/
+def g2ToBytes (a : G2) (big : Bool) : ByteArray :=
+  let x := if a.infinite then Fq2.zero else a.x
+  let y := if a.infinite then Fq2.zero else a.y
+  if big then bytesOfQ x.b true ++ bytesOfQ x.a true ++ bytesOfQ y.b true ++ bytesOfQ y.a true
+  else bytesOfQ x.a false ++ bytesOfQ x.b false ++ bytesOfQ y.a false ++ bytesOfQ y.b false
 
 -- ---------------------------------- twelve numbers: polynomials in w, with w¹² = 18·w⁶ − 82
 
@@ -631,7 +641,7 @@ def pairingCheck (input : ByteArray) (big : Bool) : Nat := Id.run do
   let mut pxs : Array Fq := Array.emptyWithCapacity 4
   let mut pys : Array Fq := Array.emptyWithCapacity 4
   for k in [0:input.size / 192] do
-    match g1OfBytes input (192 * k) big, g2OfBytes input (192 * k + 64) big with
+    match g1OfBytes input (192 * k) big, g2OfBytes input (192 * k + 64) big true with
     | some g, some q =>
       -- (a pair with a point at infinity pairs to 1)
       if !(Mont.isZero g.z) && !q.infinite then

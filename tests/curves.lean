@@ -60,7 +60,7 @@ def scaled (name input want : String) : String :=
   s!"multiply {name}: {if got == want then "agrees" else "WRONG " ++ got}"
 
 def twist (input : String) : String :=
-  match Bn254.g2OfBytes (Hex.decode input) 0 true with
+  match Bn254.g2OfBytes (Hex.decode input) 0 true true with
   | some q => if q.infinite then "infinity" else "a point"
   | none => "refused"
 

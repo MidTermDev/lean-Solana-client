@@ -105,7 +105,8 @@ def World.keep (w : World) (a : Sbpf.Account) (changed : Bool) : World :=
   let ⟨shards, overlays, slots, held, bytes, hashes, unsaved⟩ := w
   let at_ := Sbpf.accountAt slots held a.key
   if at_ != Sbpf.notFound then
-    ⟨shards, overlays, slots, held.set! at_ a, bytes + a.data.size, hashes.set! at_ ByteArray.empty, if changed then unsaved.set! at_ 1 else unsaved⟩
+    let before := held[at_]!.data.size
+    ⟨shards, overlays, slots, held.set! at_ a, bytes + a.data.size - before, hashes.set! at_ ByteArray.empty, if changed then unsaved.set! at_ 1 else unsaved⟩
   else
     ⟨shards, overlays, Sbpf.accountLink slots held a.key held.size, held.push a, bytes + a.data.size, hashes.push ByteArray.empty, unsaved.push (if changed then 1 else 0)⟩
 
@@ -1296,9 +1297,11 @@ def main : IO Unit := do
     -- ---- with enough held, or after ten minutes, the changes go to the log
     let now ← Sys.nowMs
     if live && (world.full || now - savedAt > 600000) then
+      let held := world.held.size
       world ← checkpoint world dir blocksDir savedSlot slot bankHash latest sum supply height recent (stakeKeys.extract manifest.stakeKeys.size stakeKeys.size)
       savedSlot := slot
       savedAt := now
+      IO.println s!"state        saved at slot {slot}: {held} accounts were held, the log is {Fmt.thousands world.overlays[0]!.flushed} bytes · {(← Sys.nowMs) - now} ms"
     else if world.full then
       world ← world.save slot
     if live && now - reported >= 5000 then
